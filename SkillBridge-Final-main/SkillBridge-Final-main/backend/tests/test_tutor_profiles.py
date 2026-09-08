@@ -16,13 +16,11 @@ These tests pin:
 
 import shutil
 import subprocess
-from pathlib import Path
 
 import pytest
 
 from app import copilot, genai, models
-
-ROOT = Path(__file__).resolve().parents[2]
+from contract_paths import FRONTEND_ROOT, WORKSPACE_ROOT, checker_script, node_env
 
 
 def _node():
@@ -41,7 +39,7 @@ COMPLETE = {
 
 def test_every_tutor_id_has_exactly_one_canonical_profile():
     """1+2: all four Tutor profiles exist and each Tutor ID maps to one profile."""
-    checks = (ROOT / "frontend" / "src" / "lib" / "tutorProfiles.ts").read_text(encoding="utf-8")
+    checks = (FRONTEND_ROOT / "src" / "lib" / "tutorProfiles.ts").read_text(encoding="utf-8")
     assert "export const TUTOR_PROFILES" in checks
     for tid in copilot.ALLOWED_TUTOR_IDS:
         assert f"id: '{tid}'" in checks or f"id: \"{tid}\"" in checks, tid
@@ -55,9 +53,10 @@ def test_canonical_profile_contract_via_node_checker():
     node = _node()
     if not node:
         pytest.skip("node is required to run SkillBridge but was not found")
-    script = ROOT / "frontend" / "scripts" / "check-tutor-profiles.mjs"
+    script = checker_script("check-tutor-profiles.mjs")
     assert script.exists()
-    result = subprocess.run([node, str(script)], cwd=ROOT, capture_output=True, text=True, timeout=120)
+    result = subprocess.run([node, str(script)], cwd=WORKSPACE_ROOT, capture_output=True,
+                            text=True, timeout=120, env=node_env())
     assert result.returncode == 0, f"node profile check failed:\n{result.stdout}\n{result.stderr}"
 
 

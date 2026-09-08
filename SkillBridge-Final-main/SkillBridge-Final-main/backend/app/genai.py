@@ -275,6 +275,44 @@ def _evidence_validated(items, cv_text):
     return out
 
 
+def _explicit_skill_keys(cv_text):
+    keys = set()
+    for entry in skill_registry.skill_section_entries(cv_text or ""):
+        entry_name, _lvl_hint = _entry_level(entry)
+        canon, _cat = _normalise_skill(entry_name)
+        if canon:
+            keys.add(canon.lower())
+    return keys
+
+
+def _model_candidate_allowed(name, explicit_keys):
+    """Extra guard for GenAI-returned open-universe names.
+
+    Unknown skills are still allowed, especially from explicit Skills sections,
+    but weak one-word unknowns from prose/certificate descriptions are treated
+    as evidence fragments rather than professional skill rows.
+    """
+    if not name:
+        return False
+    key = name.lower()
+    if key in explicit_keys or skill_registry.is_trusted_name(name):
+        return True
+    words = re.findall(r"\b[\w]+\b", name)
+    if len(words) <= 1:
+        return False
+    lowered = name.lower()
+    weak_endings = {
+        "technique", "techniques", "concept", "concepts", "practice", "practices",
+        "approach", "approaches", "tool", "tools", "use", "program", "programs",
+        "scenario", "scenarios", "environment", "environments",
+    }
+    if words[-1].lower() in weak_endings:
+        return False
+    if re.search(r"\b(?:using|including|covering|applying|recognizing|recognising)\b", lowered):
+        return False
+    return True
+
+
 def extract_skills_from_cv(cv_text):
     system = (
         "You are a strict skill-extraction engine. Given a candidate's CV or transcript text, "
@@ -349,6 +387,7 @@ def extract_skills_from_cv(cv_text):
 
     cleaned = []
     seen = set()
+    explicit_keys = _explicit_skill_keys(cv_text)
     for item in parsed:
         if not isinstance(item, dict) or not item.get("name"):
             continue
@@ -357,6 +396,8 @@ def extract_skills_from_cv(cv_text):
         if not canon:
             continue
         name = canon
+        if not _model_candidate_allowed(name, explicit_keys):
+            continue
         lower = name.lower()
         if lower in seen:
             continue

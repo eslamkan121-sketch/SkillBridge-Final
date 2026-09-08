@@ -81,6 +81,85 @@ SKILLS
 Financial Modeling, Forecasting, Budget Analysis, Data Analysis, Excel
 """
 
+KHALED_CV = """\
+Khaled Mohamed
+Cybersecurity Engineer
+
+PROFILE
+Cybersecurity student with strong foundations in Python, Java, and network security.
+Seeking an instructor role to help students develop strong programming and cybersecurity fundamentals.
+
+Teaching & Leadership Experience
+Explained programming and cybersecurity concepts to peers in a simple and structured manner.
+Assisted classmates in debugging code and understanding problem-solving approaches.
+
+EMPLOYMENT HISTORY
+Cybersecurity Intern
+Uneeq Interns
+Developed advanced tools for threat detection, web vulnerability analysis, and log simulation in real-world environments.
+SQL Injection Detector: Created an automated Python tool to identify vulnerable login endpoints using SQLi payloads.
+Security Log Generator: Simulated real-time event logs for SIEM systems like ELK and Splunk to aid in anomaly detection.
+
+Skills
+Technical Skills
+Python Programming
+Java Programming
+Cybersecurity Fundamentals
+Penetration Testing
+Networking BasicsTeaching & Soft Skills
+Communication Skills
+Explaining Complex Concepts Clearly
+Presentation Skills
+Problem-Solving Guidance
+Team Collaboration
+
+CERTIFICATES
+CompTIA CySA+ Cybersecurity Analyst - RAK
+ICT
+Completed training covering cybersecurity analysis, threat detection, vulnerability management, incident response, and security monitoring.
+Microsoft Office Specialist: PowerPoint Associate (Office 2019)
+Demonstrated ability to create professional presentations using advanced design, animation, and communication techniques.
+Sprints x Microsoft Summer Camp - Cybersecurity
+Completed project-based cybersecurity training, applying technical skills and problem-solving in real-world scenarios and teamwork environments.
+Microsoft Office Specialist: Excel Associate (Office 2019)
+Validated proficiency in Excel, including data analysis, formulas, functions, and visualization tools for business and academic use.
+Cybersecurity Internship Certificate, UneeQ Interns (July 2025)
+Successful completion of cybersecurity internship program, recognizing ability to apply advanced security concepts and practices to protect systems, networks, and data from evolving threats.
+
+LANGUAGES
+English B2
+Arabic
+"""
+
+KHALED_REJECTED = {
+    "CERTIFICATES",
+    "Completed project-based cybersecurity training",
+    "Completed training covering cybersecurity analysis",
+    "Successful completion of cybersecurity internship",
+    "Validated proficiency in Excel",
+    "and data from evolving threats",
+    "and security monitoring",
+    "and visualization tools for",
+    "business and academic use",
+    "practices to protect systems",
+    "presentations using advanced design",
+    "program",
+    "animation",
+    "UneeQ",
+    "Office 2019",
+    "Sprints x Microsoft Summer Camp",
+    "Sprints x Microsoft Summer Camp - Cybersecurity",
+    "CompTIA CySA+ Cybersecurity Analyst - RAK",
+    "Cybersecurity Internship Certificate",
+    "ICT",
+    "Python Programming",
+    "Java Programming",
+    "Communication Skills",
+    "Problem-Solving Guidance",
+    "Networking BasicsTeaching",
+    "Soft Skills",
+}
+
 
 @pytest.mark.parametrize("cv,expected", [
     (AI_ENGINEER_CV, {"Python", "Machine Learning", "Docker", "SQL"}),
@@ -215,6 +294,56 @@ def test_duplicate_case_whitespace_variants_collapse(monkeypatch):
     cv = "SKILLS\nPython, PYTHON,  python , A/B Testing, a/b testing"
     names = {r["name"] for r in genai.extract_skills_from_cv(cv)}
     assert names == {"Python", "A/B Testing"}
+
+
+def test_khaled_cv_fixture_extracts_clean_professional_skills(monkeypatch):
+    _force_fallback(monkeypatch)
+    result = genai.extract_skills_from_cv(KHALED_CV)
+    names = {r["name"] for r in result}
+    expected = {
+        "Python", "Java", "Cybersecurity Fundamentals", "Penetration Testing",
+        "Network Security", "Communication", "Presentation Skills", "Problem Solving",
+        "Teamwork", "Threat Detection", "Vulnerability Management",
+        "Cybersecurity Analysis", "Incident Response", "Security Monitoring",
+        "SIEM", "SQL", "Data Analysis", "Excel", "PowerPoint",
+    }
+    assert expected <= names, f"missing clean skills: {expected - names}"
+    assert not (names & KHALED_REJECTED), f"noise leaked into Khaled profile: {names & KHALED_REJECTED}"
+    assert len([n for n in names if n in {"Python", "Python Programming"}]) == 1
+    assert len([n for n in names if n in {"Java", "Java Programming"}]) == 1
+
+
+def test_khaled_noisy_model_output_is_filtered_and_keeps_evidence(monkeypatch):
+    sentence = (
+        "Completed training covering cybersecurity analysis, threat detection, "
+        "vulnerability management, incident response, and security monitoring."
+    )
+    _model_output(monkeypatch, json_dumps([
+        {"name": "Completed training covering cybersecurity analysis", "level": "Intermediate",
+         "category": "", "evidence": sentence},
+        {"name": "Threat Detection", "level": "Intermediate", "category": "", "evidence": sentence},
+        {"name": "and security monitoring", "level": "Intermediate", "category": "", "evidence": sentence},
+        {"name": "CompTIA CySA+ Cybersecurity Analyst - RAK", "level": "Intermediate",
+         "category": "", "evidence": "CompTIA CySA+ Cybersecurity Analyst - RAK"},
+        {"name": "Cybersecurity Internship Certificate", "level": "Intermediate",
+         "category": "", "evidence": "Cybersecurity Internship Certificate, UneeQ Interns (July 2025)"},
+        {"name": "Validated proficiency in Excel", "level": "Intermediate",
+         "category": "", "evidence": "Validated proficiency in Excel"},
+        {"name": "business and academic use", "level": "Intermediate",
+         "category": "", "evidence": "business and academic use"},
+        {"name": "animation", "level": "Intermediate", "category": "", "evidence": "animation"},
+        {"name": "UneeQ", "level": "Intermediate", "category": "", "evidence": "UneeQ"},
+        {"name": "Python Programming", "level": "Beginner", "category": "", "evidence": "Python Programming"},
+        {"name": "Java Programming", "level": "Beginner", "category": "", "evidence": "Java Programming"},
+        {"name": "Communication Skills", "level": "Beginner", "category": "", "evidence": "Communication Skills"},
+    ]))
+    result = genai.extract_skills_from_cv(KHALED_CV)
+    by_name = {r["name"]: r for r in result}
+    names = set(by_name)
+    assert "Threat Detection" in names
+    assert by_name["Threat Detection"]["evidence"] == sentence
+    assert {"Python", "Java", "Communication"} <= names
+    assert not (names & KHALED_REJECTED), f"model noise leaked into Khaled profile: {names & KHALED_REJECTED}"
 
 
 def test_all_fallback_items_have_grounded_evidence(monkeypatch):
@@ -421,6 +550,44 @@ def test_real_law_pdf_upload_pipeline(client, student_id, auth_headers):
         "organisation", "instructions from the employer", "REFEREES",
     }, f"noise leaked through the real upload path: {names}"
     # profile persisted through the same real endpoint
+    student = models.get_student(student_id)
+    assert {s["name"] for s in student["self_reported_skills"]} == names
+
+
+def test_real_khaled_pdf_upload_pipeline(client, student_id, auth_headers, monkeypatch):
+    """Optional local smoke for the real Khaled CV. CI uses KHALED_CV above so
+    the regression remains deterministic when the personal PDF is unavailable."""
+    import os
+    _force_fallback(monkeypatch)
+    candidates = [
+        os.path.join(os.path.expanduser("~"), "Downloads", "Khaled's_CV(1).pdf"),
+        os.path.join(os.path.expanduser("~"), "Downloads", "Khaled's_CV.pdf"),
+        os.path.join(os.path.expanduser("~"), "Downloads", "cv pdf", "Khaled's_CV(1).pdf"),
+        os.path.join(os.path.expanduser("~"), "Downloads", "cv pdf", "Khaled's_CV.pdf"),
+    ]
+    khaled_pdf = next((p for p in candidates if os.path.exists(p)), None)
+    if not khaled_pdf:
+        pytest.skip("real Khaled PDF not on this machine")
+    with open(khaled_pdf, "rb") as f:
+        pdf_bytes = f.read()
+    headers = auth_headers("aisha@student.edu")
+    res = client.post(
+        f"/api/students/{student_id}/cv",
+        files={"file": (os.path.basename(khaled_pdf), io.BytesIO(pdf_bytes), "application/pdf")},
+        headers=headers,
+    )
+    assert res.status_code == 200, res.text
+    extracted = res.json()["extracted"]
+    names = {r["name"] for r in extracted}
+    expected = {
+        "Python", "Java", "Cybersecurity Fundamentals", "Penetration Testing",
+        "Network Security", "Communication", "Presentation Skills", "Problem Solving",
+        "Teamwork", "Threat Detection", "Vulnerability Management",
+        "Cybersecurity Analysis", "Incident Response", "Security Monitoring",
+        "SIEM", "SQL", "Data Analysis", "Excel", "PowerPoint",
+    }
+    assert expected <= names, f"missing clean skills from real Khaled PDF: {expected - names}"
+    assert not (names & KHALED_REJECTED), f"noise leaked through real Khaled upload: {names & KHALED_REJECTED}"
     student = models.get_student(student_id)
     assert {s["name"] for s in student["self_reported_skills"]} == names
 

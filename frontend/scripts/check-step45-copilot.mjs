@@ -6,12 +6,9 @@
 // dedicated assessment exam flow (no readiness gate, Copilot hidden while the
 // assessment runs, exit finalization). Fails the run if any contract regresses.
 
-import { readFileSync } from 'node:fs'
-import { resolve, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { readProject } from './path-helpers.mjs'
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
-const read = (p) => readFileSync(resolve(root, p), 'utf8')
+const read = readProject
 
 const problems = []
 const ok = (cond, msg) => { if (!cond) problems.push(msg) }

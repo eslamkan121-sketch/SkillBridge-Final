@@ -8,12 +8,11 @@
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { frontendRoot } from './path-helpers.mjs'
 
 const require = createRequire(import.meta.url)
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const ts = require(path.join(__dirname, '..', 'node_modules', 'typescript'))
-const srcPath = path.join(__dirname, '..', 'src', 'lib', 'tutorProfiles.ts')
+const ts = require(path.join(frontendRoot, 'node_modules', 'typescript'))
+const srcPath = path.join(frontendRoot, 'src', 'lib', 'tutorProfiles.ts')
 
 const source = readFileSync(srcPath, 'utf8')
 const js = ts.transpileModule(source, {

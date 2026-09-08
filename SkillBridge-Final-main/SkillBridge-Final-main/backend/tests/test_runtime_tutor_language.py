@@ -30,14 +30,12 @@ Never calls a paid API (deterministic fixture below).
 
 import shutil
 import subprocess
-from pathlib import Path
 
 import pytest
 
 from app import genai
 import app.jobs as jobs_mod
-
-ROOT = Path(__file__).resolve().parents[2]
+from contract_paths import WORKSPACE_ROOT, checker_script, node_env
 
 ARABIC_EXACT_MESSAGE = "اشرحلي Docker containers بطريقة بسيطة"
 
@@ -213,10 +211,10 @@ def test_runtime_frontend_sends_language_on_every_tutor_request():
     node = shutil.which("node")
     if not node:
         pytest.skip("node is required to run SkillBridge but was not found")
-    script = ROOT / "frontend" / "scripts" / "check-tutor-language.mjs"
+    script = checker_script("check-tutor-language.mjs")
     assert script.exists()
-    result = subprocess.run([node, str(script)], cwd=ROOT, capture_output=True,
-                            text=True, timeout=120)
+    result = subprocess.run([node, str(script)], cwd=WORKSPACE_ROOT, capture_output=True,
+                            text=True, timeout=120, env=node_env())
     assert result.returncode == 0, (
         f"frontend tutor-language contract broken:\n{result.stdout}\n{result.stderr}")
 

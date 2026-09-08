@@ -3,12 +3,9 @@
 // example and follow-up task; the follow-up task is resolved server-side from
 // the persisted source attempt, never accepted from the frontend.
 
-import { readFileSync } from 'node:fs'
-import { resolve, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { readProject } from './path-helpers.mjs'
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
-const read = (p) => readFileSync(resolve(root, p), 'utf8')
+const read = readProject
 
 const problems = []
 const ok = (cond, msg) => { if (!cond) problems.push(msg) }

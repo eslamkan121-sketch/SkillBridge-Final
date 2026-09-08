@@ -39,23 +39,24 @@ CANONICAL_CATEGORIES = {
     "Business Intelligence": "Analytics", "A/B Testing": "Analytics",
     "Data Storytelling": "Analytics",
     # Security
-    "Cybersecurity": "Security", "Network Security": "Security",
+    "Cybersecurity": "Security", "Cybersecurity Analysis": "Security",
+    "Cybersecurity Fundamentals": "Security", "Network Security": "Security",
     "Incident Response": "Security", "SIEM": "Security", "Risk Assessment": "Security",
-    "Threat Detection": "Security", "Cloud Security": "Security",
+    "Threat Detection": "Security", "Security Monitoring": "Security", "Cloud Security": "Security",
     "Penetration Testing": "Security", "ISO 27001": "Security", "Security+": "Security",
     "Digital Forensics": "Security", "Vulnerability Management": "Security",
     "Windows Server": "Security", "Active Directory": "Security",
     # Soft skills
     "Communication": "Soft Skills", "Teamwork": "Soft Skills", "Leadership": "Soft Skills",
     "Problem Solving": "Soft Skills", "Critical Thinking": "Soft Skills",
-    "Time Management": "Soft Skills",
+    "Time Management": "Soft Skills", "Presentation Skills": "Soft Skills",
 }
 
 # Trusted explicit synonyms: an accepted way a canonical skill may be written.
 # These are the ONLY merges the system performs — there is no fuzzy or
 # substring-based merging anywhere.
 SYNONYMS = {
-    "ml": "Machine Learning", "ai": "Machine Learning",
+    "ml": "Machine Learning",
     "deep learning": "Deep Learning", "dl": "Deep Learning",
     "pandas": "Pandas", "numpy": "NumPy", "sklearn": "scikit-learn",
     "scikit learn": "scikit-learn", "javascript": "JavaScript", "js": "JavaScript",
@@ -71,9 +72,14 @@ SYNONYMS = {
     "docker": "Docker", "kubernetes": "Kubernetes", "k8s": "Kubernetes",
     "git": "Git", "github": "Git", "linux": "Linux", "aws": "AWS",
     "azure": "Azure", "gcp": "GCP", "google cloud": "GCP",
-    "communication": "Communication", "leadership": "Leadership",
-    "team work": "Teamwork", "excel": "Excel", "python": "Python",
-    "java": "Java", "c++": "C++", "c": "C++", "react": "React",
+    "communication": "Communication", "communication skills": "Communication",
+    "leadership": "Leadership", "team work": "Teamwork",
+    "team collaboration": "Teamwork", "excel": "Excel",
+    "python": "Python", "python programming": "Python",
+    "java": "Java", "java programming": "Java",
+    "problem-solving": "Problem Solving", "problem solving guidance": "Problem Solving",
+    "problem-solving guidance": "Problem Solving",
+    "c++": "C++", "c": "C++", "react": "React",
     "node": "Node.js", "nodejs": "Node.js", "html": "HTML/CSS",
     "css": "HTML/CSS", "terraform": "Terraform", "airflow": "Airflow",
     "snowflake": "Snowflake", "bigquery": "BigQuery", "dbt": "dbt",
@@ -167,6 +173,12 @@ def _build_known():
 
 
 KNOWN_META = _build_known()
+TRUSTED_DISPLAY_KEYS = {_key(display) for display, _category in KNOWN_META.values()}
+
+
+def is_trusted_name(raw):
+    """True when ``raw`` is one of the trusted canonical/domain display names."""
+    return _key(raw) in TRUSTED_DISPLAY_KEYS
 
 
 # ------------------------------------------------------------------ name safety
@@ -184,8 +196,40 @@ _RE_EDU_START = re.compile(
     r"bsc|msc|beng|llb|ba\b|ma\b|btech|a-?level|gce|gcse)\b", re.I)
 _RE_ADDRESS_START = re.compile(r"^\d{2,4}\s")
 _RE_SENTENCE_START = re.compile(
-    r"^(?:managed|built|developed|worked|led|created|analy[a-z]*|designed|implemented|"
-    r"responsible|delivered|collaborated|coordinated|assisted)\b", re.I)
+    r"^(?:managed|built|developed|worked|led|created|engineered|analy[a-z]*|designed|"
+    r"implemented|responsible|delivered|collaborated|coordinated|assisted|completed|"
+    r"successful\s+completion|validated\s+proficiency|demonstrated\s+ability|"
+    r"contributed|applying|recognizing\s+ability|recognising\s+ability|including|"
+    r"covering)\b", re.I)
+_RE_FRAGMENT_START = re.compile(
+    r"^(?:and|or|but|with|from|to|for|including|covering|using|applying)\b", re.I)
+_RE_TRAILING_PREPOSITION = re.compile(r"\b(?:for|with|from|to|of|in|by|and|or)\s*$", re.I)
+_RE_PROSE_CONNECTOR = re.compile(
+    r"\b(?:using|including|covering|applying|recognizing|recognising|to\s+protect|"
+    r"from\s+evolving|in\s+real)\b", re.I)
+_RE_CERT_TITLE_HINT = re.compile(
+    r"\b(?:certificates?|certifications?|associate|specialist|summer\s+camp|bootcamp|"
+    r"course|training\s+program|internship\s+certificate)\b", re.I)
+_RE_ORG_TITLE_HINT = re.compile(r"\b(?:comptia|microsoft|sprints?|uneeq|rak|ict)\b", re.I)
+_RE_VERSION_ONLY = re.compile(r"^(?:microsoft\s+)?office\s+(?:19|20)\d{2}$", re.I)
+_RE_NAME_HEADING = re.compile(
+    r"^(?:skills?|technical\s+skills?|teaching\s*(?:&|and)\s*soft\s+skills?|"
+    r"soft\s+skills?|hard\s+skills?|certificates?|certifications?|languages?|education|"
+    r"employment\s+history|profile|projects?|experience|training)$", re.I)
+_GENERIC_SINGLETONS = {
+    "and", "program", "programs", "course", "courses", "certificate", "certificates",
+    "function", "functions", "formula", "formulas", "network", "networks", "incident",
+    "response", "ict",
+}
+_GENERIC_PROSE_ENDINGS = {
+    "use", "program", "programs", "certificate", "certificates", "technique", "techniques",
+    "concept", "concepts", "practice", "practices", "scenario", "scenarios",
+    "environment", "environments", "tool", "tools", "coverage", "cases",
+}
+_FUNCTION_WORDS = {
+    "and", "or", "for", "with", "from", "to", "of", "in", "by", "as", "into",
+    "through", "during", "using", "including", "covering", "applying",
+}
 _RE_CHARSET = re.compile(r"(?u)^[\w .+#_/()\-&'%·™®]{2,60}$")
 
 
@@ -213,6 +257,23 @@ def is_valid_name(raw):
         return False
     if _RE_ADDRESS_START.search(s):
         return False
+    lowered = re.sub(r"\s+", " ", s.strip().lower())
+    if _RE_NAME_HEADING.fullmatch(s):
+        return False
+    if lowered in _GENERIC_SINGLETONS:
+        return False
+    if _RE_VERSION_ONLY.search(s):
+        return False
+    if _RE_FRAGMENT_START.search(s):
+        return False
+    if _RE_TRAILING_PREPOSITION.search(s):
+        return False
+    if _RE_PROSE_CONNECTOR.search(s):
+        return False
+    if _RE_CERT_TITLE_HINT.search(s):
+        return False
+    if _RE_ORG_TITLE_HINT.search(s) and ("-" in s or len(re.findall(r"\b[\w]+\b", s)) <= 3):
+        return False
     # sentence-like fragments: ends with sentence punctuation, or has sentence
     # punctuation followed by a space inside, or reads like a past-tense clause
     if s.endswith((".", "?", "!")) or re.search(r"[.!?]\s", s):
@@ -221,6 +282,12 @@ def is_valid_name(raw):
     if len(words) > 8:
         return False
     if len(words) >= 4 and _RE_SENTENCE_START.search(s):
+        return False
+    word_lowers = [w.lower() for w in words]
+    if word_lowers and word_lowers[-1] in _GENERIC_PROSE_ENDINGS:
+        return False
+    function_count = sum(1 for w in word_lowers if w in _FUNCTION_WORDS)
+    if len(words) >= 4 and function_count >= 2:
         return False
     if not _RE_CHARSET.fullmatch(s):
         return False
@@ -235,7 +302,7 @@ def clean_unknown(raw):
     s = re.sub(r"\s+", " ", (raw or "")).strip()
     s = re.sub(r"^[\"'\u201c\u2018(\[]+", "", s)
     s = re.sub(r"[\"'\u201d\u2019)\]]+$", "", s)
-    s = re.sub(r"[,.،;\u00b7|]+$", "", s)  # trailing separators only
+    s = re.sub(r"[,.،;\u00b7|\-–—]+$", "", s)  # trailing separators only
     return s.strip()
 
 
@@ -304,6 +371,11 @@ def match_known_terms(text):
     lowered = (text or "").lower()
     if not lowered:
         return []
+    line_spans = []
+    offset = 0
+    for line in (text or "").splitlines(True):
+        line_spans.append((offset, offset + len(line), _line_is_non_skill_context(line)))
+        offset += len(line)
     matches = []
     for key in sorted(KNOWN_META, key=len, reverse=True):
         if signal_len(key) < 2:
@@ -314,6 +386,9 @@ def match_known_terms(text):
             m = rx.search(lowered, pos)
             if not m:
                 break
+            if any(m.start() >= s and m.end() <= e and skip for s, e, skip in line_spans):
+                pos = m.end()
+                continue
             matches.append((m.start(), m.end(), key))
             pos = m.end()
     matches.sort(key=lambda t: (t[1] - t[0], -t[0]), reverse=True)
@@ -336,7 +411,8 @@ def match_known_terms(text):
 # ------------------------------------------------------------------ skill sections
 
 _SKILL_HEADING = (
-    r"(?:key|technical|professional|core|transferable|relevant|hard|additional|other|general)?\s*skills"
+    r"(?:key|technical|professional|core|transferable|relevant|hard|soft|"
+    r"teaching\s*(?:&|\band\b)\s*soft|additional|other|general)?\s*skills"
     r"|(?:core|professional|key|technical)?\s*competenc(?:ies|y)"
     r"|areas?\s+of\s+(?:expertise|strength)"
     r"|expertise|tools(?:\s*(?:&|\band\b)\s*technolog(?:ies|y))?"
@@ -357,9 +433,10 @@ _HEADING_INLINE = re.compile(r"^\s*(?:" + _SKILL_HEADING + r")\s*:\s*(.+)$", re.
 _NON_SECTION_HEADING = re.compile(
     r"^\s*(?:education|experience|employment|work[\s-]+history|projects?|awards?|"
     r"honors?|achievements?|summary|objective|profile|about(?:\s+me)?|interests|"
-    r"hobbies|publications?|references?|referees?|certifications?|licenses?|"
+    r"hobbies|publications?|references?|referees?|certificates?|certifications?|licenses?|"
     r"training|extra-?curricular|volunteer(?:ing)?|community\s+service|"
-    r"memberships?|affiliations?|languages?|leadership|additional\s+"
+    r"memberships?|affiliations?|languages?|(?:teaching\s*(?:&|\band\b)\s*)?"
+    r"leadership(?:\s+experience)?|additional\s+"
     r"(?:information|info|activities)|personal\s+details|contact(?:\s+details)?)\s*:?\s*$",
     re.I)
 
@@ -372,6 +449,46 @@ _RE_EDIT_GUIDANCE = re.compile(r"^\s*(?:tip|note|hint)\s*[:\-]|^\s*\(?\s*(?:tip|
 
 _ENUM_DELIMS = re.compile(r"[,;\u2022|\u00b7\t]")
 _ENTRY_DELIMS = re.compile(r"[,;\u2022|\u00b7\t]|\s{2,}")
+_RE_JOINED_SKILL_SUBHEADING = re.compile(
+    r"(?P<head>(?:teaching\s*(?:&|\band\b)\s*soft|technical|soft|hard)\s+skills\b.*)$",
+    re.I)
+
+
+def _line_is_non_skill_context(line):
+    stripped = (line or "").strip()
+    if not stripped:
+        return False
+    if _RE_EDIT_GUIDANCE.match(stripped):
+        return True
+    if _HEADING_ONLY.match(stripped) or _HEADING_INLINE.match(stripped):
+        return True
+    if _NON_SECTION_HEADING.match(stripped):
+        return True
+    words = re.findall(r"\b[\w]+\b", stripped)
+    if len(words) <= 5 and re.search(r"\b(?:experience|certificates?|certifications?|languages?|education)\s*:?\s*$", stripped, re.I):
+        return True
+    return False
+
+
+def _expand_joined_skill_subheadings(lines):
+    expanded = []
+    for line in lines:
+        stripped = (line or "").strip()
+        if _HEADING_ONLY.match(stripped):
+            expanded.append(line)
+            continue
+        m = _RE_JOINED_SKILL_SUBHEADING.search(line or "")
+        if not m or m.start() <= 0:
+            expanded.append(line)
+            continue
+        prefix = line[:m.start()].rstrip()
+        heading = line[m.start():].strip()
+        if prefix.strip() and heading and not line[m.start() - 1].isspace():
+            expanded.append(prefix)
+            expanded.append(heading)
+        else:
+            expanded.append(line)
+    return expanded
 
 
 def _split_entries(line):
@@ -416,7 +533,7 @@ def skill_section_entries(text):
     Tools & Technologies, Software, Technologies. Entries may be comma, bullet,
     pipe, ampersand or newline separated."""
     candidates = []
-    lines = (text or "").splitlines()
+    lines = _expand_joined_skill_subheadings((text or "").splitlines())
     i, n = 0, len(lines)
     while i < n:
         line = lines[i].rstrip()

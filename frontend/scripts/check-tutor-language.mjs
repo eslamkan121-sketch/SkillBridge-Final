@@ -8,13 +8,10 @@
 //
 // Pre-fix this script exits non-zero. Post-fix it passes.
 
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
+import { readProject } from './path-helpers.mjs'
 
-const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
-const api = readFileSync(join(root, 'frontend', 'src', 'lib', 'api.ts'), 'utf8')
-const panel = readFileSync(join(root, 'frontend', 'src', 'components', 'CopilotPanel.tsx'), 'utf8')
+const api = readProject('frontend/src/lib/api.ts')
+const panel = readProject('frontend/src/components/CopilotPanel.tsx')
 
 const failures = []
 
