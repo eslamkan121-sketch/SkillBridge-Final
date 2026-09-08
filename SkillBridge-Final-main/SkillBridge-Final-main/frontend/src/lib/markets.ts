@@ -1,0 +1,63 @@
+// Relocation / remote-search markets shared between the Dashboard live-jobs
+// feed and the Skills & Roles live-market section. `code` is the ISO alpha-2
+// the job providers understand (JSearch country param / Adzuna market code).
+// The set mirrors `jobs._JSEARCH_ISO2` on the backend plus the markets Adzuna
+// serves, so every option is actually reachable by at least one provider.
+export const RELOCATION_MARKETS: { code: string; label: string }[] = [
+  { code: '', label: 'No relocation search' },
+  { code: 'gb', label: 'United Kingdom' },
+  { code: 'us', label: 'United States' },
+  { code: 'eg', label: 'Egypt' },
+  { code: 'ae', label: 'United Arab Emirates' },
+  { code: 'sa', label: 'Saudi Arabia' },
+  { code: 'qa', label: 'Qatar' },
+  { code: 'kw', label: 'Kuwait' },
+  { code: 'bh', label: 'Bahrain' },
+  { code: 'om', label: 'Oman' },
+  { code: 'jo', label: 'Jordan' },
+  { code: 'lb', label: 'Lebanon' },
+  { code: 'ca', label: 'Canada' },
+  { code: 'de', label: 'Germany' },
+  { code: 'fr', label: 'France' },
+  { code: 'es', label: 'Spain' },
+  { code: 'it', label: 'Italy' },
+  { code: 'nl', label: 'Netherlands' },
+  { code: 'ie', label: 'Ireland' },
+  { code: 'au', label: 'Australia' },
+  { code: 'nz', label: 'New Zealand' },
+  { code: 'sg', label: 'Singapore' },
+  { code: 'za', label: 'South Africa' },
+  { code: 'ma', label: 'Morocco' },
+  { code: 'dz', label: 'Algeria' },
+  { code: 'tn', label: 'Tunisia' },
+  { code: 'tr', label: 'Turkey' },
+  { code: 'br', label: 'Brazil' },
+  { code: 'mx', label: 'Mexico' },
+  { code: 'pl', label: 'Poland' },
+  { code: 'se', label: 'Sweden' },
+  { code: 'dk', label: 'Denmark' },
+  { code: 'no', label: 'Norway' },
+  { code: 'fi', label: 'Finland' },
+  { code: 'ch', label: 'Switzerland' },
+  { code: 'at', label: 'Austria' },
+  { code: 'be', label: 'Belgium' },
+  { code: 'jp', label: 'Japan' },
+  { code: 'kr', label: 'South Korea' },
+  { code: 'cn', label: 'China' },
+  { code: 'my', label: 'Malaysia' },
+  { code: 'id', label: 'Indonesia' },
+  { code: 'ph', label: 'Philippines' },
+  { code: 'vn', label: 'Vietnam' },
+  { code: 'th', label: 'Thailand' },
+  { code: 'ar', label: 'Argentina' },
+  { code: 'cl', label: 'Chile' },
+  { code: 'co', label: 'Colombia' },
+  { code: 'ng', label: 'Nigeria' },
+  { code: 'ke', label: 'Kenya' },
+  { code: 'pk', label: 'Pakistan' },
+  { code: 'bd', label: 'Bangladesh' },
+]
+
+export function marketLabel(code: string): string {
+  return RELOCATION_MARKETS.find((m) => m.code === code)?.label || ''
+}

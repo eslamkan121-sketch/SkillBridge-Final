@@ -1,0 +1,63 @@
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: skillbridge-backend-dev
+    working_dir: /workspace/backend
+    volumes:
+      - ..:/workspace:cached
+      - /workspace/backend/.pytest_cache
+      - /workspace/backend/__pycache__
+    ports:
+      - "8000:8000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - DATABASE_URL=sqlite:////workspace/backend/skillbridge.db
+      - PYTHONUNBUFFERED=1
+    command: bash -lc "cd /workspace/backend && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    depends_on:
+      - db
+    networks:
+      - skillbridge
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: skillbridge-frontend-dev
+    working_dir: /workspace/frontend
+    volumes:
+      - ..:/workspace:cached
+      - /workspace/frontend/node_modules
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    command: bash -lc "cd /workspace/frontend && npm run dev -- --host 0.0.0.0"
+    depends_on:
+      - backend
+    networks:
+      - skillbridge
+
+  db:
+    image: postgres:15-alpine
+    container_name: skillbridge-db-dev
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-skillbridge}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - skillbridge
+
+volumes:
+  postgres_dev_data:
+    driver: local
+
+networks:
+  skillbridge:
+    driver: bridge
