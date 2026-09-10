@@ -177,7 +177,8 @@ def test_assessment_lock_still_blocks_copilot_interview(client, student_id, auth
     h = auth_headers("aisha@student.edu")
     python = models.get_skill_by_name("Python")["id"]
     assert client.post(f"/api/students/{student_id}/assessments/session",
-                       json={"skill_id": python}, headers=h).status_code == 200
+                       json={"skill_id": python,
+                            "webcam_gate": {"passed": True, "checked_at": "2026-09-07T05:00:00Z", "meta": {"person_status": "one"}}}, headers=h).status_code == 200
     r = client.post(f"/api/students/{student_id}/tutor",
                     json={"message": "Interview me.", "mode": "interview"}, headers=h)
     assert r.status_code == 423

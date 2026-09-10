@@ -241,6 +241,35 @@ CATALOG_ROLES = [
       ("Client advocacy", "Intermediate", "Legal"),
       ("Legal drafting", "Intermediate", "Legal"),
       ("Court etiquette", "Beginner", "Legal")]),
+    # --- Additional clinical reference roles: give healthcare CVs (e.g. a
+    # dentist profile) an honest local target even when the live ESCO lookup is
+    # unreachable. Licensed titles automatically carry the professional-boundary
+    # note in recommendations; these are study anchors, not credentials.
+    ("Dentist (General Practice)",
+     "Diagnose, treat, and prevent dental conditions across routine and complex care.",
+     [("Dentistry", "Advanced", "Clinical"), ("Treatment Planning", "Advanced", "Clinical"),
+      ("Dental Radiography", "Intermediate", "Clinical"), ("Sterilization", "Advanced", "Clinical"),
+      ("Anatomy", "Intermediate", "Clinical"), ("Orthodontics", "Beginner", "Clinical"),
+      ("Patient Communication", "Intermediate", "Clinical"),
+      ("Clinical Documentation", "Intermediate", "Clinical")]),
+    ("Dental Assistant",
+     "Support dentists chairside with patient preparation, imaging, and instrument sterilization.",
+     [("Sterilization", "Advanced", "Clinical"), ("Dental Radiography", "Intermediate", "Clinical"),
+      ("Patient Communication", "Intermediate", "Clinical"),
+      ("Dental Instrumentation", "Intermediate", "Clinical"),
+      ("Medical Documentation", "Intermediate", "Clinical"),
+      ("Infection Control", "Advanced", "Clinical"),
+      ("Communication", "Intermediate", "Soft Skills"),
+      ("Equipment Maintenance", "Beginner", "Clinical")]),
+    ("Dental Hygienist",
+     "Deliver preventive oral care: cleanings, scaling, fluoride, and oral-health education.",
+     [("Dental Hygiene", "Advanced", "Clinical"), ("Periodontal Care", "Intermediate", "Clinical"),
+      ("Oral Health Education", "Intermediate", "Clinical"),
+      ("Sterilization", "Intermediate", "Clinical"),
+      ("Dental Radiography", "Intermediate", "Clinical"),
+      ("Preventive Dentistry", "Beginner", "Clinical"),
+      ("Patient Communication", "Intermediate", "Clinical"),
+      ("Communication", "Intermediate", "Soft Skills")]),
 ]
 
 SOC_ROLE_KEY = "role-soc"
@@ -324,7 +353,7 @@ def seed():
             DELETE FROM google_registrations; DELETE FROM password_resets;
             DELETE FROM email_verifications;
             DELETE FROM sessions; DELETE FROM assessment_attempts; DELETE FROM tutor_messages;
-            DELETE FROM learning_practice_attempts;
+            DELETE FROM learning_practice_attempts; DELETE FROM scenario_attempts; DELETE FROM saved_roles;
             DELETE FROM personalized_paths; DELETE FROM learning_lessons;
             DELETE FROM learning_diagnostics; DELETE FROM learning_path_items; DELETE FROM verified_skills;
             DELETE FROM self_reported_skills; DELETE FROM role_skills;

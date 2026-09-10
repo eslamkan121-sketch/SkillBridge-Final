@@ -65,8 +65,10 @@ function categoryToneFor(category: string) {
   return 'slate'
 }
 
-export default function LearningPage({ onNavigate }: {
+export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed }: {
   onNavigate?: (section: string) => void
+  initialFocus?: { skillId: number; roleTitle: string } | null
+  onFocusConsumed?: () => void
 }) {
   const { me, applyCopilot } = useApp()
   const studentId = me?.student?.id ?? 0
@@ -75,13 +77,30 @@ export default function LearningPage({ onNavigate }: {
   const [selectedSkillId, setSelectedSkillId] = useState<number | null>(null)
   const [pathsBySkill, setPathsBySkill] = useState<Record<number, PersonalizedPath | null>>({})
   const [learningStart, setLearningStart] = useState<{ skillId: number; signal: number } | null>(null)
-  const [lessonFocus, setLessonFocus] = useState<{ skillId: number; competency: string; signal: number } | null>(null)
+  const [lessonFocus, setLessonFocus] = useState<{ skillId: number; competency: string; signal: number; tab?: 'learn' | 'example' | 'practice' | 'discuss' | 'mini_check' } | null>(null)
   const [query, setQuery] = useState('')
   const [topicFilter, setTopicFilter] = useState('all')
   const [activeTab, setActiveTab] = useState<LearningTab>('for-you')
   const [showTop, setShowTop] = useState(false)
   const [loadError, setLoadError] = useState('')
   const [activity, setActivity] = useState<ActivitySummary | null>(null)
+  // Deep link from Skills & Roles ("Learn this skill"): focus a specific skill
+  // while keeping the role that prompted it in view as dismissible context.
+  const [focusInfo, setFocusInfo] = useState<{ skillId: number; roleTitle: string } | null>(null)
+
+  useEffect(() => {
+    if (!initialFocus) return
+    setFocusInfo(initialFocus)
+    setSelectedSkillId(initialFocus.skillId)
+    onFocusConsumed?.()
+    const tryScroll = () => {
+      document.getElementById('skill-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+    const t1 = window.setTimeout(tryScroll, 300)
+    const t2 = window.setTimeout(tryScroll, 900)
+    return () => { window.clearTimeout(t1); window.clearTimeout(t2) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialFocus])
 
   useEffect(() => {
     const onScroll = () => setShowTop(window.scrollY > 600)
@@ -197,14 +216,20 @@ export default function LearningPage({ onNavigate }: {
   })
 
   useEffect(() => {
+    // A deep link from Skills & Roles wins over the automatic first-gap select.
+    if (focusInfo) return
     const preferred = openGaps[0] || allGaps[0]
     if (!preferred) return
     if (!selectedSkillId || !allGaps.some((gap) => gap.skill_id === selectedSkillId)) {
       setSelectedSkillId(preferred.skill_id)
     }
-  }, [analysis?.role_id, allGaps.length, openGaps.length, selectedSkillId])
+  }, [analysis?.role_id, allGaps.length, openGaps.length, selectedSkillId, focusInfo])
 
   const selectedGap = allGaps.find((gap) => gap.skill_id === selectedSkillId) || filteredSkills[0] || openGaps[0] || allGaps[0]
+
+  const focusedName = focusInfo
+    ? (allGaps.find((g) => g.skill_id === focusInfo.skillId)?.skill_name ?? 'this skill')
+    : ''
 
   const setCopilotCompetency = useCallback((competency: string | null) => {
     applyCopilot({ competency })
@@ -281,10 +306,10 @@ export default function LearningPage({ onNavigate }: {
   const shownStepperRows = visibleStepperRows.slice(0, 8)
   const moreModulesCount = visibleStepperRows.length - shownStepperRows.length
 
-  const openLessonTopic = (skillId: number, competency: string) => {
+  const openLessonTopic = (skillId: number, competency: string, tab?: 'learn' | 'example' | 'practice' | 'discuss' | 'mini_check') => {
     if (!competency) return
     setSelectedSkillId(skillId)
-    setLessonFocus((prev) => ({ skillId, competency, signal: (prev?.signal ?? 0) + 1 }))
+    setLessonFocus((prev) => ({ skillId, competency, signal: (prev?.signal ?? 0) + 1, tab }))
     requestAnimationFrame(() => {
       document.getElementById('skill-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
@@ -297,8 +322,7 @@ export default function LearningPage({ onNavigate }: {
     if (first) startLearning(first.skill_id)
   }
   const quickPractice = () => {
-    const row = stepperRows.find((r) => r.status !== 'done')
-    if (row) openLessonTopic(row.gap.skill_id, row.nextCompetency ?? '')
+    onNavigate?.('scenarios')
   }
   const goAssessments = () => onNavigate?.('assessments')
   const viewAllModules = () => {
@@ -316,18 +340,38 @@ export default function LearningPage({ onNavigate }: {
 
   return (
     <div className="learning-page">
+      {focusInfo && (
+        <div className="lrn-focus" role="status">
+          <IconTarget size={15} />
+          <span>
+            <b>{focusedName}</b> · learning toward your <b>{focusInfo.roleTitle || 'target'}</b> role. It is open in the panel below.
+          </span>
+          <button type="button" className="lrn-focus-x" aria-label="Dismiss context" onClick={() => setFocusInfo(null)}>✕</button>
+        </div>
+      )}
       <section className="learning-hero">
       <div className="hero-art" aria-hidden="true">
-        <svg viewBox="0 0 220 220" fill="none" width="220" height="220">
-          <circle cx="110" cy="110" r="96" stroke="rgba(148, 197, 231, 0.28)" strokeWidth="1" />
-          <circle cx="110" cy="110" r="70" stroke="rgba(148, 197, 231, 0.35)" strokeWidth="1.5" strokeDasharray="3 7" strokeLinecap="round" />
-          <path d="M110 36l13 24-5 3-8-6v20h0v-20l-8 6-5-3z" fill="rgba(94, 234, 212, 0.85)" />
-          <path d="M96 138l14-14 14 14" stroke="rgba(255, 255, 255, 0.6)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-          <circle cx="110" cy="110" r="30" fill="rgba(255, 107, 44, 0.14)" stroke="rgba(255, 107, 44, 0.55)" strokeWidth="1.5" />
-          <circle cx="110" cy="110" r="9" fill="rgba(255, 255, 255, 0.85)" />
-          <circle cx="110" cy="110" r="4" fill="var(--sb-coral)" />
-          <circle cx="176" cy="56" r="5" fill="rgba(94, 234, 212, 0.6)" />
-          <circle cx="52" cy="168" r="4" fill="rgba(255, 107, 44, 0.5)" />
+        <svg viewBox="0 0 220 220" width="220" height="220" fill="none">
+          {/* soft ambient glow behind the target */}
+          <circle cx="112" cy="102" r="98" fill="rgba(255,255,255,0.035)" />
+          {/* bullseye rings, outer to inner */}
+          <circle cx="112" cy="102" r="86" stroke="#FFFFFF" strokeWidth="15" />
+          <circle cx="112" cy="102" r="68" stroke="#FF6B2C" strokeWidth="15" />
+          <circle cx="112" cy="102" r="50" stroke="#FFFFFF" strokeWidth="15" />
+          <circle cx="112" cy="102" r="33" fill="#FF6B2C" />
+          <circle cx="112" cy="102" r="11" fill="#FFFFFF" />
+          {/* arrow shaft flying in from lower-left */}
+          <line x1="18" y1="188" x2="104" y2="110" stroke="#FF6B2C" strokeWidth="5" strokeLinecap="round" />
+          {/* fletching at the tail */}
+          <path d="M18 188 L6 178 M18 188 L28 197 M24 182 L14 176" stroke="#FF6B2C" strokeWidth="3.5" strokeLinecap="round" />
+          {/* arrowhead at the tip, landing on the bullseye */}
+          <polygon points="112,101 96,107 101,113" fill="#FF6B2C" />
+          {/* floating accent square, upper-left */}
+          <rect x="14" y="18" width="30" height="30" rx="8" fill="#FF6B2C" transform="rotate(-14 29 33)" />
+          {/* floating shield-check badge, lower-right */}
+          <circle cx="186" cy="176" r="22" fill="#0D1B2A" stroke="rgba(255,255,255,0.25)" strokeWidth="2" />
+          <path d="M186 165 l9 3.5 v8 c0 6-4 10-9 12-5-2-9-6-9-12v-8z" fill="#FFFFFF" opacity="0.92" />
+          <path d="M181.5 176.5l3 3 6-6.5" stroke="#0D1B2A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </div>
         <div className="learning-hero-copy">
@@ -627,7 +671,7 @@ function SkillDetailPanel({ studentId, gap, item, path, roleTitle, startSignal, 
   path?: PersonalizedPath | null
   roleTitle?: string
   startSignal?: number
-  focusSignal?: { skillId?: number; competency: string; signal: number } | null
+  focusSignal?: { skillId?: number; competency: string; signal: number; tab?: 'learn' | 'example' | 'practice' | 'discuss' | 'mini_check' } | null
   onPathChange?: (path: PersonalizedPath | null) => void
   onToggleStep: (step: number) => void
   onCompetencyChange: (competency: string | null) => void
@@ -896,16 +940,17 @@ function topicList(topics: TopicResult[], status: TopicResult['status']) {
   )
 }
 
-function LessonView({ studentId, skillId, skillName, competency, pathItem, pathId, onClose, onComplete, onStateChange, hasNext, onNext }: {
+function LessonView({ studentId, skillId, skillName, competency, pathItem, pathId, onClose, onComplete, onStateChange, hasNext, onNext, initialTab = 'learn' }: {
   studentId: number; skillId: number; skillName: string; competency: string;
   pathItem: PersonalizedPathItem; pathId: number; onClose: () => void; onComplete: () => void;
   onStateChange?: (state: Lesson['state']) => void;
   hasNext?: boolean; onNext?: () => void;
+  initialTab?: 'learn' | 'example' | 'practice' | 'discuss' | 'mini_check';
 }) {
   const [lesson, setLesson] = useState<Lesson | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [tab, setTab] = useState<'learn' | 'example' | 'practice' | 'discuss' | 'mini_check'>('learn')
+  const [tab, setTab] = useState<'learn' | 'example' | 'practice' | 'discuss' | 'mini_check'>(initialTab)
   const [miniAnswers, setMiniAnswers] = useState<Record<string, string>>({})
   const [result, setResult] = useState<{ score: number; passed: boolean; correct: number; total: number } | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -916,6 +961,13 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
   const [practiceSubmitting, setPracticeSubmitting] = useState(false)
   const [practiceError, setPracticeError] = useState('')
   const practiceInputRef = useRef<HTMLTextAreaElement | null>(null)
+
+  // A focus signal can re-target an already-open lesson (Practice scenarios
+  // quick-action or Continue) without remounting — apply the requested tab.
+  useEffect(() => {
+    setTab(initialTab)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTab])
 
   useEffect(() => {
     let alive = true
@@ -1362,7 +1414,7 @@ function PersonalizedPathPanel({ studentId, skillId, skillName, refreshKey = 0, 
   skillName: string
   refreshKey?: number
   startSignal?: number
-  focusSignal?: { competency: string; signal: number } | null
+  focusSignal?: { competency: string; signal: number; tab?: 'learn' | 'example' | 'practice' | 'discuss' | 'mini_check' } | null
   onPathChange?: (path: PersonalizedPath | null) => void
   onCompetencyChange?: (competency: string | null) => void
 }) {
@@ -1375,6 +1427,7 @@ function PersonalizedPathPanel({ studentId, skillId, skillName, refreshKey = 0, 
   const [done, setDone] = useState<string[]>([])
   const [lessonStates, setLessonStates] = useState<Record<string, Lesson['state']>>({})
   const [openCompetency, setOpenCompetency] = useState<string | null>(null)
+  const [focusTab, setFocusTab] = useState<'learn' | 'example' | 'practice' | 'discuss' | 'mini_check'>('learn')
   const [finalStatus, setFinalStatus] = useState<FinalAssessmentStatus | null>(null)
   const handledStartSignal = useRef(0)
   const handledFocusSignal = useRef(0)
@@ -1419,6 +1472,7 @@ function PersonalizedPathPanel({ studentId, skillId, skillName, refreshKey = 0, 
       nextPath.items[0]
     if (!current) return
     setOpenCompetency(current.competency)
+    setFocusTab('learn')
     compRef.current?.(current.competency)
   }
 
@@ -1514,6 +1568,7 @@ function PersonalizedPathPanel({ studentId, skillId, skillName, refreshKey = 0, 
     if (!found) return
     handledFocusSignal.current = focusSignal.signal
     setOpenCompetency(focusSignal.competency)
+    setFocusTab(focusSignal.tab ?? 'learn')
     compRef.current?.(focusSignal.competency)
   }, [focusSignal, ready, path])
 
@@ -1529,8 +1584,10 @@ function PersonalizedPathPanel({ studentId, skillId, skillName, refreshKey = 0, 
         onComplete={async () => { await loadPath(); void loadFinalStatus() }}
         onStateChange={(state) => setLessonStates((prev) => ({ ...prev, [openCompetency]: state }))}
         hasNext={!!nextLesson}
+        initialTab={focusTab}
         onNext={nextLesson ? () => {
           setOpenCompetency(nextLesson.competency)
+          setFocusTab('learn')
           compRef.current?.(nextLesson.competency)
           requestAnimationFrame(() => document.getElementById('skill-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
         } : undefined}

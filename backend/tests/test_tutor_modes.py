@@ -47,8 +47,10 @@ def _set_pref(client, student_id, headers, body):
 
 def test_all_modes_are_known_and_have_defaults():
     assert copilot.MODES == ("chat", "practice", "discuss", "interview")
+    # Vex defaults to chat: selecting a persona must not imply an interview
+    # session. Explicit Interview mode is opt-in and stays fully supported.
     assert copilot.TUTOR_DEFAULT_MODES == {
-        "nova": "chat", "axel": "practice", "sage": "discuss", "vex": "interview",
+        "nova": "chat", "axel": "practice", "sage": "discuss", "vex": "chat",
     }
 
 
@@ -183,7 +185,8 @@ def test_assessment_lock_blocks_every_mode(client, student_id, auth_headers):
     h = auth_headers("aisha@student.edu")
     python = models.get_skill_by_name("Python")["id"]
     assert client.post(f"/api/students/{student_id}/assessments/session",
-                       json={"skill_id": python}, headers=h).status_code == 200
+                       json={"skill_id": python,
+                       "webcam_gate": {"passed": True, "checked_at": "2026-09-07T05:00:00Z", "meta": {"person_status": "one"}}}, headers=h).status_code == 200
     for mode in copilot.MODES:
         r = _tutor(client, student_id, h, {"mode": mode})
         assert r.status_code == 423, (mode, r.text)

@@ -4,7 +4,10 @@ Aggregates live openings from multiple free job feeds and matches
 them to a student's actual profile:
 
 - **Sources**: Remotive (global remote) + RemoteOK (global remote/tech)
-  + optional Adzuna when ADZUNA_APP_ID and ADZUNA_APP_KEY are configured.
+  + optional Adzuna (ADZUNA_APP_ID/KEY), JSearch / LinkedIn / Google Jobs
+  (RapidAPI), Jooble and USAJobs when their keys are configured. Remote
+  RapidAPI aggregators (LinkedIn, Google Jobs) are host-gated via
+  LINKEDIN_JOBS_HOST / GOOGLE_JOBS_HOST (never guessed).
 - **Relevance**: every job is scored against the student's skill names
   (a weighted keyword overlap) and their target role.
 - **Experience fit**: the student's seniority is inferred from their skill
@@ -33,9 +36,12 @@ import os
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 
 import httpx
+
+from . import role_intent
 
 logger = logging.getLogger("skillbridge.jobs")
 
@@ -47,6 +53,13 @@ ARBEITNOW_URL = "https://www.arbeitnow.com/api/job-board-api"
 JOOBLE_BASE = "https://api.jooble.org/api"
 JSEARCH_URL = "https://jsearch.p.rapidapi.com/search-v2"
 USAJOBS_URL = "https://data.usajobs.gov/api/search"
+
+# RapidAPI LinkedIn / Google Jobs adapters are HOST-GATED: the exact host of the
+# subscribed RapidAPI app is configured via env (LINKEDIN_JOBS_HOST/LINKEDIN_JOBS_PATH,
+# GOOGLE_JOBS_HOST/GOOGLE_JOBS_PATH). Until configured a provider reports
+# ``host_not_configured`` and skips — the host is never guessed. Keys resolve
+# provider-specific (RAPIDAPI_LINKEDIN_KEY / RAPIDAPI_GOOGLE_JOBS_KEY) then
+# fall back to the shared RAPIDAPI_KEY.
 TTL_SECONDS = 15 * 60
 
 # Listings older than this (in days) are treated as stale/expired when the
@@ -61,9 +74,11 @@ _HEADERS = {"User-Agent": "SkillBridge/1.0 (career platform; student job matchin
 # All healthy providers, in priority order. Keyed providers stay disabled until
 # their credentials are configured; a slow/failing provider is reported safely
 # and never blocks the other feeds. Jooble is optional: its API can be
-# unreachable from some regions and simply degrades to a no-op.
+# unreachable from some regions and simply degrades to a no-op. LinkedIn and
+# Google Jobs (RapidAPI) are host-gated — until the exact subscribed host is
+# configured they report ``host_not_configured`` and skip.
 PROVIDERS = (
-    "JSearch", "Adzuna", "USAJobs",
+    "JSearch", "LinkedIn", "Google Jobs", "Adzuna", "USAJobs",
     "Remotive", "Jobicy", "Arbeitnow", "RemoteOK",
     "Jooble",
 )
@@ -96,7 +111,9 @@ def _redact(text):
     secrets. Known key values are replaced with ``***`` wherever they appear.
     """
     s = str(text or "")
-    for var in ("JSEARCH_API_KEY", "RAPIDAPI_KEY", "ADZUNA_APP_ID",
+    for var in ("JSEARCH_API_KEY", "RAPIDAPI_KEY", "RAPIDAPI_LINKEDIN_KEY",
+                "RAPIDAPI_GOOGLE_JOBS_KEY", "LINKEDIN_JOBS_API_KEY",
+                "GOOGLE_JOBS_API_KEY", "ADZUNA_APP_ID",
                 "ADZUNA_APP_KEY", "JOOBLE_API_KEY", "USAJOBS_API_KEY"):
         v = os.environ.get(var)
         if v and len(v) >= 4 and v in s:
@@ -695,11 +712,20 @@ def _cluster_keywords(skills, role, role_requisites=()):
     """Split the student's skill names into a role-relevant primary cluster and
     an incidental minor cluster.
 
-    Primary (drives search + score): the target-role title, its required skills,
-    and any extracted skill whose vocabulary overlaps the role's at all — kept in
-    importance order so search queries lead with the most distinctive terms.
-    Minor (tie-breakers only): every other extracted skill. When no target
-    career is set every skill is primary, preserving the original behaviour.
+    Primary (drives search + score): the target-role title and its required
+    skills. These are the career-identity vocabulary — the tokens that define
+    which jobs belong to the target career family.
+
+    Minor (tie-breakers only): every extracted CV skill. When a target career
+    is set, CV skills are always minor — they rank jobs WITHIN the relevant
+    career family but never push unrelated jobs through the relevance gate.
+    This prevents generic skill words ("communication", "management", "excel",
+    "data analysis") from creating keyword hits on descriptions of jobs from
+    completely unrelated fields (Marketing, Sales, Operations) and inflating
+    the relevance score above the threshold.
+
+    When no target career is set every skill is primary, preserving the
+    original behaviour (multi-skill search without role filtering).
     """
     def add(target, text):
         for w in sorted(_tokens(text)):
@@ -729,12 +755,14 @@ def _cluster_keywords(skills, role, role_requisites=()):
         primary.append(w)
     for name in role_requisites or ():
         primary = add(primary, name)
+    # When a target career is set, ALL CV skills are minor keywords — they
+    # serve as tie-breakers for ranking within the relevant family but never
+    # become primary search/score drivers. This prevents generic skills from
+    # creating cross-domain keyword hits that push unrelated jobs through the
+    # relevance gate (e.g. "management" matching a Marketing Manager when the
+    # target is Cybersecurity Analyst).
     for s in skills:
-        rel = _skill_relevance_to_role(s, role, role_requisites)
-        if rel >= _PRIMARY_RELEVANCE:
-            primary = add(primary, s)
-        else:
-            minor = add(minor, s)
+        minor = add(minor, s)
     return primary, minor
 
 
@@ -898,36 +926,27 @@ def _score_job(job, keywords, student_seniority, country, city="", role_family="
 
     # ---- Dominance tier (target-role title relevance > skills > verification) ----
     # Only title identity decides the band; a generic skill hit (python, docker…)
-    # can never promote a substantially different role into an upper band.
-    rt = _tokens(role_title) if role_title else set()
-    distinct_rt = rt - _GENERIC_TITLE_TOKENS - _TITLE_TAIL_TOKENS
-    aliases = set()
-    for t in distinct_rt:
-        aliases |= _ROLE_ALIASES.get(t, set())
-    ng_title_vocab = [kw for kw in keywords
-                      if kw not in _GENERIC_TITLE_TOKENS and kw not in _TITLE_TAIL_TOKENS
-                      and kw in twords]
-
-    tier = "none"
+    # can never promote a substantially different role into an upper band. The
+    # classification comes from the shared role-intent helper, so the gate is
+    # identical everywhere (ESCO + live jobs) and career-agnostic.
+    rel_class = None
+    if role_title:
+        rel_class = role_intent.classify_title(role_title, title)
+        tier = {"EXACT": "exact", "CLOSE": "close", "FAMILY": "family"}.get(rel_class, "none")
+    else:
+        tier = "none"
+    # Title evidence drives intra-band ordering: how much of the target's own
+    # domain vocabulary appears in the job title.
     title_evidence = 0.0
-    if role_driven:
-        if distinct_rt and distinct_rt <= twords:
-            tier = "exact"
-            title_evidence = float(len(distinct_rt))
-        elif (distinct_rt & twords) or (aliases & twords):
-            tier = "close"
-            title_evidence = float(len(distinct_rt & twords)) + (0.5 if (aliases & twords) else 0.0)
-        elif len(ng_title_vocab) >= 2:
-            # Two or more distinctive role-vocabulary words in the title signal a
-            # close discipline match (e.g. "Incident Response Analyst").
-            tier = "close"
-        elif len(ng_title_vocab) == 1:
-            # A single distinctive role word (e.g. "Security Analyst (SOC)" for a
-            # cybersecurity target) is a broader-field (family) match, never a
-            # substitute for the target title itself.
-            tier = "family"
-        elif title_family_hit:
-            tier = "family"
+    if rel_class:
+        rt = set(role_intent.domain_tokens(role_title))
+        shared = rt & twords
+        title_evidence = (float(len(shared))
+                          + (0.5 if rel_class == "CLOSE" and shared else 0.0)
+                          + (0.0 if rel_class == "FAMILY" else 0.0))
+    # A family-title hit (same canonical career, different specialization) is
+    # still a legitimate broader-field match.
+    title_family_hit = rel_class in ("FAMILY", "CLOSE", "EXACT")
 
     # ---- Seniority penalty (conservative) ----
     # Clearly-senior/leadership titles (director, head, manager…) are capped for
@@ -964,33 +983,40 @@ def _score_job(job, keywords, student_seniority, country, city="", role_family="
                    f"{'s' if len(verified_hits) > 1 else ''} verified.")
     if fresh_note:
         reason += fresh_note
-    # Relevance gate. With a target career set, generic job words never count:
-    # a job qualifies only when its title carries the discipline word (family),
-    # or a role-vocabulary skill word appears in the title, or at least two
-    # role-vocabulary words appear anywhere. Incidental skills alone never
-    # qualify a job (otherwise copywriter/office-assistant noise floods the
-    # feed above genuinely on-target roles); they only earn a capped tie-break.
+    # Relevance gate. With a target career set, a job survives ONLY when its
+    # title carries real career evidence for that target (EXACT / CLOSE / FAMILY
+    # per the shared role-intent classifier). Generic skill words and broad
+    # required-skill terms ("risk", "incident", "communication", "management")
+    # never qualify a job on their own — otherwise a Data Scientist mentioning
+    # "risk" or a Marketing manager mentioning "communication" would flood a
+    # cybersecurity target's feed. Incidental skills are capped tie-breakers only.
+    #
+    # The gate requires evidence from the ROLE'S OWN VOCABULARY (title +
+    # required skills), not from generic CV skills that appear in descriptions
+    # of unrelated jobs. When a target role is set, CV skills are always minor
+    # keywords (see _cluster_keywords), so they contribute to the numeric score
+    # but cannot independently push a job through the relevance threshold.
     if role_driven:
-        ng = [kw for kw in keywords if kw not in _GENERIC_TITLE_TOKENS]
-        distinct = [kw for kw in ng if kw not in _TITLE_TAIL_TOKENS]
-        title_ng = [kw for kw in distinct if kw in twords]
-        hits_ng = [kw for kw in ng if kw in haystack]
-        if distinct:
-            # Distinctive role vocabulary exists (cyber, incident, siem…) — the
-            # gate is strict: only discipline/family words or ≥2 role-vocabulary
-            # hits qualify, so unrelated listings never flood the feed.
-            relevant = bool(title_family_hit) or bool(title_ng) or len(hits_ng) >= 2
+        if role_title:
+            relevant = rel_class in ("EXACT", "CLOSE", "FAMILY")
         else:
-            # No distinctive vocabulary (e.g. a bare "Data Analyst" profile whose
-            # role words are all generic) — fall back to the broad pre-P2 gate so
-            # these profiles keep working.
+            # Degraded callers that pass only a role_family (no title): fall back
+            # to a family-title or role-vocabulary hit gate. Production always
+            # passes role_title, so the strict intent gate is the normal path.
             relevant = bool(title_family_hit) or hits >= 2
     else:
         relevant = bool(title_family_hit) or hits >= 2
+    # FAMILY-tier override: a job classified FAMILY by the role-intent
+    # classifier belongs to the same career family (e.g. "Security Analyst"
+    # for a "Cybersecurity Analyst" target). However, the override is only
+    # applied when the job demonstrates at least one primary keyword hit from
+    # the role's own vocabulary — this prevents completely unrelated jobs
+    # (zero role-vocabulary overlap) from being rescued by the family
+    # classification alone, which can happen when generic CV keywords
+    # ("management", "communication") appear in the job's description but
+    # the title has no real connection to the target career.
     if tier == "family" and not relevant:
-        # A broader-field title match (e.g. "Security Analyst (SOC)") is still
-        # relevant even when the strict gate alone wouldn't admit it.
-        relevant = True
+        relevant = hits >= 1
     return score, reason, relevant, loc_tier, loc_label, tier, title_evidence
 
 
@@ -1389,6 +1415,183 @@ def _fetch_jooble(n, keywords, country=""):
     return jobs
 
 
+# ---------------------------------------------------------------------------
+# RapidAPI job-search providers (LinkedIn, Google Jobs). Host-gated: the exact
+# subscribed host is configured via env, never guessed. All three RapidAPI
+# apps share RAPIDAPI_KEY unless a provider-specific override is set.
+# ---------------------------------------------------------------------------
+def _rapidapi_key(provider_env):
+    """Provider-specific RapidAPI key, falling back to the shared account key."""
+    return os.environ.get(provider_env) or os.environ.get("RAPIDAPI_KEY")
+
+
+def _provider_rapidapi_cfg(host_env, path_env, key_env, name):
+    """Resolve (host, path, key) for a RapidAPI job provider from env.
+
+    Only returns non-empty when BOTH the exact subscribed host and a key are
+    configured; otherwise records an honest skip so the provider shows up as
+    ``host_not_configured`` / ``no_credentials`` (never guessed, never tried).
+    """
+    host = os.environ.get(host_env, "").strip().lower()
+    path = os.environ.get(path_env, "").strip()
+    key = _rapidapi_key(key_env)
+    if not host:
+        _skip_status(name, "host_not_configured")
+        return "", "", ""
+    if not key:
+        _skip_status(name, "no_credentials")
+        return "", "", ""
+    return host, path, key
+
+
+def _job_field(item, *names):
+    """First non-empty value from any of the common provider key spellings."""
+    for n in names:
+        v = item.get(n)
+        if v is None:
+            continue
+        if isinstance(v, (int, float)):
+            v = str(v)
+        elif isinstance(v, str):
+            v = v.strip()
+        if v:
+            return v
+    return ""
+
+
+def _extract_job_items(payload):
+    """Best-effort location of the job list in a RapidAPI job response.
+
+    Aggregators wrap jobs differently (``data.jobs``, ``data:[...]``,
+    ``jobs:[...]``, ``results``...). This flexible finder avoids assuming one
+    specific schema; each item is then mapped field-by-field via _job_field.
+    """
+    if not isinstance(payload, dict):
+        return []
+    for key in ("jobs", "results", "items", "result", "data"):
+        v = payload.get(key)
+        if isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
+            return v
+        if isinstance(v, dict):
+            for sub in ("jobs", "results", "items", "data"):
+                sv = v.get(sub)
+                if isinstance(sv, list) and sv and all(isinstance(x, dict) for x in sv):
+                    return sv
+    return []
+
+
+def _fetch_rapidapi_jobs(name, host_env, path_env, key_env, n, keywords, country=""):
+    """Shared RapidAPI job-search adapter with the existing provider contract.
+
+    Returns provider-normalised listings (the same shape JSearch/Jooble emit),
+    records health, handles timeouts / 429 rate limits / auth errors, and never
+    raises. One provider failing never affects the unified feed.
+    """
+    host, path, key = _provider_rapidapi_cfg(host_env, path_env, key_env, name)
+    if not host:
+        return []
+    query = " ".join(keywords[:5]) if keywords else ""
+    if path.startswith("/"):
+        url = f"https://{host}{path}"
+    else:
+        url = f"https://{host}/{path}"
+    jobs = []
+    try:
+        resp = httpx.get(
+            url,
+            params={"query": query, "location": country or ""},
+            headers={"X-RapidAPI-Key": key, "X-RapidAPI-Host": host, **_HEADERS},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+        items = _extract_job_items(payload)
+        # Some APIs surface auth/plan errors as a 200 body with a message and
+        # no job list — that is a provider failure, not a healthy empty result.
+        body_message = str((payload.get("message") or payload.get("error") or ""))[:120] \
+            if isinstance(payload, dict) else ""
+        if body_message and not items:
+            _record_status(name, "failed", 0, reason="request_failed", error=body_message)
+            logger.warning("job provider %s failed (optional): %s", name, _redact(body_message))
+            return []
+        for it in items[:n]:
+            title = _job_field(it, "job_title", "jobTitle", "title",
+                               "position", "position_title", "positionTitle")
+            url2 = _job_field(it, "job_apply_link", "job_google_link", "url",
+                              "link", "external_url", "job_url", "apply_url",
+                              "jobPostingUrl", "source_url")
+            if not title or not url2:
+                continue
+            loc = _job_field(it, "job_location", "job_city", "location",
+                             "city", "formattedLocation", "formatted_location",
+                             "locality")
+            is_remote = bool(it.get("job_is_remote") or it.get("remote") or it.get("isRemote"))
+            if not loc:
+                loc = "Remote" if is_remote else ""
+            date = (_job_field(it, "job_posted_at_datetime_utc", "job_posted_at",
+                               "posted_at", "posted_date", "publication_date",
+                               "date", "publishDate", "createdAt") or "")[:10]
+            jobs.append({
+                "title": title,
+                "company": _job_field(it, "employer_name", "company_name",
+                                      "company", "companyName",
+                                      "hiring_organization", "organizationName",
+                                      "organization") or "Unknown company",
+                "url": url2,
+                "date": date,
+                "location": loc,
+                "country": _job_field(it, "job_country", "country"),
+                "tags": [],
+                "remote": is_remote,
+                "expired": False,
+                "description": _job_field(it, "job_description", "description",
+                                          "summary", "snippet", "jobExcerpt",
+                                          "position_summary"),
+                "employment_type": _job_field(it, "job_employment_type",
+                                              "employment_type", "job_type",
+                                              "type", "work_type", "workType"),
+                "salary": _job_field(it, "salary", "salaryRange", "compensation",
+                                     "salary_min", "job_min_salary"),
+                "source": name,
+            })
+    except httpx.HTTPStatusError as exc:
+        code = exc.response.status_code
+        detail = f"{code} {exc.response.text[:80]}"
+        if code == 429:
+            _record_status(name, "failed", 0, reason="rate_limited", error=detail)
+            logger.warning("job provider %s rate limited: %s", name, _redact(detail))
+        else:
+            _record_status(name, "failed", 0, reason="request_failed", error=detail)
+            logger.warning("job provider %s failed (optional): %s", name, _redact(detail))
+        return []
+    except httpx.TimeoutException as exc:
+        _record_status(name, "failed", 0, reason="network_unreachable", error=str(exc))
+        logger.warning("job provider %s failed (optional): %s", name, _redact(exc))
+        return []
+    except Exception as exc:
+        _record_status(name, "failed", 0, reason="request_failed", error=str(exc))
+        logger.warning("job provider %s failed (optional): %s", name, _redact(exc))
+        return []
+    _record_status(name, "ok", len(jobs))
+    return jobs
+
+
+def _fetch_linkedin_jobs(n, keywords, country=""):
+    """LinkedIn Job Search via RapidAPI. Exact host + path are config-driven
+    (LINKEDIN_JOBS_HOST / LINKEDIN_JOBS_PATH) — the API host is never guessed.
+    Key: RAPIDAPI_LINKEDIN_KEY, falling back to RAPIDAPI_KEY."""
+    return _fetch_rapidapi_jobs("LinkedIn", "LINKEDIN_JOBS_HOST", "LINKEDIN_JOBS_PATH",
+                                "RAPIDAPI_LINKEDIN_KEY", n, keywords, country)
+
+
+def _fetch_google_jobs(n, keywords, country=""):
+    """Google Jobs via RapidAPI. Exact host + path are config-driven
+    (GOOGLE_JOBS_HOST / GOOGLE_JOBS_PATH) — the API host is never guessed.
+    Key: RAPIDAPI_GOOGLE_JOBS_KEY, falling back to RAPIDAPI_KEY."""
+    return _fetch_rapidapi_jobs("Google Jobs", "GOOGLE_JOBS_HOST", "GOOGLE_JOBS_PATH",
+                                "RAPIDAPI_GOOGLE_JOBS_KEY", n, keywords, country)
+
+
 # Canonical country name -> ISO 3166-1 alpha-2, used by the JSearch v5 API's
 # ``country`` parameter (JSearch only accepts two-letter ISO codes, not free
 # text like "Egypt"). See _JSEARCH_COUNTRY_PARAM.
@@ -1436,7 +1639,10 @@ def _fetch_jsearch(n, keywords, country=""):
     ok = False
     last_error = ""
     try:
-        params = {"query": query, "page": 1, "num_pages": 1, "date_posted": "all"}
+        # language=en is required: without it JSearch auto-selects "ar" for
+        # Egypt/UAE markets and returns zero results for otherwise-available
+        # regional listings (e.g. "dentist" in ae/eg).
+        params = {"query": query, "page": 1, "num_pages": 1, "date_posted": "all", "language": "en"}
         iso = _jsearch_country_param(country)
         if iso:
             params["country"] = iso
@@ -1556,21 +1762,37 @@ def _fetch_usajobs(n, keywords, country=""):
 
 
 def _fetch_all(limit_each, keywords=(), country="", adzuna_country=""):
-    """Fetch from all job feeds. Uses short timeouts to avoid blocking the
+    """Fetch from all job feeds in parallel. Uses short timeouts to avoid blocking the
     request thread for too long. Each feed is tried independently so a
     slow/unreachable feed doesn't prevent the others from returning."""
     # Country-scoped feeds follow the relocation market (codes → names, so
     # JSearch/Jooble get readable locations like "United Kingdom" / "Egypt").
     market_name = _normalise_country(adzuna_country) if adzuna_country else ""
     exec_loc = market_name or _normalise_country(country)
-    jobs = _fetch_remotive(max(limit_each, 40))
-    jobs += _fetch_remoteok(max(limit_each, 40))
-    jobs += _fetch_adzuna(max(limit_each, 40), list(keywords), exec_loc)
-    jobs += _fetch_jobicy(max(limit_each, 25))
-    jobs += _fetch_arbeitnow(max(limit_each, 25))
-    jobs += _fetch_jooble(max(limit_each, 25), list(keywords), exec_loc)
-    jobs += _fetch_jsearch(max(limit_each, 25), list(keywords), exec_loc)
-    jobs += _fetch_usajobs(max(limit_each, 15), list(keywords), exec_loc)
+
+    calls = [
+        ("Remotive", lambda: _fetch_remotive(max(limit_each, 40))),
+        ("RemoteOK", lambda: _fetch_remoteok(max(limit_each, 40))),
+        ("Adzuna", lambda: _fetch_adzuna(max(limit_each, 40), list(keywords), exec_loc)),
+        ("Jobicy", lambda: _fetch_jobicy(max(limit_each, 25))),
+        ("Arbeitnow", lambda: _fetch_arbeitnow(max(limit_each, 25))),
+        ("Jooble", lambda: _fetch_jooble(max(limit_each, 25), list(keywords), exec_loc)),
+        ("JSearch", lambda: _fetch_jsearch(max(limit_each, 25), list(keywords), exec_loc)),
+        ("LinkedIn", lambda: _fetch_linkedin_jobs(max(limit_each, 25), list(keywords), exec_loc)),
+        ("Google Jobs", lambda: _fetch_google_jobs(max(limit_each, 25), list(keywords), exec_loc)),
+        ("USAJobs", lambda: _fetch_usajobs(max(limit_each, 15), list(keywords), exec_loc)),
+    ]
+
+    jobs = []
+    with ThreadPoolExecutor(max_workers=len(calls)) as ex:
+        futures = {ex.submit(fn): name for name, fn in calls}
+        for fut in futures:
+            name = futures[fut]
+            try:
+                jobs.extend(fut.result())
+            except Exception as e:
+                # Each fetch internally catches and logs; this is defense in depth.
+                _record_status(name, "failed", reason="internal_error", error=str(e))
     return jobs
 
 
@@ -1653,13 +1875,20 @@ def _build_result(key, skills, role, country, location, limit, role_requisites=(
     student_seniority = _student_seniority(skill_levels)
     user_country = _normalise_country(country)
 
+    # Provider search terms are driven by the TARGET ROLE, never by broad
+    # required-skill words ("risk", "incident", "communication", "management")
+    # that would pull unrelated careers (a Buyer, a Data Scientist, a Marketing
+    # manager) into the feed. The role title + trusted close aliases lead; CV
+    # skill words are used later only to rerank within the matched family.
+    search_terms = list(role_intent.provider_queries(role, max_queries=6)) if role_driven else list(keywords)
+
     # Start a clean per-build provider report; each real fetch records its own
     # outcome. If ``_fetch_all`` is substituted (tests), nothing records, so the
     # empty path falls back like the original offline behaviour.
     with _lock:
         for p in PROVIDERS:
             _provider_status[p] = {"status": "skipped", "count": 0, "reason": "", "error": ""}
-    raw = _fetch_all(limit * 3, keywords, user_country, adzuna_country=market_country or "")
+    raw = _fetch_all(limit * 3, search_terms, user_country, adzuna_country=market_country or "")
     merged = _merge(raw)
 
     # Only listings that are still live make the feed — expired/stale ones

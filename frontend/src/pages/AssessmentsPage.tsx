@@ -38,6 +38,23 @@ function makeExternalToken(): string {
   return `a-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
+// Resume hook: the camera gate is otherwise in-memory only, so a hard refresh
+// during the pre-check would silently drop the user back to idle. The flag is
+// set when the gate opens and cleared once it passes or is cancelled.
+function gatePendingKey(skillId: number): string {
+  return `sbg_gate_pending_${skillId}`
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new DOMException(message, 'AbortError')), ms)
+    promise.then(
+      (v) => { window.clearTimeout(timer); resolve(v) },
+      (e) => { window.clearTimeout(timer); reject(e) },
+    )
+  })
+}
+
 function safeParseJson(raw?: string): any[] {
   try {
     const v = JSON.parse(raw || '[]')
@@ -354,6 +371,12 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate,
   const [cameraWarning, setCameraWarning] = useState('')
   const [precheck, setPrecheck] = useState<CameraPrecheckState>(EMPTY_PRECHECK)
   const [cameraEvents, setCameraEvents] = useState<CameraIntegrityEvent[]>([])
+  // Multiple cameras: enumerate so a busy/absent default does not dead-end the
+  // gate and the student can pick an explicit device.
+  const [cameraDevices, setCameraDevices] = useState<MediaDeviceInfo[]>([])
+  const [selectedCameraId, setSelectedCameraId] = useState<string>('')
+  // Consecutive start failures are capped so the gate does not spin forever.
+  const [gateRetries, setGateRetries] = useState(0)
   // Per-attempt shuffled option order: computed ONCE when a quiz starts, so the
   // timer-driven re-renders never reshuffle options mid-question.
   const [optOrder, setOptOrder] = useState<string[][] | null>(null)
@@ -510,6 +533,19 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate,
     modeRef.current = mode
   }, [mode])
 
+  // Resume a camera gate interrupted by a hard refresh: the gate state itself is
+  // in-memory only, but the pending flag survives reload and lands us back on the
+  // camera notice so the flow continues where the user left off.
+  useEffect(() => {
+    if (mode === 'idle' && sessionStorage.getItem(gatePendingKey(gap.skill_id)) === '1') {
+      resetRun()
+      setGateRetries(0)
+      setMode('camera_notice')
+      onActivate()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gap.skill_id])
+
   // Leaving the page while a quiz is open finalizes immediately (unanswered
   // count as zero) so an attempt is never silently thrown away.
   useEffect(() => {
@@ -525,7 +561,9 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate,
       setAssessmentActive(false)
     }
     stopCamera()
-  }, [beaconFinalize, setAssessmentActive, stopCamera])
+    // Leaving the gate (including SPA navigation away) clears its resume flag.
+    sessionStorage.removeItem(gatePendingKey(gap.skill_id))
+  }, [beaconFinalize, setAssessmentActive, gap.skill_id, stopCamera])
 
   useEffect(() => {
     const video = videoRef.current
@@ -599,11 +637,12 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate,
   const cancelCameraFlow = useCallback(() => {
     stopCamera()
     resetRun()
+    sessionStorage.removeItem(gatePendingKey(gap.skill_id))
     runTokenRef.current = null
     finalizingRef.current = true
     setMode('idle')
     onDeactivate()
-  }, [onDeactivate, resetRun, stopCamera])
+  }, [gap.skill_id, onDeactivate, resetRun, stopCamera])
 
   const startCameraPrecheck = async () => {
     setMode('camera_precheck')
@@ -618,19 +657,69 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate,
       setCameraLoading(false)
       return
     }
+    // Enumerate cameras first: lets the user pick between devices and lets the
+    // gate automatically fall back to another camera when the default is busy.
+    let deviceIds: string[] = []
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-      cameraStreamRef.current = stream
-      setCameraStream(stream)
+      const cameras = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput')
+      setCameraDevices(cameras)
+      deviceIds = cameras.map((d) => d.deviceId).filter(Boolean)
+    } catch {
+      setCameraDevices([])
+    }
+    const candidates = deviceIds.length ? (selectedCameraId ? [selectedCameraId] : deviceIds) : ['']
+    let stream: MediaStream | null = null
+    let usedDevice = ''
+    let lastError: string | null = null
+    for (const deviceId of candidates) {
+      try {
+        const video = deviceId ? { deviceId: { exact: deviceId } } : true
+        stream = await withTimeout(
+          navigator.mediaDevices.getUserMedia({ video, audio: false }),
+          12000,
+          'Starting the camera took too long. Check the device and try again.',
+        )
+        usedDevice = deviceId
+        break
+      } catch (e: any) {
+        const name = (e as DOMException | undefined)?.name || ''
+        if ((name === 'NotReadableError' || name === 'TrackStartError') && deviceId && candidates.length > 1) {
+          // Another app holds this camera — move on to the next one.
+          lastError = cameraErrorMessage(e)
+          continue
+        }
+        if (name === 'AbortError') {
+          setCameraError('Starting the camera took too long. Check the device and try again.')
+          setGateRetries((r) => r + 1)
+          setCameraLoading(false)
+          return
+        }
+        setCameraError(cameraErrorMessage(e))
+        setGateRetries((r) => r + 1)
+        setCameraLoading(false)
+        return
+      }
+    }
+    if (!stream) {
+      setCameraError(lastError ?? 'The camera could not be started. Check the device and try again.')
+      setGateRetries((r) => r + 1)
       setCameraLoading(false)
-      setCameraWarning('Loading local camera checks.')
+      return
+    }
+    cameraStreamRef.current = stream
+    setCameraStream(stream)
+    setSelectedCameraId(usedDevice)
+    setCameraLoading(false)
+    setCameraWarning('Loading local camera checks.')
+    try {
       const detector = await createCocoSsdWebcamDetector()
       detectorRef.current = detector
       setDetectorReady(true)
       setCameraWarning('Camera monitoring active')
-    } catch (e: any) {
+    } catch {
       stopCamera()
-      setCameraError(cameraErrorMessage(e))
+      setCameraError('The local camera analysis engine could not be loaded. Try again.')
+      setGateRetries((r) => r + 1)
     } finally {
       setCameraLoading(false)
     }
@@ -650,7 +739,21 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate,
       finalizingRef.current = false
       runTokenRef.current = makeExternalToken()
       setAssessmentActive(true)
-      if (me?.student?.id) await api.startAssessmentSession(me.student.id, gap.skill_id, runTokenRef.current)
+      if (me?.student?.id) {
+        // Server-side gate: the session is only created when the local pre-check
+        // passed. Only metadata is sent — never any frame or recording.
+        await api.startAssessmentSession(me.student.id, gap.skill_id, runTokenRef.current, {
+          passed: true,
+          checked_at: new Date().toISOString(),
+          meta: {
+            person_status: precheck.personStatus,
+            camera_status: precheck.cameraStatus,
+            stable_ms: precheck.stableMs,
+            camera_count: cameraDevices.length,
+          },
+        })
+        sessionStorage.removeItem(gatePendingKey(gap.skill_id))
+      }
       const res = await api.generateAssessment(me!.student!.id, gap.skill_id, { practice: false })
       const idx = res.questions.map((_, i) => i)
       for (let i = idx.length - 1; i > 0; i--) {
@@ -682,6 +785,8 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate,
     if (!practice) {
       runTokenRef.current = null
       finalizingRef.current = true
+      setGateRetries(0)
+      sessionStorage.setItem(gatePendingKey(gap.skill_id), '1')
       setMode('camera_notice')
       return
     }
@@ -852,6 +957,7 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate,
       ? 'One person visible'
       : precheck.personStatus === 'multiple' ? 'Multiple people' : 'Not detected'
     const stablePct = Math.min(100, Math.round((precheck.stableMs / CAMERA_INTEGRITY_THRESHOLDS.precheckStableMs) * 100))
+    const gateBlocked = gateRetries >= 4
     return (
       <div className="learning-item open camera-precheck-card">
         <div className="li-body" style={{ display: 'block', padding: 18 }}>
@@ -886,16 +992,38 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate,
                   <div className="camera-stability-fill" style={{ width: `${stablePct}%` }} />
                 </div>
               </div>
-              {cameraError && (
+              {cameraDevices.length > 1 && (
+                <label className="camera-check camera-device-row">
+                  <span><IconEye size={15} /> Camera device</span>
+                  <select
+                    aria-label="Choose camera"
+                    value={cameraDevices.some((d) => d.deviceId === selectedCameraId) ? selectedCameraId : ''}
+                    onChange={(e) => { setSelectedCameraId(e.target.value); void startCameraPrecheck() }}
+                  >
+                    <option value="">Default camera</option>
+                    {cameraDevices.map((d, i) => (
+                      <option key={d.deviceId || `cam-${i}`} value={d.deviceId}>{d.label || `Camera ${i + 1}`}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {gateBlocked ? (
+                <div className="error" style={{ whiteSpace: 'normal' }}>
+                  <IconAlert size={15} /> The camera gate could not be completed after several attempts. The Final Assessment requires a working camera. Close any other app using it, check browser permissions, restart your browser, then start again.
+                </div>
+              ) : cameraError ? (
                 <div className="error" style={{ whiteSpace: 'normal' }}>
                   <IconAlert size={15} /> {cameraError}
                 </div>
-              )}
+              ) : null}
+              <p className="small muted" style={{ marginTop: 8 }}>
+                Video is analysed locally on your device only — it is never recorded, stored or uploaded.
+              </p>
             </div>
           </div>
           <div className="camera-actions">
             <button className="btn" onClick={cancelCameraFlow}>Cancel</button>
-            {cameraError && <button className="btn" onClick={() => void startCameraPrecheck()}>Try Camera Again</button>}
+            {cameraError && !gateBlocked && <button className="btn" onClick={() => void startCameraPrecheck()}>Try Camera Again</button>}
             <button
               className="btn btn-primary"
               disabled={!precheck.ready || cameraLoading || !detectorReady}

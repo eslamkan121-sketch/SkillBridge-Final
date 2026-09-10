@@ -129,8 +129,102 @@ DOMAIN_TERMS = {
     "data collection": "Data Collection",
     "medical documentation": "Medical Documentation",
     "patient communication": "Patient Communication",
+    "patient care": "Patient Care",
     "medical billing": "Medical Billing",
     "regulatory compliance": "Regulatory Compliance",
+    "infection control": "Infection Control",
+    "sterilization": "Sterilization",
+    "medical records": "Medical Records",
+    "electronic health records": "Electronic Health Records",
+    "treatment planning": "Treatment Planning",
+    "patient education": "Patient Education",
+    "patient assessment": "Patient Assessment",
+    "medical terminology": "Medical Terminology",
+    "pharmacology": "Pharmacology",
+    "anatomy": "Anatomy",
+    "physiology": "Physiology",
+    "vital signs": "Vital Signs",
+    "patient safety": "Patient Safety",
+    "medical ethics": "Medical Ethics",
+    "medical devices": "Medical Devices",
+    "clinical examination": "Clinical Examination",
+    "diagnosis": "Diagnosis",
+    "medical imaging": "Medical Imaging",
+    # Dentistry
+    "dentistry": "Dentistry",
+    "general dentistry": "General Dentistry",
+    "restorative dentistry": "Restorative Dentistry",
+    "cosmetic dentistry": "Cosmetic Dentistry",
+    "pediatric dentistry": "Pediatric Dentistry",
+    "preventive dentistry": "Preventive Dentistry",
+    "digital dentistry": "Digital Dentistry",
+    "endodontics": "Endodontics",
+    "root canal therapy": "Root Canal Therapy",
+    "root canal": "Root Canal Therapy",
+    "orthodontics": "Orthodontics",
+    "clear aligner therapy": "Orthodontics",
+    "invisalign": "Invisalign",
+    "periodontics": "Periodontics",
+    "periodontal treatment": "Periodontics",
+    "scaling and root planing": "Periodontics",
+    "prosthodontics": "Prosthodontics",
+    "dental implants": "Dental Implants",
+    "implantology": "Dental Implants",
+    "crowns and bridges": "Prosthodontics",
+    "dental crowns": "Dental Crowns",
+    "dental bridges": "Dental Bridges",
+    "dentures": "Dentures",
+    "veneers": "Dental Veneers",
+    "dental veneers": "Dental Veneers",
+    "smile design": "Smile Design",
+    "oral surgery": "Oral Surgery",
+    "tooth extraction": "Tooth Extraction",
+    "oral and maxillofacial surgery": "Oral Surgery",
+    "oral medicine": "Oral Medicine",
+    "oral pathology": "Oral Pathology",
+    "dental radiography": "Dental Radiography",
+    "digital radiography": "Dental Radiography",
+    "cbct": "Dental Radiography",
+    "cone beam computed tomography": "Dental Radiography",
+    "intraoral scanning": "Digital Dentistry",
+    "cad/cam": "Digital Dentistry",
+    "cerec": "Digital Dentistry",
+    "dental fillings": "Restorative Dentistry",
+    "composite fillings": "Restorative Dentistry",
+    "dental sealants": "Preventive Dentistry",
+    "fluoride varnish": "Preventive Dentistry",
+    "fluoride application": "Preventive Dentistry",
+    "dental anesthesia": "Dental Anesthesia",
+    "local anesthesia": "Local Anesthesia",
+    "nitrous oxide sedation": "Sedation",
+    "dental hygiene": "Dental Hygiene",
+    "patient education and prevention": "Patient Education",
+    "dental treatment planning": "Treatment Planning",
+    "dental practice management": "Dental Practice Management",
+    "dental records": "Medical Records",
+    "dental radiographs": "Dental Radiography",
+    "occlusal analysis": "Occlusal Analysis",
+    "articulation": "Articulation",
+    "dental materials": "Dental Materials",
+    "bite analysis": "Bite Analysis",
+    "orthodontic treatment": "Orthodontics",
+    "orthodontics treatment": "Orthodontics",
+    "periodontal disease management": "Periodontics",
+    "gum disease treatment": "Periodontics",
+    "dental X-rays": "Dental Radiography",
+    "panoramic x-rays": "Dental Radiography",
+    "panoramic radiography": "Dental Radiography",
+    "dental prophylaxis": "Dental Hygiene",
+    "prophylaxis": "Dental Hygiene",
+    "dental prevention": "Preventive Dentistry",
+    "tooth bonding": "Restorative Dentistry",
+    "inlays and onlays": "Restorative Dentistry",
+    "dental inlays": "Restorative Dentistry",
+    "dental onlays": "Restorative Dentistry",
+    "surgical extractions": "Oral Surgery",
+    "impacted tooth removal": "Oral Surgery",
+    "wisdom tooth extraction": "Oral Surgery",
+    "biopsy": "Oral Pathology",
     # Common software / platform names (exact product names only)
     "powerpoint": "PowerPoint",
     "wordpress": "WordPress",
@@ -200,7 +294,7 @@ _RE_SENTENCE_START = re.compile(
     r"implemented|responsible|delivered|collaborated|coordinated|assisted|completed|"
     r"successful\s+completion|validated\s+proficiency|demonstrated\s+ability|"
     r"contributed|applying|recognizing\s+ability|recognising\s+ability|including|"
-    r"covering)\b", re.I)
+    r"covering|have|has|had|used|use|experience|possess)\b", re.I)
 _RE_FRAGMENT_START = re.compile(
     r"^(?:and|or|but|with|from|to|for|including|covering|using|applying)\b", re.I)
 _RE_TRAILING_PREPOSITION = re.compile(r"\b(?:for|with|from|to|of|in|by|and|or)\s*$", re.I)
@@ -212,6 +306,13 @@ _RE_CERT_TITLE_HINT = re.compile(
     r"course|training\s+program|internship\s+certificate)\b", re.I)
 _RE_ORG_TITLE_HINT = re.compile(r"\b(?:comptia|microsoft|sprints?|uneeq|rak|ict)\b", re.I)
 _RE_VERSION_ONLY = re.compile(r"^(?:microsoft\s+)?office\s+(?:19|20)\d{2}$", re.I)
+# "advanced Spanish", "fluent French", "basic Arabic" — a proficiency qualifier
+# plus a bare word is a language-level fragment from a CV "Languages" line, not a
+# professional skill ("advanced Excel" is still recovered via the known-term
+# scan, and multi-word skills like "Advanced Cardiac Life Support" are untouched).
+_RE_LEVEL_LANGUAGE = re.compile(
+    r"^(?:advanced|intermediate|beginner|elementary|fluent|native|proficient|"
+    r"basic|working|conversational)\s+[A-Za-z]{2,}$", re.I)
 _RE_NAME_HEADING = re.compile(
     r"^(?:skills?|technical\s+skills?|teaching\s*(?:&|and)\s*soft\s+skills?|"
     r"soft\s+skills?|hard\s+skills?|certificates?|certifications?|languages?|education|"
@@ -264,6 +365,8 @@ def is_valid_name(raw):
         return False
     if _RE_VERSION_ONLY.search(s):
         return False
+    if _RE_LEVEL_LANGUAGE.fullmatch(s):
+        return False
     if _RE_FRAGMENT_START.search(s):
         return False
     if _RE_TRAILING_PREPOSITION.search(s):
@@ -312,7 +415,9 @@ def normalise_name(raw):
     Resolution order:
       1. trusted explicit synonym (full phrase, case-insensitive)
       2. exact trusted canonical / known term
-      3. safe lexical cleaning of the grounded original
+      3. trailing parenthetical collapse: "Root Canal Therapy (endodontics)"
+         -> "Root Canal Therapy" when the pre-parenthesis base is a trusted term
+      4. safe lexical cleaning of the grounded original
     Returns (name, category) or (None, None) when the input is empty/garbage.
     Never collapse `Patient Communication` -> `Communication` or similar.
     """
@@ -322,6 +427,20 @@ def normalise_name(raw):
     hit = KNOWN_META.get(_key(s))
     if hit:
         return hit
+    # Collapse a trailing parenthetical when the base itself is a trusted term,
+    # so compound dental/medical names written parenthetically ("Root Canal
+    # Therapy (endodontics)") resolve to the clean canonical form instead of a
+    # fragmented duplicate.
+    base = re.sub(r"\s*\([^()]*\)\s*$", "", s)
+    if base and base != s:
+        hit = KNOWN_META.get(_key(base))
+        if hit:
+            return hit
+        base_clean = clean_unknown(base)
+        if base_clean and base_clean != base:
+            hit = KNOWN_META.get(_key(base_clean))
+            if hit:
+                return hit
     cleaned = clean_unknown(s)
     if not cleaned:
         return None, None
@@ -429,15 +548,24 @@ _HEADING_INLINE = re.compile(r"^\s*(?:" + _SKILL_HEADING + r")\s*:\s*(.+)$", re.
 # Without these boundaries the skills content-region swallows referee names, employer
 # names and template boilerplate as if they were skills (observed on the real
 # Graduate-Resume-Example-Law.pdf). "certifications"/"licenses"/"courses" are NOT
-# excluded: those sections legitimately name skills.
+# excluded: those sections legitimately name skills. Common adjective prefixes
+# (professional/work/career/clinical/...) are accepted so "PROFESSIONAL EXPERIENCE"
+# and "PROFESSIONAL SUMMARY" stop a skills region just like the bare heading does.
 _NON_SECTION_HEADING = re.compile(
-    r"^\s*(?:education|experience|employment|work[\s-]+history|projects?|awards?|"
+    r"^\s*(?:"
+    # prefixed forms first: adjective prefix + core noun (whole line)
+    r"(?:professional|relevant|work|employment|career|clinical|research|teaching|"
+    r"field|academic|previous|recent)\s+"
+    r"(?:experience|history|summary|objective|profile|background|"
+    r"certifications?|licenses?|projects?|activities|training)\b"
+    r"|(?:education|experience|employment|work[\s-]+history|projects?|awards?|"
     r"honors?|achievements?|summary|objective|profile|about(?:\s+me)?|interests|"
     r"hobbies|publications?|references?|referees?|certificates?|certifications?|licenses?|"
     r"training|extra-?curricular|volunteer(?:ing)?|community\s+service|"
     r"memberships?|affiliations?|languages?|(?:teaching\s*(?:&|\band\b)\s*)?"
     r"leadership(?:\s+experience)?|additional\s+"
-    r"(?:information|info|activities)|personal\s+details|contact(?:\s+details)?)\s*:?\s*$",
+    r"(?:information|info|activities)|personal\s+details|contact(?:\s+details)?)"
+    r")\s*:?\s*$",
     re.I)
 
 # Editor/recruiter guidance boilerplate that ships inside CV templates ("TIP: ...",
@@ -502,14 +630,23 @@ def _split_entries(line):
     mediation", "Legal research and writing", "Case analysis and
     interpretation") survive intact -- the ``and``-join is treated as a list
     only inside lines that already use explicit enumeration delimiters
-    (``Python, SQL and Docker``)."""
+    (``Python, SQL and Docker``).
+
+    Parenthetical lists are protected: commas/semicolons INSIDE a balanced
+    ``(...)`` group do NOT split the entry, so a compound skill written as
+    "Restorative Dentistry (composite fillings, inlays, onlays)" or "AWS (EC2,
+    S3, Lambda)" stays one entry instead of fragmenting mid-parenthesis."""
     has_enum = bool(_ENUM_DELIMS.search(line))
     # Protect a trailing level annotation: "Python  (Advanced)" must not be read
     # as a two-column layout, so its 2+ space gap is collapsed to a single space
     # before column splitting.
     line = re.sub(r"\s{2,}(\([^()]*\))\s*$", r" \1", line)
+    # Mask enum delimiters that sit inside balanced parentheses so the split
+    # below cannot cut compound parenthetical skill names into fragments.
+    protected = _mask_parenthetical_delims(line)
     entries = []
-    for piece in re.split(_ENTRY_DELIMS, line):
+    for piece in re.split(_ENTRY_DELIMS, protected):
+        piece = _restore_parenthetical_delims(piece)
         piece = piece.strip()
         piece = re.sub(r"^[\s\-–—*•▪▸>#]+", "", piece)
         piece = re.sub(r"^\d+[.)]\s*", "", piece)
@@ -523,6 +660,31 @@ def _split_entries(line):
             if sub:
                 entries.append(sub)
     return entries
+
+
+_PAREN_DELIM_PLACEHOLDER = "\uE000"
+
+
+def _mask_parenthetical_delims(line):
+    """Replace enum delimiters that appear inside balanced parentheses with a
+    private-use placeholder so they survive the entry split untouched."""
+    out = []
+    depth = 0
+    for ch in line or "":
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if depth > 0 and ch in ",;\u2022|\u00b7\t":
+            out.append(_PAREN_DELIM_PLACEHOLDER)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _restore_parenthetical_delims(piece):
+    """Restore the enum delimiters that were protected inside parentheses."""
+    return (piece or "").replace(_PAREN_DELIM_PLACEHOLDER, ",")
 
 
 def skill_section_entries(text):

@@ -302,7 +302,8 @@ def test_tutor_locked_during_active_assessment(client, student_id, auth_headers,
     h = auth_headers("aisha@student.edu")
     python = models.get_skill_by_name("Python")["id"]
     started = client.post(f"/api/students/{student_id}/assessments/session",
-                          json={"skill_id": python}, headers=h)
+                          json={"skill_id": python,
+                              "webcam_gate": {"passed": True, "checked_at": "2026-09-07T05:00:00Z", "meta": {"person_status": "one"}}}, headers=h)
     assert started.status_code == 200 and started.json()["active"] is True
     locked = _tutor(client, student_id, h)
     assert locked.status_code == 423
@@ -318,7 +319,8 @@ def test_tutor_resumes_after_assessment_submission(client, student_id, auth_head
     h = auth_headers("aisha@student.edu")
     python = models.get_skill_by_name("Python")["id"]
     client.post(f"/api/students/{student_id}/assessments/session",
-                json={"skill_id": python}, headers=h)
+                json={"skill_id": python,
+                              "webcam_gate": {"passed": True, "checked_at": "2026-09-07T05:00:00Z", "meta": {"person_status": "one"}}}, headers=h)
     assert models.get_active_assessment(student_id)["skill_id"] == python
     gen = client.post(f"/api/students/{student_id}/assessments/generate",
                       json={"skill_id": python, "num_questions": 8, "practice": False}, headers=h)

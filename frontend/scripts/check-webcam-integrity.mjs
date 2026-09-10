@@ -50,7 +50,7 @@ ok(/Enable Camera/.test(assessments), 'AssessmentsPage: Enable Camera action is 
 ok(/Cancel/.test(assessments), 'AssessmentsPage: camera notice/pre-check can be cancelled')
 ok(/setMode\('camera_notice'\)/.test(assessments), 'AssessmentsPage: real Start Assessment first opens the camera notice')
 ok(/onClick=\{\(\) => void startCameraPrecheck\(\)\}/.test(assessments), 'AssessmentsPage: permission request is behind Enable Camera')
-ok(/navigator\.mediaDevices\.getUserMedia\(\{ video: true, audio: false \}\)/.test(assessments),
+ok(/getUserMedia\(\{\s*video[^}]*audio: false\s*\}\)/.test(assessments),
    'AssessmentsPage: getUserMedia requests camera video only, no audio')
 
 // Pre-check: local preview, active track, exactly one person, two-second stable gate.

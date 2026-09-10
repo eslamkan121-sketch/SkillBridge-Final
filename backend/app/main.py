@@ -9,6 +9,7 @@ university view only sees anonymized, aggregated data.
 """
 import json
 import os
+import sys
 from pathlib import Path
 
 
@@ -18,7 +19,13 @@ def _load_env():
     The documented setup is 'copy .env.example to .env and add keys'; without a
     loader here those keys were never read, so every GenAI feature silently ran
     its deterministic fallback.
+
+    Never loads under pytest: the suite must stay byte-for-byte deterministic
+    and must never send real provider credentials, even when a developer has a
+    populated .env on disk.
     """
+    if sys.modules.get("pytest") is not None:
+        return
     env_file = Path(__file__).resolve().parents[2] / ".env"
     if not env_file.is_file():
         return
@@ -40,7 +47,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 
-from . import models, matching, genai, integrity, seed, auth as auth_mod, mailer, activity, jobs, career_roadmap, diagnostics, path_builder, lessons, coverage, skill_blueprint, tts, copilot, escoe, practice, recommendations
+from . import models, matching, genai, integrity, seed, auth as auth_mod, mailer, activity, jobs, career_roadmap, diagnostics, path_builder, lessons, coverage, skill_blueprint, tts, copilot, escoe, practice, recommendations, scenarios
 from .resources import _CHECK_CACHE, annotate_resources
 from .database import init_db, get_cursor
 
@@ -399,10 +406,16 @@ def api_demo_mode():
     """Report whether the app is running without a real GenAI provider (demo /
     deterministic-fallback mode) and whether email delivery (SMTP) is configured.
     Lets the frontend show a visible banner explaining why AI output is generic
-    and why reset links are not emailed."""
+    and why reset links are not emailed.
+
+    Also exposes safe (secret-free) GenAI provider observability: which providers
+    are configured, the priority order, and which provider handled the last reply.
+    API keys are never included, so no credentials can leak through this config.
+    """
     return {
         "genai_enabled": genai.genai_enabled(),
         "email_configured": mailer.email_configured(),
+        "provider": genai.provider_status(),
     }
 
 
@@ -485,23 +498,33 @@ def api_catalog_roles(request: Request):
 
 
 @app.get("/api/roles/esco-market")
-def api_esco_market(q: str = "software", limit: int = 8, request: Request = None):
+def api_esco_market(q: str = "software", target_role: str = "", limit: int = 8, request: Request = None):
     """Real occupations that exist in the labour market (ESCO taxonomy), each
     with the essential skills it requires. Used by Skills & Roles so students
-    can aim at a role that actually exists, not only company-defined ones."""
+    can aim at a role that actually exists, not only company-defined ones.
+
+    When ``target_role`` is supplied, title-variant resolution and ranking are
+    driven by the student's chosen career intent. Otherwise the query text is
+    searched verbatim (general free-text box).
+    """
     _current_user(request)
     limit = min(max(int(limit), 1), 15)
-    text = (q or "").strip()[:80]
+    role_title = (target_role or "").strip()
     try:
-        occupations = escoe.market_occupations(text, limit=limit)
+        if role_title:
+            occupations = escoe.market_occupations_for_role(role_title, limit=limit)
+            text = role_title
+        else:
+            text = (q or "").strip()[:80]
+            occupations = escoe.market_occupations(text, limit=limit)
     except Exception:
         # Never let a live-API failure surface to the browser as a dropped
         # request / "Failed to fetch": degrade to an honest unavailable state.
         occupations = []
-        return {"source": "ESCO", "query": text, "occupations": [],
+        return {"source": "ESCO", "query": role_title or text, "occupations": [],
                 "status": "unavailable",
                 "message": "Live market (ESCO) lookup is unavailable right now. Try again in a moment."}
-    return {"source": "ESCO", "query": text, "occupations": occupations, "status": "ok"}
+    return {"source": "ESCO", "query": role_title or text, "occupations": occupations, "status": "ok"}
 
 
 @app.get("/api/roles/{role_id}")
@@ -731,22 +754,40 @@ def upload_cv(student_id: int, file: UploadFile = File(...), request: Request = 
     user = _current_user(request)
     _own_student(user, student_id)
     content_bytes = file.file.read()
+    is_pdf = content_bytes.startswith(b"%PDF")
     cv_text = ""
-    if content_bytes.startswith(b"%PDF"):
+    scanned = False
+    no_text = False
+    if is_pdf:
         cv_text = _pdf_to_text(content_bytes)
+        if not cv_text.strip():
+            scanned = True
     if not cv_text.strip():
         try:
             cv_text = content_bytes.decode("utf-8", errors="replace")
         except Exception:
             cv_text = ""
     if not cv_text.strip():
-        cv_text = "(uploaded document with no readable text)"
-    extracted = genai.extract_skills_from_cv(cv_text)
-    models.update_student(student_id, cv_filename=file.filename)
-    models.replace_self_reported_skills(student_id, extracted)
+        no_text = True
+    extracted = genai.extract_skills_from_cv(cv_text) if cv_text.strip() else []
+    warning = None
+    if no_text or scanned:
+        warning = ("We couldn't read any text in the uploaded document — it looks "
+                   "like a scanned image. Upload a text-based PDF or enter your "
+                   "skills manually; your existing profile was kept.")
+    elif not extracted:
+        warning = ("No recognizable skills were found in the uploaded document. "
+                   "Your existing skills were kept.")
+    # A CV that yields nothing readable/recognizable must NOT wipe the student's
+    # current self-reported profile (the old code clobbered skills on every
+    # upload, silently erasing a good profile on a scanned/empty upload).
+    if extracted:
+        models.update_student(student_id, cv_filename=file.filename)
+        models.replace_self_reported_skills(student_id, extracted)
     student = models.get_student(student_id)
     return {"extracted": extracted, "student": student,
-            "genai_provider": "real" if genai.genai_enabled() else "deterministic-fallback"}
+            "genai_provider": "real" if genai.genai_enabled() else "deterministic-fallback",
+            "warning": warning, "skills_kept": not extracted}
 
 
 # ------------------------------------------------------------------ matching
@@ -1081,18 +1122,33 @@ def api_set_tutor_preference(student_id: int, request: Request, body: dict):
 
 @app.post("/api/students/{student_id}/assessments/session")
 def api_start_assessment_session(student_id: int, request: Request, body: dict):
-    """Mark a verified final assessment as in progress so the Tutor is locked."""
+    """Mark a verified final assessment as in progress so the Tutor is locked.
+
+    The pre-assessment webcam permission gate is enforced HERE, server-side:
+    the Final Assessment cannot start unless the client forwards ``webcam_gate
+    = {passed: true, checked_at, meta}`` produced by the local camera pre-check.
+    This is a metadata attestation (no frames, no landmarks); it guarantees a
+    bypassing client cannot skip the gate silently, and review can see the
+    attestation persisted with the active session.
+    """
     user = _current_user(request)
     _require_roles(user, "Student")
     _own_student(user, student_id)
     skill_id = body.get("skill_id")
     if not skill_id or not models.get_skill(skill_id):
         raise HTTPException(status_code=404, detail="Skill not found")
+    webcam_gate = body.get("webcam_gate")
+    if not isinstance(webcam_gate, dict) or not webcam_gate.get("passed") in (True, 1, "1", "true"):
+        raise HTTPException(
+            status_code=400,
+            detail=("The camera integrity gate must be passed before the Final "
+                    "Assessment session can start (webcam_gate.passed=true)."))
     external_token = str(body.get("external_token") or "").strip() or None
     if external_token and models.get_assessment_attempt_by_token(student_id, external_token):
         raise HTTPException(status_code=409, detail="Assessment attempt is already finalized")
-    models.start_active_assessment(student_id, skill_id, external_token=external_token)
-    return {"active": True, "skill_id": skill_id}
+    models.start_active_assessment(student_id, skill_id, external_token=external_token,
+                                   webcam_gate=webcam_gate)
+    return {"active": True, "skill_id": skill_id, "webcam_gate": {"required": True, "passed": True}}
 
 
 @app.delete("/api/students/{student_id}/assessments/session")
@@ -2126,6 +2182,141 @@ def api_submit_practice(student_id: int, skill_id: int, competency: str,
         "attempt": attempt,
         "attempts_count": len(previous_attempts) + 1,
     }
+
+
+# ---------------------------------------------------------------- practice scenarios
+
+def _require_scenario_attempt(student_id, attempt_id, request):
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    attempt = models.get_scenario_attempt(student_id, attempt_id)
+    if not attempt:
+        raise HTTPException(status_code=404, detail="Scenario attempt not found")
+    return user, attempt
+
+
+def _scenario_for_attempt(attempt):
+    scenario = scenarios._scenario(attempt["scenario_id"])
+    if not scenario:
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    return scenario
+
+
+@app.get("/api/students/{student_id}/scenarios")
+def api_list_scenarios(student_id: int, request: Request):
+    """Scenario library: catalog, per-scenario progress, practice stats."""
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    student = models.get_student(student_id)
+    return scenarios.list_scenarios(student)
+
+
+@app.post("/api/students/{student_id}/scenarios/{scenario_id}/start")
+def api_start_scenario(student_id: int, scenario_id: str, request: Request):
+    """Start (or resume) a scenario; returns the interactive player payload."""
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    student = models.get_student(student_id)
+    scenario = scenarios._scenario(scenario_id)
+    if not scenario:
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    if not scenarios.scenario_eligible(student, scenario) and not scenarios.has_attempt(student_id, scenario_id):
+        raise HTTPException(status_code=403, detail="Scenario is not available for your profile and target role yet.")
+    try:
+        attempt, scenario = scenarios.start_scenario(student_id, scenario_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    return scenarios.player_view(attempt, scenario)
+
+
+@app.get("/api/students/{student_id}/scenarios/attempts/{attempt_id}")
+def api_get_scenario_attempt(student_id: int, attempt_id: int, request: Request):
+    """Resume an attempt: player view while in progress, results once done."""
+    user, attempt = _require_scenario_attempt(student_id, attempt_id, request)
+    scenario = _scenario_for_attempt(attempt)
+    if attempt["status"] == "completed":
+        fb = attempt.get("feedback") or {}
+        return scenarios.result_payload(
+            attempt, scenario,
+            match_before=(fb.get("_match_before")),
+            match_after=(fb.get("_match_after")),
+            deltas=attempt.get("skill_deltas") or [],
+        )
+    return scenarios.player_view(attempt, scenario)
+
+
+@app.post("/api/students/{student_id}/scenarios/attempts/{attempt_id}/decide")
+def api_decide_scenario(student_id: int, attempt_id: int, body: dict, request: Request):
+    """Advance a scenario by one decision. Branches the story, scores, and
+    completes the attempt when the decision leads to an outcome."""
+    user, attempt = _require_scenario_attempt(student_id, attempt_id, request)
+    scenario = _scenario_for_attempt(attempt)
+    try:
+        updated, completed = scenarios.decide(attempt, scenario, body or {})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not completed:
+        return scenarios.player_view(updated, scenario)
+
+    match_before = (matching.analyze_student(student_id) or {}).get("match_score")
+    deltas = scenarios.improve_skill_confidence(student_id, scenario)
+    match_after = (matching.analyze_student(student_id) or {}).get("match_score")
+    payload = scenarios.result_payload(updated, scenario, match_before=match_before, match_after=match_after, deltas=deltas)
+    # keep the before/after numbers durable so a resumed results view stays honest
+    fb = dict(updated.get("feedback") or {})
+    fb["_match_before"] = match_before
+    fb["_match_after"] = match_after
+    models.update_scenario_attempt(attempt_id, feedback_json=fb)
+    return payload
+
+
+@app.post("/api/students/{student_id}/scenarios/attempts/{attempt_id}/hint")
+def api_scenario_hint(student_id: int, attempt_id: int, body: dict, request: Request):
+    """Curated, non-answer nudge for the current step."""
+    user, attempt = _require_scenario_attempt(student_id, attempt_id, request)
+    scenario = _scenario_for_attempt(attempt)
+    if attempt["status"] == "completed":
+        raise HTTPException(status_code=400, detail="This scenario is already complete")
+    hint = scenarios.hint_for(attempt, scenario, step_id=(body or {}).get("step_id"), question=(body or {}).get("question"))
+    if not (body or {}).get("question"):
+        attempt = scenarios.mark_hint(attempt, scenario)
+    hint["hints_used"] = attempt.get("hints_used") or 0
+    return hint
+
+
+# ---------------------------------------------------------------- saved roles
+
+@app.get("/api/students/{student_id}/saved-roles")
+def api_list_saved_roles(student_id: int, request: Request):
+    """Role ids the student bookmarked from the Skills & Roles catalog/browse."""
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    return {"role_ids": models.list_saved_roles(student_id)}
+
+
+@app.post("/api/students/{student_id}/saved-roles/{role_id}")
+def api_save_role(student_id: int, role_id: int, request: Request):
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    role = models.get_role(role_id)
+    if not role:
+        raise HTTPException(status_code=404, detail="Role not found")
+    models.create_saved_role(student_id, role_id)
+    return {"role_ids": models.list_saved_roles(student_id)}
+
+
+@app.delete("/api/students/{student_id}/saved-roles/{role_id}")
+def api_unsave_role(student_id: int, role_id: int, request: Request):
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    models.remove_saved_role(student_id, role_id)
+    return {"role_ids": models.list_saved_roles(student_id)}
 
 
 @app.post("/api/students/{student_id}/learning/{skill_id}/lessons/{competency}/mini-check")

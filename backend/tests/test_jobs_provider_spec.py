@@ -437,9 +437,12 @@ def test_target_role_leads_fetch_keywords_and_skills_follow(monkeypatch, sync_bu
     assert primary[0] == "graphic", primary
     assert primary[1] == "designer", primary
     assert "photoshop" in primary
-    assert captured["keywords"][0] == "graphic", captured
-    assert captured["keywords"][1] == "designer", captured
-    assert "excel" in minor and "excel" not in captured["keywords"][:3], captured
+    # Provider search terms are driven by the TARGET ROLE + trusted close
+    # aliases (never a bare generic CV token like "excel"), so unrelated careers
+    # can't fill the feed — the exact opposite of skill-word-first searching.
+    assert captured["keywords"][0] == "Graphic Designer", captured
+    assert captured["keywords"][1] == "Visual Designer", captured
+    assert "excel" in minor and "excel" not in captured["keywords"], captured
 
 
 def test_non_cs_target_role_ranks_over_cs_noise(monkeypatch, sync_build):

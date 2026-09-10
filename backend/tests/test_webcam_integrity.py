@@ -73,7 +73,8 @@ def test_camera_integrity_event_is_token_bound_and_deduped(client, student_id, a
     skill_id = _docker_id()
     token = "camera-token-1"
     started = client.post(f"/api/students/{student_id}/assessments/session",
-                          json={"skill_id": skill_id, "external_token": token}, headers=h)
+                          json={"skill_id": skill_id, "external_token": token,
+                              "webcam_gate": {"passed": True, "checked_at": "2026-09-07T05:00:00Z", "meta": {"person_status": "one", "camera_status": "working"}}}, headers=h)
     assert started.status_code == 200
     body = {**_camera_event("multiple_people"), "skill_id": skill_id, "external_token": token}
     first = client.post(f"/api/students/{student_id}/assessments/integrity-events",
@@ -93,7 +94,8 @@ def test_attention_away_is_soft_metadata_event(client, student_id, auth_headers)
     skill_id = _docker_id()
     token = "attention-soft-token"
     client.post(f"/api/students/{student_id}/assessments/session",
-                json={"skill_id": skill_id, "external_token": token}, headers=h)
+                json={"skill_id": skill_id, "external_token": token,
+                              "webcam_gate": {"passed": True, "checked_at": "2026-09-07T05:00:00Z", "meta": {"person_status": "one", "camera_status": "working"}}}, headers=h)
     body = {**_camera_event("attention_away", duration_ms=14000, confidence=0.72),
             "skill_id": skill_id, "external_token": token}
     event = client.post(f"/api/students/{student_id}/assessments/integrity-events",
@@ -120,7 +122,8 @@ def test_camera_events_cannot_be_submitted_for_another_student(client, student_i
     skill_id = _docker_id()
     token = "camera-token-owner"
     client.post(f"/api/students/{student_id}/assessments/session",
-                json={"skill_id": skill_id, "external_token": token}, headers=aisha)
+                json={"skill_id": skill_id, "external_token": token,
+                              "webcam_gate": {"passed": True, "checked_at": "2026-09-07T05:00:00Z", "meta": {"person_status": "one"}}}, headers=aisha)
     r = client.post(f"/api/students/{student_id}/assessments/integrity-events",
                     json={**_camera_event("camera_disabled"), "skill_id": skill_id, "external_token": token},
                     headers=omar)
@@ -131,7 +134,8 @@ def test_camera_events_reject_wrong_session_token(client, student_id, auth_heade
     h = _headers(auth_headers)
     skill_id = _docker_id()
     client.post(f"/api/students/{student_id}/assessments/session",
-                json={"skill_id": skill_id, "external_token": "real-token"}, headers=h)
+                json={"skill_id": skill_id, "external_token": "real-token",
+                              "webcam_gate": {"passed": True, "checked_at": "2026-09-07T05:00:00Z", "meta": {"person_status": "one"}}}, headers=h)
     r = client.post(f"/api/students/{student_id}/assessments/integrity-events",
                     json={**_camera_event("camera_disabled"), "skill_id": skill_id,
                           "external_token": "wrong-token"},
@@ -144,7 +148,8 @@ def test_finalized_attempt_rejects_late_camera_events(client, student_id, auth_h
     skill_id = _docker_id()
     token = "camera-finalized-token"
     client.post(f"/api/students/{student_id}/assessments/session",
-                json={"skill_id": skill_id, "external_token": token}, headers=h)
+                json={"skill_id": skill_id, "external_token": token,
+                              "webcam_gate": {"passed": True, "checked_at": "2026-09-07T05:00:00Z", "meta": {"person_status": "one", "camera_status": "working"}}}, headers=h)
     submit = client.post(f"/api/students/{student_id}/assessments", json={
         "skill_id": skill_id,
         "questions": _question(),
@@ -167,7 +172,8 @@ def test_hard_camera_flags_block_verification_and_require_review(client, student
     skill_id = _docker_id()
     token = "camera-hard-review"
     client.post(f"/api/students/{student_id}/assessments/session",
-                json={"skill_id": skill_id, "external_token": token}, headers=h)
+                json={"skill_id": skill_id, "external_token": token,
+                              "webcam_gate": {"passed": True, "checked_at": "2026-09-07T05:00:00Z", "meta": {"person_status": "one", "camera_status": "working"}}}, headers=h)
     r = client.post(f"/api/students/{student_id}/assessments/integrity-events",
                     json={**_camera_event("multiple_people", severity="high"),
                           "skill_id": skill_id, "external_token": token},
@@ -194,7 +200,8 @@ def test_camera_event_alone_never_creates_verified_skill(client, student_id, aut
     skill = models.create_skill("Camera Only Skill", "General")
     token = "camera-no-verify"
     client.post(f"/api/students/{student_id}/assessments/session",
-                json={"skill_id": skill["id"], "external_token": token}, headers=h)
+                json={"skill_id": skill["id"], "external_token": token,
+                              "webcam_gate": {"passed": True, "checked_at": "2026-09-07T05:00:00Z", "meta": {"person_status": "one"}}}, headers=h)
     client.post(f"/api/students/{student_id}/assessments/integrity-events",
                 json={**_camera_event("camera_subject_missing", duration_ms=12000),
                       "skill_id": skill["id"], "external_token": token},
@@ -223,7 +230,8 @@ def test_hard_camera_finalize_never_creates_verified_skill(
     skill = models.create_skill(f"{event_type} Hard Stop Skill", "General")
     token = f"{event_type}-hard-finalize-no-verify"
     client.post(f"/api/students/{student_id}/assessments/session",
-                json={"skill_id": skill["id"], "external_token": token}, headers=h)
+                json={"skill_id": skill["id"], "external_token": token,
+                              "webcam_gate": {"passed": True, "checked_at": "2026-09-07T05:00:00Z", "meta": {"person_status": "one"}}}, headers=h)
     r = client.post(f"/api/students/{student_id}/assessments/finalize", json={
         "skill_id": skill["id"],
         "questions": _question(answer="a"),
@@ -247,7 +255,8 @@ def test_hard_browser_termination_finalize_is_idempotent(client, student_id, aut
     skill_id = _docker_id()
     token = "browser-hidden-hard-stop"
     client.post(f"/api/students/{student_id}/assessments/session",
-                json={"skill_id": skill_id, "external_token": token}, headers=h)
+                json={"skill_id": skill_id, "external_token": token,
+                              "webcam_gate": {"passed": True, "checked_at": "2026-09-07T05:00:00Z", "meta": {"person_status": "one", "camera_status": "working"}}}, headers=h)
     body = {
         "skill_id": skill_id,
         "questions": _question(),
@@ -280,7 +289,8 @@ def test_soft_attention_cannot_be_used_as_termination_event(client, student_id, 
     skill_id = _docker_id()
     token = "attention-not-hard"
     client.post(f"/api/students/{student_id}/assessments/session",
-                json={"skill_id": skill_id, "external_token": token}, headers=h)
+                json={"skill_id": skill_id, "external_token": token,
+                              "webcam_gate": {"passed": True, "checked_at": "2026-09-07T05:00:00Z", "meta": {"person_status": "one", "camera_status": "working"}}}, headers=h)
     r = client.post(f"/api/students/{student_id}/assessments/finalize", json={
         "skill_id": skill_id,
         "questions": _question(),
@@ -299,7 +309,8 @@ def test_finalized_attempt_token_cannot_start_again(client, student_id, auth_hea
     skill_id = _docker_id()
     token = "no-resume-token"
     client.post(f"/api/students/{student_id}/assessments/session",
-                json={"skill_id": skill_id, "external_token": token}, headers=h)
+                json={"skill_id": skill_id, "external_token": token,
+                              "webcam_gate": {"passed": True, "checked_at": "2026-09-07T05:00:00Z", "meta": {"person_status": "one", "camera_status": "working"}}}, headers=h)
     done = client.post(f"/api/students/{student_id}/assessments/finalize", json={
         "skill_id": skill_id,
         "questions": _question(),
@@ -312,7 +323,8 @@ def test_finalized_attempt_token_cannot_start_again(client, student_id, auth_hea
     }, headers=h)
     assert done.status_code == 200, done.text
     again = client.post(f"/api/students/{student_id}/assessments/session",
-                        json={"skill_id": skill_id, "external_token": token}, headers=h)
+                        json={"skill_id": skill_id, "external_token": token,
+                              "webcam_gate": {"passed": True, "checked_at": "2026-09-07T05:00:00Z", "meta": {"person_status": "one", "camera_status": "working"}}}, headers=h)
     assert again.status_code == 409
 
 
@@ -334,7 +346,8 @@ def test_blank_answers_are_unanswered_and_score_zero_after_hard_finalize(client,
         "explanation": "c is correct",
     }]
     client.post(f"/api/students/{student_id}/assessments/session",
-                json={"skill_id": skill_id, "external_token": token}, headers=h)
+                json={"skill_id": skill_id, "external_token": token,
+                              "webcam_gate": {"passed": True, "checked_at": "2026-09-07T05:00:00Z", "meta": {"person_status": "one", "camera_status": "working"}}}, headers=h)
     r = client.post(f"/api/students/{student_id}/assessments/finalize", json={
         "skill_id": skill_id,
         "questions": questions,
@@ -350,3 +363,67 @@ def test_blank_answers_are_unanswered_and_score_zero_after_hard_finalize(client,
     assert data["score"] == 33.3
     assert data["unanswered"] == 2
     assert data["ended"] == "integrity_violation"
+
+
+# ------------------------------------------------------------------ gate
+
+
+def test_session_start_requires_webcam_gate(client, student_id, auth_headers):
+    """The pre-assessment camera gate is enforced server-side: no attestation,
+    no session. This is what makes the gate more than a client-side UI affordance.
+    """
+    h = _headers(auth_headers)
+    skill_id = _docker_id()
+    no_gate = client.post(f"/api/students/{student_id}/assessments/session",
+                          json={"skill_id": skill_id}, headers=h)
+    assert no_gate.status_code == 400
+    assert "camera integrity gate" in no_gate.json()["detail"].lower()
+    assert models.get_active_assessment(student_id) is None
+
+    false_gate = client.post(f"/api/students/{student_id}/assessments/session",
+                             json={"skill_id": skill_id, "webcam_gate": {"passed": False}}, headers=h)
+    assert false_gate.status_code == 400
+    assert models.get_active_assessment(student_id) is None
+
+
+def test_valid_gate_starts_session_and_persists_metadata(client, student_id, auth_headers):
+    h = _headers(auth_headers)
+    skill_id = _docker_id()
+    r = client.post(f"/api/students/{student_id}/assessments/session",
+                    json={"skill_id": skill_id, "external_token": "gated-token-1",
+                          "webcam_gate": {
+                              "passed": True,
+                              "checked_at": "2026-09-07T05:00:00Z",
+                              "meta": {"person_status": "one", "camera_status": "working",
+                                       "camera_count": 2}}},
+                    headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["webcam_gate"] == {"required": True, "passed": True}
+    active = models.get_active_assessment(student_id)
+    assert active["webcam_gate_passed"] == 1
+    assert active["webcam_gate_checked_at"] == "2026-09-07T05:00:00Z"
+    meta = __import__("json").loads(active["webcam_gate_meta"])
+    assert meta.get("person_status") == "one"
+    assert meta.get("camera_count") == 2
+
+
+def test_gate_metadata_is_sanitised_to_primitive_values(client, student_id, auth_headers):
+    """Only small primitive metadata survives storage: media blobs and oversized
+    fields are dropped so the gate never becomes a covert upload channel."""
+    h = _headers(auth_headers)
+    skill_id = _docker_id()
+    r = client.post(f"/api/students/{student_id}/assessments/session",
+                    json={"skill_id": skill_id,
+                          "webcam_gate": {
+                              "passed": True,
+                              "checked_at": "2026-09-07T05:00:00Z",
+                              "meta": {"person_status": "one",
+                                       "frame": "data:image/png;base64,AAAA",
+                                       "huge": "x" * 500,
+                                       "nested": {"not": "allowed"}}}},
+                    headers=h)
+    assert r.status_code == 200
+    active = models.get_active_assessment(student_id)
+    meta = __import__("json").loads(active["webcam_gate_meta"])
+    assert meta.get("person_status") == "one"
+    assert "frame" not in meta and "huge" not in meta and "nested" not in meta

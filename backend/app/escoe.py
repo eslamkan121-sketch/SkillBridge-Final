@@ -58,6 +58,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 
+from . import role_intent
+
 ESCO_SEARCH_URL = "https://ec.europa.eu/esco/api/search"
 ESCO_OCC_URL = "https://ec.europa.eu/esco/api/resource/occupation"
 TTL_SECONDS = 30 * 60
@@ -336,6 +338,43 @@ def _enrich_pool(pool):
         return
     with ThreadPoolExecutor(max_workers=_ENRICH_WORKERS) as ex:
         list(ex.map(_enrich, targets))
+
+
+def _score_enrich_score(cands, text, limit):
+    """Score -> keep survivors -> enrich ONLY survivors -> re-score with skills.
+
+    The raw pool is often far larger than ``_ENRICH_CAP`` (e.g. 90+ occupations
+    for a "cybersecurity analyst" query). Enriching only the *pool head* before
+    ranking leaves the actual winners -- which can live anywhere in the pool --
+    with zero skill data and turns every result card into "0 essential skills".
+    This bounds enrichment to the top ``max(limit*2, _ENRICH_CAP)`` candidates by
+    search-metadata relevance, then re-ranks them with the skill evidence
+    present.
+    """
+    if not cands:
+        return []
+    def _score_all(rows):
+        try:
+            return _score_occupations(text, rows)
+        except Exception:
+            return []
+
+    ranked = _score_all(cands)
+    if not ranked:
+        return []
+    # Enrich before thresholding: thresholding first would starve every
+    # below-threshold row of the skill evidence that would lift it above (e.g.
+    # "ethical hacker" reaches the head only through a skill's "cyber" token,
+    # which has zero weight while skills are still empty).
+    window = ranked[:max(limit * 2, _ENRICH_CAP)]
+    if not window:
+        return []
+    _enrich_pool(window)
+    rescored = _score_all(window)
+    survivors = [e for e in rescored if e["score"] >= _MIN_RELEVANCE]
+    if not survivors:
+        survivors = rescored
+    return survivors[:max(limit, 1)]
 
 
 def _isco_group(code):
@@ -636,16 +675,13 @@ def market_occupations(text, limit=10):
         if (_cache["query"] == text and now - _cache["at"] < TTL_SECONDS
                 and _cache["data"] is not None):
             return _cache["data"]
-    pool = []
     try:
         pool = _retrieve(text)
-        _enrich_pool(pool)
-        scored = _score_occupations(text, pool)
-        scored = [e for e in scored if e["score"] >= _MIN_RELEVANCE]
     except Exception:
         return []
+    results = _score_enrich_score(pool, text, max(limit, 1))
     out = []
-    for e in scored[:max(limit, 1)]:
+    for e in results:
         skills = e["skills"]
         out.append({
             "title": e["title"],
@@ -746,6 +782,114 @@ def market_occupations_for_skills(skill_names, limit=8, max_skills=3):
         })
     with _lock:
         _skills_cache.update({"at": time.time(), "key": key, "data": out})
+    return out
+
+
+def market_occupations_for_role(target_title, limit=8):
+    """ESCO occupations that genuinely belong to a student's *selected Target
+    Role*, resolving title variation without requiring an exact ESCO preferred
+    title.
+
+    The bounded query set is built from the target role itself + its trusted
+    close aliases (see role_intent.provider_queries) — never from a broad CV
+    skill word. Candidates are pooled by ESCO URI, enriched once, and then ranked
+    with the target role as the PRIMARY signal:
+
+      1. EXACT  (title equals / fully contains the target's domain tokens)
+      2. CLOSE  (shares an interchangeable domain token, or is a trusted alias)
+      3. FAMILY (same canonical career family, different specialization)
+
+    Occupations classified UNRELATED are excluded outright — an occupation is
+    never shown merely because one generic skill overlaps. Best effort and never
+    raising: returns [] when ESCO is unreachable or no close occupation exists
+    (an honest no-result, never a fabricated occupation).
+    """
+    title = (target_title or "").strip()
+    if not title:
+        return []
+    queries = role_intent.provider_queries(title, max_queries=5)
+    # Always include the target title itself (its tokens pair better with the
+    # lexical scorer than a bare alias).
+    if title not in queries:
+        queries.insert(0, title)
+
+    # Pool candidates across the bounded query set, deduplicated by URI.
+    pool = {}
+    for q in queries:
+        try:
+            for entry in _retrieve(q):
+                uri = entry.get("uri")
+                if uri and uri not in pool:
+                    pool[uri] = entry
+        except Exception:
+            continue
+    if not pool:
+        return []
+
+    # Classify first (the primary signal; no skills needed), drop unrelated.
+    kept = []
+    for entry in pool.values():
+        occ_title = entry.get("title") or ""
+        if role_intent.classify_title(title, occ_title) == "UNRELATED":
+            continue
+        kept.append(entry)
+    if not kept:
+        return []
+
+    # Score the survivors as ONE corpus. Scoring a single candidate at a time
+    # is degenerate: with a one-document corpus the idf weights collapse and
+    # every occupation scores within a hair of its neighbours.
+    order = {"EXACT": 0, "CLOSE": 1, "FAMILY": 2}
+    try:
+        all_scored = {e["uri"]: e for e in _score_occupations(title, kept)}
+    except Exception:
+        return []
+    entries = []
+    for e in kept:
+        sc = all_scored.get(e["uri"])
+        entries.append({
+            "title": e.get("title") or "",
+            "uri": e.get("uri"),
+            "code": e.get("code"),
+            "description": e.get("description"),
+            "skills": e.get("skills") or [],
+            "score": round(sc["score"], 4) if sc else 0.0,
+            "relevant": role_intent.classify_title(title, e.get("title") or ""),
+        })
+    entries.sort(key=lambda e: (order.get(e["relevant"], 3), -e["score"], e["title"].lower()))
+
+    # Enrich the rows most likely to be shown (bounded: top `limit*2` of the
+    # *relevant* survivors, capped by _ENRICH_CAP), re-rank with the
+    # essential-skill evidence, then render only the top `limit`. Enriching the
+    # raw pool head first (as the free path used to) left genuinely-relevant
+    # occupations that ranked in the pool tail -- e.g. the ICT security family
+    # for a "cybersecurity analyst" query -- with zero skills on every card.
+    window = entries[:min(len(entries), max(limit * 2, 8))]
+    _enrich_pool(window)
+    try:
+        rescored = {e["uri"]: e for e in _score_occupations(title, window)}
+        for e in window:
+            if e["uri"] in rescored:
+                e["score"] = round(rescored[e["uri"]]["score"], 4)
+    except Exception:
+        pass
+    entries.sort(key=lambda e: (order.get(e["relevant"], 3), -e["score"], e["title"].lower()))
+
+    out = []
+    for e in entries[:max(limit, 1)]:
+        essential = e.get("_essential") or []
+        optional = e.get("_optional") or []
+        skills = e.get("skills") or (essential + optional)[:16]
+        out.append({
+            "title": e["title"],
+            "uri": e["uri"],
+            "skills": skills[:12],
+            "skill_count": len(skills),
+            "description": e.get("description"),
+            "code": e.get("code"),
+            "score": e["score"],
+            "relevant": e["relevant"],
+        })
     return out
 
 

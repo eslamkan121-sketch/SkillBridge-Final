@@ -95,3 +95,79 @@ Worked with Kubernetes orchestration and CI/CD pipelines in an internship.
     # these appear nowhere in a "KEY SKILLS" block, only inside body sections
     for expected in ["docker", "spark", "tableau", "pandas", "kubernetes", "git"]:
         assert expected in names, f"missing {expected} from full set {sorted(names)}"
+
+
+def test_extraction_rejects_language_and_prose_fragments():
+    # A "Languages:"-style line read as a skills bullet must not leak sentence
+    # fragments or proficiency-qualified language labels into the profile —
+    # these used to surface as bogus skills ("advanced Spanish",
+    # "have used in a clinical context") and then pollute role recommendations
+    # with unrelated ESCO occupations.
+    dental = """\
+Dana R.
+SKILLS
+Anatomy, Orthodontics, Dentistry, Invisalign, Dental Radiography,
+Sterilization, Treatment Planning, Communication, Leadership
+Languages: advanced Spanish, have used in a clinical context
+"""
+    result = genai.extract_skills_from_cv(dental)
+    names = {r["name"].lower() for r in result}
+    for good in ["anatomy", "orthodontics", "dentistry", "invisalign",
+                 "dental radiography", "sterilization", "treatment planning"]:
+        assert good in names, f"missing {good} from {sorted(names)}"
+    for junk in ["advanced spanish", "fluent arabic", "have used in a clinical context",
+                 "used mesurement tools"]:
+        assert junk not in names, f"fragment {junk!r} leaked into {sorted(names)}"
+
+
+def test_cv_upload_does_not_clobber_skills_on_scanned_upload(client, student_id, auth_headers):
+    # Establish a real profile through a readable CV first.
+    headers = auth_headers("aisha@student.edu")
+    res = client.post(
+        f"/api/students/{student_id}/cv",
+        files={"file": ("aisha_cv.txt", io.BytesIO(FIXTURE_CV.encode()), "text/plain")},
+        headers=headers,
+    )
+    assert res.status_code == 200, res.text
+    assert len(res.json()["extracted"]) > 0
+    before = {s["name"] for s in models.get_student(student_id)["self_reported_skills"]}
+    before_file = models.get_student(student_id)["cv_filename"]
+
+    # A scanned-style PDF (valid signature, zero extractable text) must not wipe
+    # the existing profile and must give the user clear feedback.
+    scanned = b"%PDF-1.7\n\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c"
+    res = client.post(
+        f"/api/students/{student_id}/cv",
+        files={"file": ("scan.pdf", io.BytesIO(scanned), "application/pdf")},
+        headers=headers,
+    )
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["extracted"] == []
+    assert data["warning"]  # checked against the no-text/scanned branch
+    assert data["skills_kept"] is True
+    after = models.get_student(student_id)["self_reported_skills"]
+    assert {s["name"] for s in after} == before, "scanned upload clobbered the profile"
+    assert models.get_student(student_id)["cv_filename"] == before_file
+
+
+def test_cv_upload_keeps_skills_when_none_recognized(client, student_id, auth_headers):
+    headers = auth_headers("aisha@student.edu")
+    client.post(
+        f"/api/students/{student_id}/cv",
+        files={"file": ("aisha_cv.txt", io.BytesIO(FIXTURE_CV.encode()), "text/plain")},
+        headers=headers,
+    )
+    before = {s["name"] for s in models.get_student(student_id)["self_reported_skills"]}
+    res = client.post(
+        f"/api/students/{student_id}/cv",
+        files={"file": ("plain_note.txt", io.BytesIO(b"John Doe\nAddress line\n0123456789."), "text/plain")},
+        headers=headers,
+    )
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["extracted"] == []
+    assert data["skills_kept"] is True
+    assert data["warning"]
+    # the recognizable-CV profile is left untouched
+    assert {s["name"] for s in models.get_student(student_id)["self_reported_skills"]} == before

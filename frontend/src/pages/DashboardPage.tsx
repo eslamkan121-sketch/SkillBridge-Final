@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { useApp } from '../AppContext'
 import { api } from '../lib/api'
-import { RELOCATION_MARKETS } from '../lib/markets'
-import type { Analysis, ActivitySummary, Student, RoleRecord, Candidate, RoleSkillCoverage, RecentJob, RecentJobsResponse } from '../lib/types'
+import { RELOCATION_MARKETS, marketLabel } from '../lib/markets'
+import type { Analysis, ActivitySummary, Student, RoleRecord, Candidate, RoleSkillCoverage, RecentJob, RecentJobsResponse, ProviderReport } from '../lib/types'
 import { GapPill, SkillTag, LevelBadge, ScoreRing } from '../components/widgets'
 import { IconArrowRight, IconCheck, IconVerified, IconFlame, IconBolt, IconLeaderboard, IconTrophy, IconExternal, IconShield, IconUpload } from '../components/Icons'
 
@@ -26,6 +26,16 @@ function copyText(text: string): Promise<void> {
   return Promise.resolve()
 }
 
+function feedHealth(providers?: ProviderReport[]) {
+  const list = providers || []
+  return {
+    online: list.filter((p) => p.status === 'ok').length,
+    total: list.length,
+    unconfigured: list.filter((p) => p.status === 'skipped' && (p.reason === 'no_credentials' || p.reason === 'host_not_configured')).map((p) => p.source),
+    failed: list.filter((p) => p.status === 'failed').map((p) => p.source),
+  }
+}
+
 function JobsCard({ student }: { student?: Student }) {
   const { me, refreshStudent, applyCopilot } = useApp()
   const [data, setData] = useState<RecentJobsResponse | null>(null)
@@ -33,6 +43,7 @@ function JobsCard({ student }: { student?: Student }) {
   const [err, setErr] = useState('')
   const [uploading, setUploading] = useState(false)
   const [cvMsg, setCvMsg] = useState('')
+  const [cvWarn, setCvWarn] = useState(false)
   const [market, setMarket] = useState(() => localStorage.getItem('jobs.market') || '')
 
   const hasCvSkills = (student?.self_reported_skills?.length ?? 0) > 0
@@ -58,10 +69,12 @@ function JobsCard({ student }: { student?: Student }) {
 
   const onUpload = async (file: File | undefined) => {
     if (!file || !student) return
-    setUploading(true); setCvMsg('')
+    setUploading(true); setCvMsg(''); setCvWarn(false)
     try {
       const res = await api.uploadCv(student.id, file)
-      setCvMsg(`Extracted ${res.extracted.length} skills — searching roles matched to your CV…`)
+      setCvWarn(!!res.warning)
+      setCvMsg(res.warning || `Extracted ${res.extracted.length} skills — searching roles matched to your CV…`)
+
       await refreshStudent()
     } catch (e: any) {
       setErr(e.message || 'CV upload failed')
@@ -85,7 +98,7 @@ function JobsCard({ student }: { student?: Student }) {
             <input type="file" accept=".txt,.md,.pdf" style={{ display: 'none' }} onChange={(e) => onUpload(e.target.files?.[0])} />
           </label>
         </div>
-        {cvMsg && <p className="small" style={{ color: 'var(--green)', marginTop: 8 }}>{cvMsg}</p>}
+        {cvMsg && <p className="small" style={{ color: cvWarn ? 'var(--amber)' : 'var(--green)', marginTop: 8 }}>{cvMsg}</p>}
         {err && <div className="error" style={{ marginTop: 10 }}>{err}</div>}
       </div>
     )
@@ -122,6 +135,25 @@ function JobsCard({ student }: { student?: Student }) {
         </select>
       </div>
       {err && <div className="error" style={{ marginBottom: 10 }}>{err}</div>}
+      {tried && data?.providers && data.providers.length > 0 && (() => {
+        const h = feedHealth(data.providers)
+        if (!h.total) return null
+        return (
+          <p className="feed-health">
+            <span className={`feed-dot ${h.online > 0 ? 'on' : ''}`} aria-hidden="true" />
+            Live feed: <strong>{h.online}/{h.total}</strong> providers online
+            {h.unconfigured.length > 0 && (
+              <span className="feed-warn">
+                {' '}· {h.unconfigured.join(', ')} unconfigured
+                {h.online === 0 && ' — add provider keys to .env to unlock regional listings'}
+              </span>
+            )}
+            {h.failed.length > 0 && (
+              <span className="feed-warn">{' '}· {h.failed.join(', ')} unreachable</span>
+            )}
+          </p>
+        )
+      })()}
       {!tried ? (
         <div className="loading">Matching opening roles to your CV…</div>
       ) : data && data.jobs.length > 0 ? (
@@ -174,7 +206,9 @@ function JobsCard({ student }: { student?: Student }) {
         </div>
       ) : data?.source === 'empty' ? (
         <div>
-          <div className="empty">No live roles matched this search right now — nothing is invented to fill the list.</div>
+          <div className="empty">
+            No relevant live openings were found for your selected {student?.target_role?.title ? `${student.target_role.title} ` : ''}target role in this market — nothing is invented to fill the list.
+          </div>
           {data.providers && data.providers.some((p) => p.status === 'failed') ? (
             <p className="small muted" style={{ marginTop: 8 }}>
               Unavailable now: {data.providers.filter((p) => p.status === 'failed').map((f) => f.source).join(', ')}.

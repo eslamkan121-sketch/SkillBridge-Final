@@ -460,7 +460,8 @@ def test_assessment_lock_blocks_every_language(client, student_id, auth_headers)
     h = auth_headers("aisha@student.edu")
     python = models.get_skill_by_name("Python")["id"]
     assert client.post(f"/api/students/{student_id}/assessments/session",
-                       json={"skill_id": python}, headers=h).status_code == 200
+                       json={"skill_id": python,
+                       "webcam_gate": {"passed": True, "checked_at": "2026-09-07T05:00:00Z", "meta": {"person_status": "one"}}}, headers=h).status_code == 200
     for lang in ("ar", "en", "auto"):
         r = _tutor(client, student_id, h, {"language": lang})
         assert r.status_code == 423, (lang, r.text)

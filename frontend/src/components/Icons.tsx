@@ -247,6 +247,11 @@ export const IconStar = (p: IconProps) => (
     <path d="M12 3l2.6 5.5 6 .8-4.4 4.3 1.1 6-5.3-2.9-5.3 2.9 1.1-6L3.4 9.3l6-.8L12 3z" />
   </svg>
 )
+export const IconBookmark = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M6 4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v17l-6-4-6 4V4z" />
+  </svg>
+)
 export const IconSparkles = (p: IconProps) => (
   <svg {...base(p.size, p.className, p.style)}>
     <path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3z" />

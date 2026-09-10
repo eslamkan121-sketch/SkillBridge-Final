@@ -174,7 +174,8 @@ def test_finalize_releases_active_assessment_lock(client, student_id, auth_heade
     h = auth_headers("aisha@student.edu")
     python = models.get_skill_by_name("Python")["id"]
     started = client.post(f"/api/students/{student_id}/assessments/session",
-                          json={"skill_id": python}, headers=h)
+                          json={"skill_id": python,
+              "webcam_gate": {"passed": True, "checked_at": "2026-09-07T05:00:00Z", "meta": {"person_status": "one"}}}, headers=h)
     assert started.status_code == 200 and started.json()["active"] is True
     questions = _gen_questions(client, student_id, h)
     r = _finalize(client, student_id, questions, [], h=h)
@@ -230,7 +231,8 @@ def test_stale_active_assessment_lock_clears_after_ttl(client, student_id, db, a
     db.commit()
     h = auth_headers("aisha@student.edu")
     started = client.post(f"/api/students/{student_id}/assessments/session",
-                          json={"skill_id": docker}, headers=h)
+                          json={"skill_id": docker,
+              "webcam_gate": {"passed": True, "checked_at": "2026-09-07T05:00:00Z", "meta": {"person_status": "one"}}}, headers=h)
     assert started.status_code == 200
     db.execute("UPDATE active_assessments SET started_at=datetime('now', '-4 hours')"
                " WHERE student_id=?", (student_id,))

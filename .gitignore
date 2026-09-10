@@ -30,3 +30,5 @@ frontend/.vite/
 
 # OS / editor
 .DS_Store
+
+env

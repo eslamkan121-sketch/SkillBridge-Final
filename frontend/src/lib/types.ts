@@ -739,7 +739,7 @@ export interface Lesson {
 
 // ------------------------------------------------------------------ global AI copilot context
 
-export type CopilotPage = 'dashboard' | 'skills_roles' | 'learning' | 'jobs' | 'career_roadmap' | 'mock_interview' | 'assessment'
+export type CopilotPage = 'dashboard' | 'skills_roles' | 'learning' | 'jobs' | 'career_roadmap' | 'mock_interview' | 'assessment' | 'scenarios'
 
 /** Unified working mode of the Global Copilot (validated on the backend). */
 export type TutorMode = 'chat' | 'practice' | 'discuss' | 'interview'
@@ -758,4 +758,193 @@ export interface TutorPreferences {
   tutor_id: string
   mode: string
   language: TutorLanguage
+}
+
+// ------------------------------------------------------------------ practice scenarios
+
+export type ScenarioDifficulty = 'beginner' | 'intermediate' | 'advanced'
+export type ScenarioStatus = 'not_started' | 'in_progress' | 'completed'
+export type ScenarioStepType = 'choice' | 'multi'
+
+export interface ScenarioCard {
+  id: string
+  title: string
+  description: string
+  role_title: string
+  difficulty: ScenarioDifficulty
+  difficulty_label: string
+  difficulty_icon: string
+  estimated_minutes: number
+  estimated_time_label: string
+  category: string
+  category_label: string
+  category_icon: string
+  skills: string[]
+  steps_count: number
+  status: ScenarioStatus
+  best_score: number | null
+  attempts_count: number
+  last_outcome_title: string | null
+  last_outcome_tone: string | null
+}
+
+export interface ScenarioCategory {
+  key: string
+  label: string
+  icon: string
+}
+
+export interface ScenarioPhase {
+  label: string
+  icon: string
+  key: string
+}
+
+export interface ScenarioLibraryStats {
+  scenarios_completed: number
+  attempts: number
+  average_score: number | null
+  practice_time_minutes: number
+  skills_practiced: number
+}
+
+export interface ScenarioLibrary {
+  scenarios: ScenarioCard[]
+  recommended: string[]
+  categories: ScenarioCategory[]
+  stats: ScenarioLibraryStats
+  target_role: string | null
+  availability: 'ok' | 'none'
+  availability_reason: string
+  note: string
+}
+
+export interface ScenarioEvidenceRow {
+  label: string
+  value: string
+}
+
+export interface ScenarioEvidence {
+  id: string
+  tab: string
+  icon: string
+  title: string
+  content: ScenarioEvidenceRow[]
+  has_data: boolean
+}
+
+export interface ScenarioOption {
+  id: string
+  label: string
+}
+
+export interface ScenarioDecision {
+  id: string
+  label: string
+  icon: string
+}
+
+export interface ScenarioProgress {
+  step_number: number
+  total_steps: number
+  current_phase: string
+  phases: ScenarioPhase[]
+}
+
+export interface ScenarioStepView {
+  id: string
+  index: number
+  total: number
+  title: string
+  phase: string
+  phase_label: string
+  situation: string
+  intro: string
+  evidence: ScenarioEvidence[]
+  decisions: ScenarioDecision[]
+  multi: boolean
+  options: ScenarioOption[]
+  type: ScenarioStepType
+}
+
+export interface ScenarioPlayer {
+  attempt_id: number
+  scenario_id: string
+  scenario_title: string
+  status: 'in_progress'
+  step: ScenarioStepView
+  progress: ScenarioProgress
+  outcome: string | null
+}
+
+export interface ScenarioHint {
+  hint: string
+  explanation: string
+  source: 'curated'
+  hints_used: number
+  hints_capped: boolean
+}
+
+export interface ScenarioOutcome {
+  key: string
+  title: string
+  icon: string
+  tone: 'good' | 'bad' | null
+  summary: string
+}
+
+export interface ScenarioComponentScore {
+  key: string
+  label: string
+  pct: number | null
+}
+
+export interface ScenarioSkillScore {
+  name: string
+  pct: number | null
+}
+
+export interface ScenarioSkillDelta {
+  skill: string
+  level_before: string | null
+  level_after: string | null
+  note: string
+}
+
+export interface ScenarioDecisionRow {
+  step_title: string
+  decision: string
+  icon: string
+  verdict: 'good' | 'neutral' | 'bad'
+  good: boolean
+  feedback: string
+  consequence: string
+}
+
+export interface ScenarioResult {
+  completed: true
+  attempt_id: number
+  scenario_id: string
+  title: string
+  difficulty_icon: string
+  difficulty_label: string
+  score: number
+  verdict_label: string
+  verdict_tone: 'great' | 'good' | 'fair' | 'review'
+  outcome: ScenarioOutcome
+  components: ScenarioComponentScore[]
+  skills: ScenarioSkillScore[]
+  skills_updated: ScenarioSkillDelta[]
+  match: { before: number | null; after: number | null; delta: number | null }
+  decision_review: ScenarioDecisionRow[]
+  strengths: string[]
+  improvements: string[]
+  hints_used: number
+  evidence_inspected_pct: number | null
+  certified: false
+  note: string
+}
+
+export interface SavedRolesResponse {
+  role_ids: number[]
 }

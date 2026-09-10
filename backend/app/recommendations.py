@@ -164,10 +164,48 @@ def _esco_candidate(item):
     }
 
 
-def _informative_skills(profile, local_candidates, max_skills=3):
+def role_pool_specificity():
+    """``{code: weight}`` IDF map over the CURRENT local role pool.
+
+    Rebuilds the exact ``df``/``specificity`` index ``recommend()`` scores
+    candidates with, so consumers (e.g. the Practice Scenario domain-gate in
+    scenarios.py) reuse the same "rare skill = role-defining signal" instead of
+    duplicating it. ``recommend()`` itself is unchanged.
+
+    Corpus-relative caveat (intentional, but a real property): the weights are
+    ``log1p(corpus / (1 + df))`` over the live
+    ``list_roles() + list_catalog_roles()`` pool. Adding or removing a role
+    below silently reweights EVERY consumer of this function — with no code
+    change anywhere else and no runtime signal that scenario eligibility just
+    shifted. That is an accepted trade-off of grounding domain-evidence in the
+    same labour-market view the rest of the app uses; extend the catalog
+    deliberately and re-check the scenario-gate tests (test_scenarios.py).
+    """
+    local = [_local_candidate(r) for r in models.list_roles()]
+    local += [_local_candidate(r) for r in models.list_catalog_roles()]
+    corpus = max(len(local), 1)
+    df = {}
+    for cand in local:
+        for code in cand["codes"]:
+            df[code] = df.get(code, 0) + 1
+    return {code: math.log1p(corpus / (1.0 + df[code])) for code in df}
+
+
+def _informative_skills(profile, local_candidates, max_skills=3, probe_limit=6):
     """Pick the student's most *informative* professional skills for ESCO
-    discovery: skills that are rare across the local role pool (so away from
-    generic transferables) up to ``max_skills``. Deterministic ordering."""
+    discovery. Skills must be rare in the local role pool (away from generic
+    transferables); among the rarest candidates the chosen ones are those whose
+    ESCO probe resolves to a *coherent* occupation domain.
+
+    Why: a specialty noun such as "Orthodontics" maps cleanly to the ESCO
+    dentist occupations, while a generic gerund such as "Treatment Planning"
+    surfaces wastewater operators and planning engineers (real ESCO results).
+    Choosing the probe-coherent skills means the ESCO pool reflects the
+    student's actual domain instead of noise the generic token happened to
+    retrieve. Deterministic: ties keep the original rarity/label order, so a
+    probe that returns nothing (offline ESCO / canned test fixture) never
+    changes what would have been picked before.
+    """
     freq = {}
     for cand in local_candidates:
         for code in cand["codes"]:
@@ -176,7 +214,57 @@ def _informative_skills(profile, local_candidates, max_skills=3):
         ((freq.get(code, 0), entry["label"], entry["name"], code)
          for code, entry in profile.items() if entry["name"]),
         key=lambda x: (x[0], x[1].lower()))
-    return [name for (_, _, name, _) in scored[:max_skills]]
+    candidates = [name for (_, _, name, _) in scored[:max(probe_limit, max_skills)]]
+    ranked = sorted(
+        ((_discovery_quality(name), freq.get(code, 0), entry["label"] or "",
+          name, code)
+         for name in candidates
+         for (code, entry) in profile.items() if entry["name"] == name),
+        key=lambda x: (-x[0], x[1], x[2].lower(), x[3].lower()))
+    seen = []
+    for (q, _, _, name, _) in ranked:
+        if name in seen:
+            continue
+        seen.append(name)
+        if len(seen) >= max_skills:
+            break
+    return seen
+
+
+def _discovery_quality(name):
+    """How useful a single profile skill is for ESCO discovery, measured as the
+    ISCO-08 coherence of the occupations ESCO returns for that skill.
+
+    A skill that resolves to one tight occupation class -- e.g. "Orthodontics"
+    -> ``specialist dentist`` (ISCO unit 2261) -- is far more informative for
+    role discovery than a generic phrase that surfaces a scattering of
+    unrelated ISCO majors (planning engineers + wastewater operators). Returns
+    ``0.0`` when the probe is empty or fails so those skills are never chosen
+    over ones with a coherent mapping. Probe size is small and cached per exact
+    skill by the ESCO gateway.
+    """
+    try:
+        results = escoe.market_occupations_for_skills([name], limit=4, max_skills=1)
+    except Exception:
+        return 0.0
+    if not results:
+        return 0.0
+    codes = [r.get("code") for r in results if r.get("code")]
+    if not codes:
+        return 0.0
+    if len(codes) == 1:
+        return 1.0
+    # ISCO-08 code "ABCD" -> major group A, sub-major AB, minor group ABC.
+    minors = {}
+    majors = set()
+    for code in codes:
+        d = str(code)
+        minors[d[:3]] = minors.get(d[:3], 0) + 1
+        majors.add(d[0])
+    share = max(minors.values()) / len(codes)
+    # A single occupation class is the strongest signal; a pool spread over
+    # several ISCO major groups is the signature of a spurious token match.
+    return round(share * (1.0 if len(majors) == 1 else 0.35), 3)
 
 
 def _confidence(pct, matched_count):
@@ -217,11 +305,14 @@ def recommend(student):
     informative = _informative_skills(profile, local)
     if informative:
         try:
-            esco_candidates = [
-                _esco_candidate(x)
-                for x in escoe.market_occupations_for_skills(informative, limit=ESCO_SKILL_LIMIT)
-            ]
-            esco_status = "ok"
+            market = escoe.market_occupations_for_skills(informative, limit=ESCO_SKILL_LIMIT)
+            esco_candidates = [_esco_candidate(x) for x in market]
+            # The ESCO gateway never raises: an empty lookup is how an outage or
+            # a genuinely empty result manifests. Honest status reflects whether
+            # the live lookup actually *contributed* occupations -- not merely
+            # that a request was attempted. Otherwise a down gateway reports
+            # "ok" with zero live roles, which is exactly the misleading UX.
+            esco_status = "ok" if market else "unavailable"
         except Exception:
             esco_candidates = []
             esco_status = "unavailable"

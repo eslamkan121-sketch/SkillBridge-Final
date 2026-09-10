@@ -100,6 +100,11 @@ def _by_title(data, title):
     return next((x for x in data["recommendations"] if x["title"] == title), None)
 
 
+def _by_source_and_title(data, source, title):
+    return next((x for x in data["recommendations"]
+                 if x["source"] == source and x["title"] == title), None)
+
+
 def test_ai_profile_recommends_ai_roles(client, student_id):
     data = _rec(client, student_id)  # aisha: Python/SQL verified Advanced + ML/Docker/Git
     assert data["recommendations"], "expected non-empty recommendations"
@@ -337,6 +342,44 @@ def test_real_jobs_rank_before_catalog_reference_roles(client, db, student_id, m
     # every real role still carries its honest source marker
     assert any(r["source"] == "esco" for r in data["recommendations"])
     assert data["source_counts"]["catalog"] >= 1
+
+
+DENTIST_PROFILE_SKILLS = [
+    ("Anatomy", "Intermediate"), ("Orthodontics", "Intermediate"), ("Dentistry", "Intermediate"),
+    ("Invisalign", "Intermediate"), ("Dental Radiography", "Intermediate"),
+    ("Sterilization", "Intermediate"), ("Treatment Planning", "Intermediate"),
+    ("Communication", "Intermediate"), ("Leadership", "Intermediate"),
+]
+
+
+def test_dentist_profile_surfaces_dental_reference_roles(client, db, student_id):
+    """A healthcare CV (the 9 skill dentist profile) must be recommended dental
+    reference roles from the local catalogue -- not a wall of generic tech roles
+    matched only on Communication -- even while the live ESCO lookup is offline.
+    The whole test runs on the default empty (offline) ESCO gateway."""
+    _set_profile(db, student_id, DENTIST_PROFILE_SKILLS)
+    data = _rec(client, student_id)
+    assert data["esco_status"] == "unavailable"
+
+    dentist = _by_source_and_title(data, "catalog", "Dentist (General Practice)")
+    assert dentist is not None, "a dentist reference role must exist in the catalogue"
+    assert dentist["match_score"] >= 45, \
+        "the dentist role must score as a real overlap, got %s" % dentist["match_score"]
+    assert dentist["regulated_warning"] is True, \
+        "licensed clinical titles must carry the professional-boundary warning"
+
+    catalog_titles = [r["title"] for r in data["recommendations"] if r["source"] == "catalog"]
+    assert catalog_titles and catalog_titles[0] == "Dentist (General Practice)", \
+        "a dental role must lead the local catalogue results, got %s" % (catalog_titles[:3],)
+
+    cs_role = _by_source_and_title(data, "catalog", "Junior AI Engineer")
+    assert cs_role is not None and cs_role["match_score"] < dentist["match_score"], \
+        "a tech role matched only on Communication must not outrank the dental match"
+
+    dental_titles = {"Dentist (General Practice)", "Dental Assistant", "Dental Hygienist"}
+    assert dental_titles & set(catalog_titles), "dental roles must appear in the catalogue results"
+    assert "licensure" in data["note"].lower(), \
+        "the professional-boundary note must accompany clinical recommendations"
 
 
 def test_esco_failure_still_returns_honest_local_recs(client, student_id, monkeypatch):

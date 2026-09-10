@@ -4,6 +4,7 @@ Pure functions over sqlite3 Row dictionaries. Kept free of framework imports so
 they can be unit tested in isolation.
 """
 from .database import get_cursor
+import json
 
 LEVEL_ORDER = {"Beginner": 1, "Intermediate": 2, "Advanced": 3}
 VALID_LEVELS = set(LEVEL_ORDER)
@@ -213,6 +214,27 @@ def get_roles_by_company(company_id):
             rd["required_skills"] = role_skills(c, r["id"])
             out.append(rd)
         return out
+
+
+def list_saved_roles(student_id):
+    """Saved role ids for a student (either reference catalog or company roles)."""
+    with get_cursor() as c:
+        rows = c.execute("SELECT role_id FROM saved_roles WHERE student_id=? ORDER BY saved_at DESC",
+                         (student_id,)).fetchall()
+        return [r["role_id"] for r in rows]
+
+
+def create_saved_role(student_id, role_id):
+    with get_cursor() as c:
+        c.execute("INSERT OR IGNORE INTO saved_roles (student_id, role_id) VALUES (?,?)",
+                  (student_id, role_id))
+        return True
+
+
+def remove_saved_role(student_id, role_id):
+    with get_cursor() as c:
+        c.execute("DELETE FROM saved_roles WHERE student_id=? AND role_id=?", (student_id, role_id))
+        return True
 
 
 def create_role(company_id, title, required_skills, description=None, is_reference=0, source="company"):
@@ -600,19 +622,69 @@ def get_tutor_mode(student_id):
         return (mode or "").strip().lower() or None
 
 
-def start_active_assessment(student_id, skill_id, external_token=None):
-    """Mark an in-progress verified assessment so the Tutor is locked out."""
+def start_active_assessment(student_id, skill_id, external_token=None, webcam_gate=None):
+    """Mark an in-progress verified assessment so the Tutor is locked out.
+
+    ``webcam_gate`` is the server-side attestation that the pre-assessment
+    camera permission gate completed successfully (metadata only: no frames or
+    landmarks). It is stored as ``webcam_gate_passed`` / ``webcam_gate_checked_at``
+    / ``webcam_gate_meta`` so review can see that the gate requirement was met
+    before questions were generated.
+    """
     token = str(external_token or "").strip() or None
+    gate = _normalise_webcam_gate(webcam_gate)
     with get_cursor() as c:
         c.execute("""INSERT INTO active_assessments
-                     (student_id, skill_id, external_token, integrity_events)
-                     VALUES (?,?,?, '[]')
+                     (student_id, skill_id, external_token, integrity_events,
+                      webcam_gate_passed, webcam_gate_checked_at, webcam_gate_meta)
+                     VALUES (?,?,?, '[]',?,?,?)
                      ON CONFLICT(student_id) DO UPDATE SET
                        skill_id=excluded.skill_id,
                        external_token=excluded.external_token,
                        integrity_events='[]',
+                       webcam_gate_passed=excluded.webcam_gate_passed,
+                       webcam_gate_checked_at=excluded.webcam_gate_checked_at,
+                       webcam_gate_meta=excluded.webcam_gate_meta,
                        started_at=datetime('now')""",
-                  (student_id, skill_id, token))
+                  (student_id, skill_id, token,
+                   gate["passed"], gate["checked_at"], gate["meta"]))
+
+
+# Keys that would smuggle raw media through the webcam-gate metadata channel.
+_FORBIDDEN_GATE_KEYS = {
+    "frame", "frames", "image", "images", "video", "videos", "blob", "blobs",
+    "base64", "embedding", "embeddings", "snapshot", "screenshot", "thumbnail",
+}
+
+
+def _normalise_webcam_gate(webcam_gate):
+    """Coerce a client webcam-gate attestation into safe storage values.
+
+    Only metadata survives here: ``passed`` (boolean), ``checked_at`` (ISO
+    timestamp string) and a small ``meta`` dict of primitive values. Anything
+    unexpected (including any raw-media payload) is dropped, never persisted,
+    mirroring the integrity event validator.
+    """
+    passed = 0
+    checked_at = None
+    meta = {}
+    if isinstance(webcam_gate, dict):
+        passed = 1 if webcam_gate.get("passed") in (True, 1, "1", "true") else 0
+        raw_at = webcam_gate.get("checked_at")
+        if isinstance(raw_at, str) and len(raw_at) <= 64:
+            checked_at = raw_at
+        raw_meta = webcam_gate.get("meta") or {}
+        if isinstance(raw_meta, dict):
+            for key, value in raw_meta.items():
+                if not isinstance(key, str) or len(key) > 32:
+                    continue
+                # Never accept media payloads through the gate attestation.
+                if _FORBIDDEN_GATE_KEYS.intersection(key.lower().split()):
+                    continue
+                if isinstance(value, (str, int, float, bool)) and len(str(value)) <= 128:
+                    meta[key] = value
+    return {"passed": passed, "checked_at": checked_at,
+            "meta": json.dumps(meta, sort_keys=True)}
 
 
 ACTIVE_ASSESSMENT_TTL_SECONDS = 5400
@@ -1277,3 +1349,132 @@ def list_practice_attempts(student_id, lesson_id, limit=None):
     with get_cursor() as c:
         rows = c.execute(sql, tuple(params)).fetchall()
         return [_practice_attempt_dict(_row(r)) for r in rows]
+
+
+# ---------------------------------------------------------------- scenarios
+
+def _scenario_attempt_dict(d):
+    if d is None:
+        return None
+    return {
+        "id": d["id"],
+        "student_id": d["student_id"],
+        "scenario_id": d["scenario_id"],
+        "status": d["status"],
+        "state": _json_loads(d.get("state_json")) or {},
+        "decisions": _json_loads(d.get("decisions_json")) or [],
+        "evidence_viewed": _json_loads(d.get("evidence_viewed_json")) or [],
+        "hints_used": d["hints_used"] or 0,
+        "score": d["score"],
+        "skill_scores": _json_loads(d.get("skill_scores_json")) or {},
+        "skill_deltas": _json_loads(d.get("skill_deltas_json")) or [],
+        "strengths": _json_loads(d.get("strengths_json")) or [],
+        "improvements": _json_loads(d.get("improvements_json")) or [],
+        "feedback": _json_loads(d.get("feedback_json")) or {},
+        "started_at": d.get("started_at"),
+        "completed_at": d.get("completed_at"),
+    }
+
+
+def create_scenario_attempt(student_id, scenario_id, state_json):
+    with get_cursor() as c:
+        cur = c.execute(
+            """INSERT INTO scenario_attempts (student_id, scenario_id, state_json)
+               VALUES (?, ?, ?)""",
+            (student_id, scenario_id, _json_dumps(state_json)),
+        )
+        return _scenario_attempt_dict(_row(c.execute(
+            "SELECT * FROM scenario_attempts WHERE id=?", (cur.lastrowid,)
+        ).fetchone()))
+
+
+def get_scenario_attempt(student_id, attempt_id):
+    with get_cursor() as c:
+        return _scenario_attempt_dict(_row(c.execute(
+            "SELECT * FROM scenario_attempts WHERE id=? AND student_id=?",
+            (attempt_id, student_id),
+        ).fetchone()))
+
+
+def update_scenario_attempt(attempt_id, **fields):
+    allowed = {
+        "status", "state_json", "decisions_json", "evidence_viewed_json",
+        "hints_used", "score", "skill_scores_json", "skill_deltas_json",
+        "strengths_json", "improvements_json", "feedback_json", "completed_at",
+    }
+    json_cols = {
+        "state_json", "decisions_json", "evidence_viewed_json",
+        "skill_scores_json", "skill_deltas_json",
+        "strengths_json", "improvements_json", "feedback_json",
+    }
+    sets = {}
+    for k, v in fields.items():
+        if k not in allowed:
+            continue
+        sets[k] = _json_dumps(v) if k in json_cols else v
+    if not sets:
+        return
+    assignments = ", ".join(f"{col}=?" for col in sets)
+    if sets.get("status") == "completed" and "completed_at" not in sets:
+        assignments += ", completed_at=datetime('now')"
+    with get_cursor() as c:
+        c.execute(
+            f"UPDATE scenario_attempts SET {assignments} WHERE id=?",
+            tuple(sets.values()) + (attempt_id,),
+        )
+
+
+def list_scenario_attempts(student_id, scenario_id=None, limit=None):
+    sql = """SELECT * FROM scenario_attempts WHERE student_id=?"""
+    params = [student_id]
+    if scenario_id is not None:
+        sql += " AND scenario_id=?"
+        params.append(scenario_id)
+    sql += " ORDER BY id DESC"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    with get_cursor() as c:
+        rows = c.execute(sql, tuple(params)).fetchall()
+        return [_scenario_attempt_dict(_row(r)) for r in rows]
+
+
+def find_in_progress_scenario(student_id, scenario_id):
+    with get_cursor() as c:
+        row = c.execute(
+            """SELECT * FROM scenario_attempts
+               WHERE student_id=? AND scenario_id=? AND status='in_progress'
+               ORDER BY id DESC LIMIT 1""",
+            (student_id, scenario_id),
+        ).fetchone()
+        return _scenario_attempt_dict(_row(row))
+
+
+_LEVEL_ORDER = {"Beginner": 1, "Intermediate": 2, "Advanced": 3}
+
+
+def upgrade_self_reported_level(student_id, skill_name):
+    """Practice-performance confidence upgrade: raise the student's SELF-REPORTED
+    (never verified) level for a skill by one tier, capped at Advanced. Returns
+    the delta dict, or None when nothing changes (skill not claimed, or already
+    Advanced). Verified skills are untouchable here by design."""
+    name = str(skill_name or "").strip().lower()
+    if not name:
+        return None
+    with get_cursor() as c:
+        row = c.execute(
+            """SELECT srs.id, srs.level, s.name AS sname
+               FROM self_reported_skills srs
+               JOIN skills s ON s.id = srs.skill_id
+               WHERE srs.student_id=? AND lower(s.name)=?
+               LIMIT 1""",
+            (student_id, name),
+        ).fetchone()
+        if not row:
+            return None
+        cur = _LEVEL_ORDER.get(str(row["level"] or "").strip().title(), 0)
+        if cur >= 3:
+            return None
+        new_level = [k for k, v in _LEVEL_ORDER.items() if v == cur + 1][0]
+        c.execute("UPDATE self_reported_skills SET level=? WHERE id=?", (new_level, row["id"]))
+        return {"name": row["sname"], "before": row["level"], "after": new_level}

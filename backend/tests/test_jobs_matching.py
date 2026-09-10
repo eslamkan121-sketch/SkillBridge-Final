@@ -521,6 +521,36 @@ def test_student_with_skills_fetches_matched_jobs(client, auth_headers, student_
     assert called["skills"], "matched search should run once CV skills exist"
 
 
+def test_dashboard_uses_persisted_target_role(client, auth_headers, student_id, monkeypatch):
+    """Acceptance §2: the Dashboard must read the SAME persisted backend Target
+    Role that Skills & Roles shows — never a stale search input or old target.
+
+    Set a target role on the student via the same models path the profile uses,
+    then confirm /api/jobs/recent passes exactly that role title to the matcher
+    (no stale value can override it)."""
+    from app import main, models
+
+    role = models.create_role(None, "Cybersecurity Analyst", [
+        {"name": "Network Security", "level": "Intermediate"},
+        {"name": "SIEM", "level": "Intermediate"},
+        {"name": "Incident Response", "level": "Intermediate"},
+    ])
+    models.update_student(student_id, target_role_id=role["id"])
+    persisted = models.get_student(student_id)
+    assert persisted["target_role"]["title"] == "Cybersecurity Analyst"
+
+    called = {}
+    monkeypatch.setattr(main.jobs, "recent_jobs", lambda **kw: called.update(kw) or {"source": "live", "jobs": []})
+    r = client.get("/api/jobs/recent", headers=auth_headers("aisha@student.edu"))
+    assert r.status_code == 200
+    assert called["role"] == "Cybersecurity Analyst", (
+        f"Dashboard must drive the feed from the persisted target role; got {called.get('role')!r}")
+    for req in ("Network Security", "SIEM", "Incident Response"):
+        assert req in (called.get("role_requisites") or ()), (
+            f"target-role requisite {req!r} must pass through to the matcher; "
+            f"got {called.get('role_requisites')!r}")
+
+
 def test_company_still_gets_general_market_feed(client, auth_headers, monkeypatch):
     from app import main
 
@@ -584,9 +614,10 @@ def test_role_driven_scoring_drops_off_target_jobs():
     companies = [j["company"] for j in ranked]
     assert "Copy Co" not in companies, "copywriter must not rank for a cybersecurity target"
     assert "Admin Co" not in companies
-    # Target-role title dominance: exact title match first, then close
-    # (Incident Response Analyst), then the broader-field Security Analyst role.
-    assert companies[:3] == ["Defense Co", "IR Team", "SOC Team"]
+    # Target-role title dominance: exact title match first, then the broader
+    # security-family roles (Security Analyst (SOC), Incident Response Analyst).
+    assert companies[0] == "Defense Co"
+    assert set(companies[1:]) == {"IR Team", "SOC Team"}
     assert all(j["match_pct"] >= 78 for j in ranked), "role-relevant remote roles should rank high"
 
 
@@ -680,5 +711,6 @@ def test_relocation_market_forwards_adzuna_country(monkeypatch):
         market_country="gb",
     )
     assert captured["adzuna_country"] == "gb"
-    # Lead term is the role title's own vocabulary, not alphabetical noise.
-    assert captured["keywords"][0] in ("security", "analyst")
+    # Lead provider term is the target-role TITLE itself (not alphabetical noise
+    # or a broad skill word), so the feed is driven by the chosen career.
+    assert captured["keywords"][0] == "Security Analyst", captured

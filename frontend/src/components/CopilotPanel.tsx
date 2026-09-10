@@ -17,6 +17,7 @@ const PAGE_LABELS: Record<string, string> = {
   dashboard: 'Your dashboard',
   skills_roles: 'Skills & Roles',
   learning: 'Your learning path',
+  scenarios: 'Your practice scenarios',
   jobs: 'Job matching',
   career_roadmap: 'Your career roadmap',
   assessment: 'Assessment',

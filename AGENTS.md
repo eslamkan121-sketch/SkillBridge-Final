@@ -1,3 +1,94 @@
+## Multi-source job aggregation (LinkedIn + Google Jobs + RapidAPI keys) — COMPLETED (code + tests + build + live verify)
+
+**Status:** backend **716 passed / 3 skipped** (+10 new multi-provider tests). `tsc -b` + `vite build` clean. Live end-to-end verified on the real free/trial keys — the provider bug that starved the whole feed is fixed.
+
+**Root-cause fix (the whole point):** `_fetch_jsearch` did not send `language=en`. JSearch auto-selects `ar` for Egypt/UAE markets, so otherwise-available regional listings came back **0** while the same query with `language=en` returns real jobs. That one param was why the earlier "0 results" reproduction persisted even with a key. Verified end-to-end against the real API: dentist profile + UAE market → `source: live`, 2 on-topic jobs (`Specialist Dentist / General Dental Practitioner (DHA Approved)`, `Female Dentist or Specialist`); Egypt market differs. Live regression `test_live_market_divergence_ae_vs_eg` now PASSES (shell-exported keys only; suite never reads `.env`).
+
+**New RapidAPI providers (LinkedIn, Google Jobs) — host-gated, never guessed:**
+- `backend/app/jobs.py`: shared `_fetch_rapidapi_jobs()` adapter implementing the existing provider contract — per-provider health, tolerant listing extraction (`_extract_job_items` handles `data.jobs` / `data:[...]` / `results` / `items`), field mapping via `_job_field`, rate-limit (`429` → `rate_limited`), timeout (`network_unreachable`), auth-error-in-200-body detection, normalize→same internal shape, never raises.
+- Host + path are environment-configurable (`LINKEDIN_JOBS_HOST/LINKEDIN_JOBS_PATH`, `GOOGLE_JOBS_HOST/GOOGLE_JOBS_PATH`). Until set, a provider reports `skipped: host_not_configured` and is never attempted — no endpoint guessing per the spec.
+- Key resolution: `RAPIDAPI_LINKEDIN_KEY` / `RAPIDAPI_GOOGLE_JOBS_KEY` override, fallback `RAPIDAPI_KEY` (all three RapidAPI apps share one account key). `_redact()` now also scrubs the new vars.
+- `PROVIDERS` = 10; `_fetch_all` runs them all; feed health shows `N/10` automatically. Jooble stays optional (its host is TCP-unreachable from this network → honest `failed: network_unreachable`, never fatal).
+- `.env` (gitignored) now holds `JSEARCH_API_KEY`, `RAPIDAPI_KEY`, `JOOBLE_API_KEY` + empty host vars; `.env.example` documents the full shape.
+- `frontend/src/pages/DashboardPage.tsx`: `feedHealth()` counts `host_not_configured` as unconfigured so the indicator reads honestly.
+
+**Tests (offline, zero real quota/network) — `backend/tests/test_jobs_multiprovider.py`:** host-gating skip, key priority (provider override > shared), LinkedIn + Google payload normalization, empty-result-is-ok, timeout degrade, 429 rate-limit degrade, auth-error-in-200-body, full secret redaction across all key vars, cross-provider dedupe via `_merge`.
+
+**Manual/next:** paste the exact RapidAPI hosts for the LinkedIn Job Search + Google Jobs apps (Endpoints tab) into `.env` (`LINKEDIN_JOBS_HOST/LINKEDIN_JOBS_PATH`, `GOOGLE_JOBS_HOST/GOOGLE_JOBS_PATH`) → restart backend → providers go live and the feed indicator moves toward `N/10`. Backend restart is required to load the new `.env` values.
+
+---
+
+## Jobs feed diagnosis + relocation-market fixes — COMPLETED (code + tests + browser)
+
+**Status:** backend **706 passed / 3 skipped** (was 704/2 — +2 offline market tests; the 3rd skip is the key-gated live check). `tsc -b` + `vite build` clean. Health indicator verified in-browser on the live server.
+
+**Diagnosis (from the running app, Db-verified):** a Cairo-based "specialist dentist" profile got an identical empty feed for every relocation market, and the Dashboard showed no recent roles. Root cause: no provider credentials exist (no `.env`, only `.env.example`), so every country-scoped feed was `skipped: no_credentials` — JSearch (the only MENA-capable provider), Jooble, Adzuna, USAJobs. The four key-free feeds (Remotive/Jobicy/Arbeitnow/RemoteOK) are global remote/tech boards; they returned 117 listings but zero dentist-relevant ones. The market filter, ranking, grouping, and honest empty/unavailable logic all work correctly — the feed was simply starved of the one provider that could fill it.
+
+**Credential hygiene (confirmed + hardened):**
+- `.gitignore` already ignores `.env` / `.env.*` (root and nested) with `.env.example` whitelisted.
+- `main._load_env()` (the repo-root `.env` loader covering ALL keys) now **short-circuits under pytest** — the suite must never read real keys even when a populated `.env` exists; `dotenv_local.load_root_env()` already had this guard.
+- Existing `_redact()` in jobs.py scrubs provider keys from every log/providers payload. New keys must never be committed to git, logged, or embedded in test fixtures — the live market test only runs when the key is exported in the **shell** env explicitly.
+
+**Changes:**
+- `backend/app/main.py`: `_load_env()` pytest guard + `import sys`.
+- `frontend/src/pages/DashboardPage.tsx`: `feedHealth()` helper + `.feed-health` indicator line under the market dropdown — "Live feed: N/8 providers online". When keyed feeds are skipped it shows exactly which are unconfigured (verified live: "Live feed: 4/8 providers online · JSearch, Adzuna, USAJobs, Jooble unconfigured"), so a silently-empty feed is never mistaken for a bug.
+- `frontend/src/index.css`: `.feed-health` / `.feed-dot[.on]` / `.feed-warn`.
+- `backend/tests/test_jobs_market_divergence.py` (new, 2 pass + 1 key-gated skip):
+  - offline: with a JSearch key the chosen market reaches JSearch's `country` param (`ae`/`eg` differ, same query) — the exact path that was dead;
+  - offline: unknown markets fall back to `location`, never break;
+  - live (`-k live`, needs shell-exported `JSEARCH_API_KEY` or `RAPIDAPI_KEY`): Egypt vs UAE must return distinct, dentist-relevant listings — this doubles as the "prove the provider before paying" check for the free/trial tier. The suite never reads `.env`.
+- **DB:** removed stray demo account (`@demo.student.edu`, student 10/user 13) + its 9 self-reported skills; 9 students remain.
+
+**Manual/next:** user creates RapidAPI free/trial JSearch key (+ Jooble free key) → adds to root `.env` → restart backend → `pytest tests/test_jobs_market_divergence.py -k live -s` with the key exported to verify real Egypt/Gulf dentist listings → then decide on a paid tier. Server restart NOT needed for the frontend indicator (StaticFiles serves new dist from disk); restart IS needed for backend `.py` changes (none affect live behavior yet).
+
+---
+
+## Save Roles (Skills & Roles item 7) + Practice Scenarios — COMPLETED (code + tests + build)
+
+**Status:** backend non-runtime suites **704 passed / 2 skipped** (`test_saved_roles.py` 5 + `test_scenarios.py` 16 included; 653.96s). `tsc --noEmit` clean; `vite build` clean. Both features are real-data-path, multi-domain safe, and honest (practice never verifies skills; no fabricated match/work-type data).
+
+### Practice Scenarios domain-gating — APPROVED design → IMPLEMENTED (Supersedes: "practice scenarios visible to all students")
+**User directive:** stop showing cyber-only practice scenarios to non-cyber/empty profiles; fix in general (no dentist-specific patch); requirement #1 show actual computed specificity values for the floor (not fitted literals); #2 confirm yara is a pre-existing seed fixture; #3 comment the corpus-relative drift.
+- **Design:** `docs/scenario-domain-gating-design.md` — v2 approved, §5b has the computed floor math; §8 implementation status.
+- **Gate** (`backend/app/scenarios.py`): `scenario_eligible(student, scenario)` = OR of
+  - **Path A** — `role_intent.classify_title(student.target_role.title, scenario.role_title) != "UNRELATED"` (same classifier the live-jobs feed obeys; yara's "Cybersecurity Analyst" target is EXACT on all 3 scenario titles).
+  - **Path B** — specificity-weighted skill evidence: reuse `recommendations.role_pool_specificity()` (`code -> weight` = `log1p(corpus/(1+df))` over `list_roles() + list_catalog_roles()`, corpus=26 today); matched via `recommendations._key`→`normalise_name`; eligible iff `max(matched weights) >= SPECIFICITY_FLOOR`.
+- **Constants are DERIVED, not fitted** (requirement #1 — actual seeded-pool values in doc §5b): `DOMAIN_DF_CAP=2` anchors to the least-common cyber skill present (Threat Detection df=2); `SPECIFICITY_FLOOR = log1p(corpus/(1+DOMAIN_DF_CAP)) = log1p(26/3) = 2.2687`; `ABSENT_SKILL_WEIGHT = 0.0`. Scenario chapter vocabulary (Investigation, Decision Making, Email Security, Log Analysis, Event Correlation) is **absent from the pool** — a naive `log1p(corpus)` would invert (max weight for nothing); absent ⇒ 0 weight, so a lawyer/dentist with only soft-skill overlap can never clear the floor.
+- `recommendations.py`: new `role_pool_specificity()` helper with the corpus-relative drift comment (requirement #3); `recommend()` unchanged.
+- **Payload:** `list_scenarios` returns only eligible scenarios, `categories` derived from them (PHASES stay static), and new `availability: 'ok'|'none'` + `availability_reason` (role-aware or CV/role nudge — no "show all" fallback; removed per review).
+- **Start-gate (no end-run):** `POST /start` → **403** when ineligible AND no prior in-progress/completed attempt; started attempts stay resumable after profile changes (design §3.5).
+- **Tests** (`test_scenarios.py`, 10 → 16): play-through suite switched to **yara@student.edu** — a **pre-existing seeded** SOC student (seed.py STUDENTS:34, SELF_REPORTED:63, "Cybersecurity Analyst" target assigned at seed; NOT authored for this fix — stated in the test docstring, requirement #2); new tests: gate catalog, Path-B show-your-work (SIEM/Threat Detection clear the floor; Log Analysis=0), generic "Investigation+Decision Making" profile ineligible, General Dentist target+skills ineligible + start 403, empty-profile nudge (no target ⇒ "upload a CV"), start 403 then resume-after-pivot allowed. Negative fixtures reuse an existing role title when present (never let a fixture pollute the pool so its own skills clear the floor). Baseline **698 → 704 passed, 0 failed**.
+- **Frontend:** `types.ts` `ScenarioLibrary` + `availability`/`availability_reason`; `ScenariosPage.tsx` honest empty-state panel (CTA → skills/roles) and de-hardcoded hero fallback (:142-143, no "cybersecurity"/"analyst" fallback text anymore); `index.css` `.scn-empty-*`.
+- **Browser (Puppeteer/Brave) on the live seeded server, after restart:** Save Roles walkthrough — Save on a library card → same role shows Saved in the details modal; reference-role Save works; "Saved (2)" chip filters the library to exactly 2; full page reload keeps "Saved (2)" (server is source of truth). Scenario walkthrough — yara sees "Practice for Cybersecurity Analyst" with 3 cards and derived category chips (🚨 Threat Detection, 📊 SIEM & Log Analysis); aisha sees the honest empty state (0 cards, role-aware reason, "Update my skills and target role" CTA). Console free.
+
+### Save Roles — genuine backend persistence (not localStorage)
+- `backend/app/database.py`: `saved_roles` table (`student_id` FK, `role_id` FK, `saved_at`, PK `(student_id, role_id)`).
+- `backend/app/models.py`: `list_saved_roles`, `create_saved_role` (INSERT OR IGNORE — idempotent), `remove_saved_role`.
+- `backend/app/main.py`: `GET/POST /api/students/{id}/saved-roles`, `DELETE /api/students/{id}/saved-roles/{role_id}` — all return `{"role_ids": [...]}`; ownership-gated (Student + `_own_student`), 404 on unknown role, 403 cross-student.
+- `backend/app/seed.py`: `DELETE FROM saved_roles;` added to the wipe list.
+- `backend/tests/test_saved_roles.py`: 5 tests (roundtrip, idempotent re-save, guest 401, unknown-role 404, cross-student 403).
+- **Frontend** `frontend/src/pages/SkillsRolesPage.tsx`:
+  - `savedIds`/`savedOnly` state + load via `api.savedRoles`; `toggleSaveRole` calls `api.saveRole`/`api.unsaveRole` (server is source of truth) and updates from the returned `role_ids`.
+  - Bookmark toggles on library cards, reference-role cards, the details modal, and recommendation cards (ESCO recs have no local role id, so no bookmark there — honest).
+  - "Saved (n)" filter chip in the filterbar; when active it gates the library list. `savedOnly` forces `showAll` so saved roles aren't hidden by the CV-ranked default.
+  - `frontend/src/components/Icons.tsx`: new `IconBookmark`.
+  - `frontend/src/lib/types.ts`: `SavedRolesResponse { role_ids }`; `frontend/src/lib/api.ts`: `savedRoles/saveRole/unsaveRole`.
+  - `frontend/src/index.css`: `.srb-save-btn`, `.srb-chip.saved.on`, `.srb-ref-actions`.
+- **Honesty note:** saved roles cover roles already in the local DB (`roles.id`). An ESCO occupation not yet imported has no `role_id` yet, so it can't be bookmarked until selected as a target (which imports it via `select_esco_role`) — matching the repo's existing target-role flow.
+
+### Practice Scenarios — data-driven branching practice engine (separate, approved scope)
+- `backend/app/scenarios.py`: engine + catalog of 3 multi-step cyber scenarios (`suspicious-login-001`, `phishing-email-001`, `siem-alert-001`, 4 steps each). Evidence tabs (mark-viewed), decision panel (single-choice / multi-select), AI-Tutor hint (curated, `mark_hint`), scoring weights Investigation 30 / Decision Making 25 / Threat Analysis 25 / Incident Response 20, GOOD_SCORE 70, HINT_PENALTY 3 / CAP 9.
+- `backend/app/models.py` + `database.py`: `scenario_attempts` table + CRUD (JSON encoding on update) + `upgrade_self_reported_level`.
+- `backend/app/main.py`: scenario routes (library, start/resume, player view, decide, hint) with `match_before`/`match_after` around `improve_skill_confidence`; `start` is domain-gate-aware (403 on fresh ineligible attempts, see the gating block above).
+- **`practice` never verifies skills** — only `upgrade_self_reported_level` (self-reported confidence bump, capped Advanced); verified skills untouched. `certified: false` in results.
+- `backend/tests/test_scenarios.py`: 16 tests (see the domain-gating block above for the gate suite; engine: catalog, guest 401, ownership 403, good path + durable resume, bad path, multi partial credit, hint tracking, in-progress resume, completed rejects, practice-never-verifies).
+- **Frontend** `frontend/src/pages/ScenariosPage.tsx` (library / player / results), `'scenarios'` Section + nav ("Practice", IconBolt) in `App.tsx`, LearningPage quick-item navigates to it, `CopilotPanel` labels it, `frontend/src/lib/types.ts` Scenario types, `api.ts` `scenarios/startScenario/scenarioAttempt/decideScenario/scenarioHint`, `index.css` `.scn-*` block.
+
+### Work-type filter — OPEN DECISION (flagged to user, not built)
+Only live jobs (`jobs.py`) carry `work_type`; role catalog/company/ESCO rows do not. There is **no honest data source** for a work-type facet on the role library, so it was **omitted** rather than fabricated. Recommend either (a) leave it out, or (b) build real per-role work_type. Default: omit.
+
+---
+
 ## Post-Phase-6 "Dead-link & Diagnostic submit" general fix — COMPLETED (code + tests + browser)
 
 **Status:** backend non-runtime suites **582 passed / 2 skipped**; `tsc --noEmit` clean; `vite build` clean; all 9 frontend source-contract checkers green. Puppeteer (Brave) smokes on the live seeded server: Learning-review **38/38**, assessment-run **18/18**, full-pass submit **13/13**, diagnostic submit verified via network — console free except the app's own intentional `diagnostic/latest → 404` control-flow.

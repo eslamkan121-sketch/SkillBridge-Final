@@ -4,6 +4,7 @@ import type {
   Session, TutorMessage, InterviewReply, UniversityStatsResponse, UniversityOption, RecentJob, RecentJobsResponse, LocationOption,
   PersonalizedPath, PersonalizedPathItem, PersonalizedStage, PersonalizedPathResponse, FinalAssessmentStatus, PracticeAttempt, PracticeAttemptsResponse,
   EscoMarketResponse, RoleRecommendationsResponse,
+  ScenarioLibrary, ScenarioPlayer, ScenarioResult, ScenarioHint, SavedRolesResponse,
 } from './types'
 import type { AssessmentIntegrityEvent } from './webcamIntegrity'
 
@@ -95,7 +96,9 @@ export const api = {
   skills: () => req<Skill[]>('/api/skills'),
   roles: () => req<RolesResponse>('/api/roles'),
   catalogRoles: () => req<RoleRecord[]>('/api/roles/catalog'),
-  escoMarket: (q: string, limit = 8) => req<EscoMarketResponse>(`/api/roles/esco-market?q=${encodeURIComponent(q)}&limit=${limit}`),
+  escoMarket: (q: string, limit = 8, targetRole?: string) => req<EscoMarketResponse>(
+    `/api/roles/esco-market?q=${encodeURIComponent(q)}&limit=${limit}${targetRole ? `&target_role=${encodeURIComponent(targetRole)}` : ''}`
+  ),
   createRole: (body: any) => req<RoleRecord>('/api/roles', { method: 'POST', body: JSON.stringify(body) }),
   updateRole: (id: number, body: any) => req<RoleRecord>(`/api/roles/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteRole: (id: number) => req<{ deleted: boolean }>(`/api/roles/${id}`, { method: 'DELETE' }),
@@ -182,8 +185,8 @@ export const api = {
   tutorPreference: (studentId: number) => req<{ tutor_id: string; mode?: string; language?: string }>(`/api/students/${studentId}/tutor/preference`),
   setTutorPreference: (studentId: number, patch: { tutor_id?: string; mode?: string; language?: string } = {}) =>
     req<{ tutor_id: string; mode: string; language: string }>(`/api/students/${studentId}/tutor/preference`, { method: 'PUT', body: JSON.stringify(patch) }),
-  startAssessmentSession: (studentId: number, skillId: number, externalToken?: string | null) =>
-    req<{ active: boolean; skill_id: number }>(`/api/students/${studentId}/assessments/session`, { method: 'POST', body: JSON.stringify({ skill_id: skillId, external_token: externalToken || undefined }) }),
+  startAssessmentSession: (studentId: number, skillId: number, externalToken?: string | null, webcamGate?: { passed: boolean; checked_at: string; meta?: Record<string, string | number | boolean> }) =>
+    req<{ active: boolean; skill_id: number; webcam_gate?: { required: boolean; passed: boolean } }>(`/api/students/${studentId}/assessments/session`, { method: 'POST', body: JSON.stringify({ skill_id: skillId, external_token: externalToken || undefined, webcam_gate: webcamGate }) }),
   endAssessmentSession: (studentId: number) =>
     req<{ active: boolean }>(`/api/students/${studentId}/assessments/session`, { method: 'DELETE' }),
   assessmentIntegrityEvent: (studentId: number, body: AssessmentIntegrityEvent & { skill_id: number; external_token: string }) =>
@@ -221,4 +224,22 @@ export const api = {
 
   // ---- full career roadmap
   careerRoadmap: (studentId: number) => req<CareerRoadmap>(`/api/students/${studentId}/career-roadmap`),
+
+  // ---- practice scenarios
+  scenarios: (studentId: number) => req<ScenarioLibrary>(`/api/students/${studentId}/scenarios`),
+  startScenario: (studentId: number, scenarioId: string) =>
+    req<ScenarioPlayer>(`/api/students/${studentId}/scenarios/${scenarioId}/start`, { method: 'POST', body: JSON.stringify({}) }),
+  scenarioAttempt: (studentId: number, attemptId: number) =>
+    req<ScenarioPlayer | ScenarioResult>(`/api/students/${studentId}/scenarios/attempts/${attemptId}`),
+  decideScenario: (studentId: number, attemptId: number, payload: { decision_id?: string; option_ids?: string[]; evidence_viewed?: string[] }) =>
+    req<ScenarioPlayer | ScenarioResult>(`/api/students/${studentId}/scenarios/attempts/${attemptId}/decide`, { method: 'POST', body: JSON.stringify(payload) }),
+  scenarioHint: (studentId: number, attemptId: number, question?: string) =>
+    req<ScenarioHint>(`/api/students/${studentId}/scenarios/attempts/${attemptId}/hint`, { method: 'POST', body: JSON.stringify(question ? { question } : {}) }),
+
+  // ---- saved roles
+  savedRoles: (studentId: number) => req<SavedRolesResponse>(`/api/students/${studentId}/saved-roles`),
+  saveRole: (studentId: number, roleId: number) =>
+    req<SavedRolesResponse>(`/api/students/${studentId}/saved-roles/${roleId}`, { method: 'POST', body: JSON.stringify({}) }),
+  unsaveRole: (studentId: number, roleId: number) =>
+    req<SavedRolesResponse>(`/api/students/${studentId}/saved-roles/${roleId}`, { method: 'DELETE' }),
 }

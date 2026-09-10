@@ -325,7 +325,8 @@ def test_tutor_tts_locked_during_active_assessment(client, student_id, auth_head
     h = auth_headers("aisha@student.edu")
     python = models.get_skill_by_name("Python")["id"]
     client.post(f"/api/students/{student_id}/assessments/session",
-                json={"skill_id": python}, headers=h)
+                json={"skill_id": python,
+                "webcam_gate": {"passed": True, "checked_at": "2026-09-07T05:00:00Z", "meta": {"person_status": "one"}}}, headers=h)
     tts = client.post(f"/api/students/{student_id}/tutor/tts",
                       json={"tutor": "nova", "text": "hello"}, headers=h)
     assert tts.status_code == 423 and "integrity" in tts.json()["detail"].lower()

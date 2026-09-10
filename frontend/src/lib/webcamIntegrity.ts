@@ -275,13 +275,13 @@ export function cameraErrorMessage(error: unknown): string {
   }
   const name = (error as DOMException | undefined)?.name || ''
   if (name === 'NotAllowedError' || name === 'SecurityError') {
-    return 'Camera permission was denied. Camera monitoring is required for the Final Assessment.'
+    return 'Camera permission was denied. Camera monitoring is required for the Final Assessment. Allow camera access in your browser settings and try again.'
   }
-  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
-    return 'No camera was found on this device.'
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError' || name === 'OverconstrainedError') {
+    return 'No usable camera was found on this device.'
   }
-  if (name === 'NotReadableError' || name === 'TrackStartError') {
-    return 'The camera is already in use or could not be started.'
+  if (name === 'NotReadableError' || name === 'TrackStartError' || name === 'AbortError') {
+    return 'The camera is already in use by another app. Close it or pick a different camera, then try again.'
   }
   return 'The camera could not be started. Check the device and try again.'
 }

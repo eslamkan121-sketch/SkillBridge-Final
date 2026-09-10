@@ -24,11 +24,14 @@ ALLOWED_TUTOR_IDS = ("nova", "axel", "sage", "vex")
 MODES = ("chat", "practice", "discuss", "interview")
 
 # Each persona arrives in its natural mode by default; the student may switch.
+# The persona and the working mode are deliberately independent: selecting Vex
+# must NOT start a mock-interview session (that requires an explicit Interview
+# mode / session), so Vex defaults to ordinary chat like Nova.
 TUTOR_DEFAULT_MODES = {
     "nova": "chat",
     "axel": "practice",
     "sage": "discuss",
-    "vex": "interview",
+    "vex": "chat",
 }
 
 

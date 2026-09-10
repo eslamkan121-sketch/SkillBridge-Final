@@ -4,16 +4,17 @@ import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
 import SkillsRolesPage from './pages/SkillsRolesPage'
 import LearningPage from './pages/LearningPage'
+import ScenariosPage from './pages/ScenariosPage'
 import AssessmentsPage from './pages/AssessmentsPage'
 import UniversityPage from './pages/UniversityPage'
 import PublicProfilePage from './pages/PublicProfilePage'
 import { api } from './lib/api'
-import { IconDashboard, IconRoles, IconLearning, IconAssessment, IconUniversity, IconLogout, IconAlert, IconTarget, IconBell, IconChevron } from './components/Icons'
+import { IconDashboard, IconRoles, IconLearning, IconAssessment, IconUniversity, IconLogout, IconAlert, IconTarget, IconBell, IconChevron, IconBolt } from './components/Icons'
 import SuccessAnimationOverlay from './components/SuccessAnimationOverlay'
 import ErrorBoundary from './components/ErrorBoundary'
 import { CopilotPanel } from './components/CopilotPanel'
 
-type Section = 'dashboard' | 'skills' | 'learning' | 'assessments' | 'university'
+type Section = 'dashboard' | 'skills' | 'learning' | 'scenarios' | 'assessments' | 'university'
 
 function avatarInitials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean)
@@ -44,6 +45,7 @@ function Shell() {
   const [navOpen, setNavOpen] = React.useState(false)
   const [notifOpen, setNotifOpen] = React.useState(false)
   const [userMenuOpen, setUserMenuOpen] = React.useState(false)
+  const [learningFocus, setLearningFocus] = React.useState<{ skillId: number; roleTitle: string } | null>(null)
   const [demo, setDemo] = React.useState<{ genai_enabled: boolean; email_configured: boolean } | null>(null)
 
   React.useEffect(() => {
@@ -57,7 +59,7 @@ function Shell() {
   }, [])
 
   const titles: Record<Section, string> = {
-    dashboard: 'Dashboard', skills: 'Skills & Roles', learning: 'Learning',
+    dashboard: 'Dashboard', skills: 'Skills & Roles', learning: 'Learning', scenarios: 'Practice Scenarios',
     assessments: 'Assessments', university: 'University Dashboard',
   }
   React.useEffect(() => {
@@ -71,6 +73,7 @@ function Shell() {
     { key: 'dashboard', label: 'Dashboard', icon: <IconDashboard size={18} />, show: true },
     { key: 'skills', label: 'Skills & Roles', icon: <IconRoles size={18} />, show: true },
     { key: 'learning', label: 'Learning', icon: <IconLearning size={18} />, show: role === 'Student' },
+    { key: 'scenarios', label: 'Practice', icon: <IconBolt size={18} />, show: role === 'Student' },
     { key: 'assessments', label: 'Assessments', icon: <IconAssessment size={18} />, show: role === 'Student' },
     { key: 'university', label: 'University Dashboard', icon: <IconUniversity size={18} />, show: role === 'University Admin' },
   ]
@@ -78,6 +81,14 @@ function Shell() {
   if (!visibleNav.some((n) => n.key === section)) setSection(visibleNav[0]?.key || 'dashboard')
 
   const goTo = (key: Section) => { setSection(key); setNavOpen(false) }
+
+  // Cross-page deep link: Skills & Roles asks Learning to open a specific skill
+  // with the role that motivated it as context.
+  const navigate = (section: string, focus?: { skillId: number; roleTitle: string }) => {
+    setSection(section as Section)
+    setNavOpen(false)
+    if (focus) setLearningFocus(focus)
+  }
 
   const roleLabel =
     role === 'Student'
@@ -178,8 +189,9 @@ function Shell() {
           </div>
         </header>
         {section === 'dashboard' && <DashboardPage onNavigate={(s) => setSection(s as Section)} />}
-        {section === 'skills' && <SkillsRolesPage />}
-        {section === 'learning' && <LearningPage onNavigate={(s) => setSection(s as Section)} />}
+        {section === 'skills' && <SkillsRolesPage onNavigate={navigate} />}
+        {section === 'learning' && <LearningPage onNavigate={(s) => setSection(s as Section)} initialFocus={learningFocus} onFocusConsumed={() => setLearningFocus(null)} />}
+        {section === 'scenarios' && <ScenariosPage onNavigate={(s) => setSection(s as Section)} />}
         {section === 'assessments' && <AssessmentsPage />}
         {section === 'university' && <UniversityPage />}
         <footer className="app-footer">

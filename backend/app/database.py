@@ -319,7 +319,38 @@ CREATE TABLE IF NOT EXISTS active_assessments (
     skill_id INTEGER NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
     started_at TEXT NOT NULL DEFAULT (datetime('now')),
     external_token TEXT,
-    integrity_events TEXT NOT NULL DEFAULT '[]'
+    integrity_events TEXT NOT NULL DEFAULT '[]',
+    webcam_gate_passed INTEGER NOT NULL DEFAULT 0,
+    webcam_gate_checked_at TEXT,
+    webcam_gate_meta TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS scenario_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    scenario_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'in_progress' CHECK(status IN ('in_progress', 'completed')),
+    state_json TEXT,
+    decisions_json TEXT NOT NULL DEFAULT '[]',
+    evidence_viewed_json TEXT NOT NULL DEFAULT '[]',
+    hints_used INTEGER NOT NULL DEFAULT 0,
+    score REAL,
+    skill_scores_json TEXT,
+    skill_deltas_json TEXT NOT NULL DEFAULT '[]',
+    strengths_json TEXT NOT NULL DEFAULT '[]',
+    improvements_json TEXT NOT NULL DEFAULT '[]',
+    feedback_json TEXT NOT NULL DEFAULT '{}',
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_scenario_attempts_student
+    ON scenario_attempts (student_id, scenario_id, id);
+
+CREATE TABLE IF NOT EXISTS saved_roles (
+    student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+    saved_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (student_id, role_id)
 );
 """
 
@@ -361,6 +392,9 @@ def _migrate():
         ("tutor_messages", "tutor_id", "TEXT"),
         ("active_assessments", "external_token", "TEXT"),
         ("active_assessments", "integrity_events", "TEXT NOT NULL DEFAULT '[]'"),
+        ("active_assessments", "webcam_gate_passed", "INTEGER NOT NULL DEFAULT 0"),
+        ("active_assessments", "webcam_gate_checked_at", "TEXT"),
+        ("active_assessments", "webcam_gate_meta", "TEXT NOT NULL DEFAULT '{}'"),
         ("self_reported_skills", "evidence", "TEXT"),
     ]
     conn = _connect()
