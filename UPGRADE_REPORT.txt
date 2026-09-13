@@ -1,0 +1,224 @@
+================================================================================
+ SkillBridge — Complete Upgraded Private Handoff
+ Upgrade Report — Phases 1-6 (OPENCode UI-Role-Scenario-Upgrade-Guide)
+================================================================================
+
+Date:         2026-09-10
+Project root: ~/Desktop/lastest skill bridge/SkillBridge-Final-main/SkillBridge-Final-main
+Guide:        OPENCode-UI-Role-Scenario-Upgrade-Guide.txt
+Archive:      ~/Desktop/SkillBridge-Complete-Upgraded-Private-Handoff.zip
+
+IMPORTANT - PRIVATE ARCHIVE
+-------------------------------------------------------------------------------
+This archive is a COMPLETE copy of the project EXACTLY as it exists on disk,
+including hidden, private, generated and development files: the real .env
+(contains API/secret values), SQLite databases, backend uploads, .venv and any
+Windows virtual environments, frontend/node_modules, frontend/dist, Python and
+frontend caches, the .git directory with full history, browser regression
+harnesses and their results, reports, documentation and startup scripts.
+Nothing was excluded, reduced or removed, and no older ZIP files were touched.
+
+This archive CONTAINS PRIVATE CREDENTIALS (the real .env) and must only be
+shared internally. Do not publish, upload or commit it to any public channel.
+The secret VALUES inside .env are included in the archive but are intentionally
+NOT printed or reproduced anywhere in this report.
+
+--------------------------------------------------------------------------------
+1. Final verification results (all executed against the live server today)
+--------------------------------------------------------------------------------
+  - Full backend pytest suite:  ............ 736 passed, 5 skipped, 0 failed
+      (run from backend/ with .venv/bin/python -m pytest -q)
+  - Frontend TypeScript check:  .............. PASS  (tsc --noEmit, 0 errors)
+  - Frontend production build:  .............. PASS  (vite build)
+  - Contract checkers (14/14): ................ ALL PASS
+      check-roles-discovery-phase2.mjs        PASS  (Phase 2)
+      check-scenarios-family-phase3.mjs        PASS  (Phase 3)
+      check-scenarios-phase4.mjs               PASS  (Phase 4)
+      check-scenarios-phase5.mjs               PASS  (Phase 5)
+      check-learning-phase1 / -phase2-practice / -phase3-remediation /
+      -phase4-resources / -polish / check-tutor-language / -profiles /
+      check-step45-copilot / check-interview-voice-ux / -webcam-integrity  PASS
+  - Phase 6 browser regression (Puppeteer + system Chrome): PASSED=91 / FAILED=0
+      (re-verified 2026-09-10 after the aisha -> Legal Assistant label correction;
+       120s, full re-run)
+      Viewports: desktop 1440, tablet 820, mobile 390
+      Roles:      omar (Junior AI Engineer), leila (Data Analyst),
+                  aisha (Legal Assistant), yara (Cybersecurity Analyst),
+                  Company hr@northstar.com, University admin@univ.edu
+      Covers:     sign-in + render, Student dashboard, Practice library +
+                  scenario security-family gate (cyber only for cyber-relevant
+                  profiles), Skills & Roles page, Company dashboard, University
+                  aggregated (anonymized) overview, horizontal overflow at every
+                  width, and console-error cleanliness across all 18 sessions.
+  - Website:     http://localhost:8000  ->  HTTP 200 OK (left RUNNING)
+
+--------------------------------------------------------------------------------
+2. Features added in Phases 1-6
+--------------------------------------------------------------------------------
+Phase 1  Learning-page basis. Rich explainer + curated resources + roadmap +
+         AI tutor preserved; contract checks green.
+
+Phase 2  Roles discovery & separation of skills vs roles. Worker-capability
+         catalog, searchable/filterable/comparable role library, Student /
+         Company / University role separation, role-detail drawer, target-career
+         selection, empty-state grid, save-roles persistence (server-side).
+
+Phase 3  Practice scenarios core. Role-relevant branching scenario engine for
+         every target role (8 families + security + generic blueprints),
+         transparent hint scoring ("each hint reduces your score by 3 points,
+         capped at 9"), save/resume, history, strict per-family isolation so a
+         role never sees another domain's scenarios.
+
+Phase 4  Scenario UX upgrade + role-detail connect-through. Results view with
+         per-competency bars, decision-by-decision review, match before/after,
+         recommended follow-up naming the weakest competency; role-detail drawer
+         deep-links to Learning / Assessments / Practice for the actual target
+         role with honest unlock nudges for non-target roles.
+
+Phase 5  Connected journey (browser-verified). A single consumption-clearing
+         focus { skillId, roleTitle } threads Skills & Roles -> Learning /
+         Assessments / Scenarios and the Dashboard Recommended Next Step "Go".
+         Breadcrumbs root at the journey hub only (no learning<->scenarios
+         loops); focused skill is kept and highlighted even when skill data
+         loads late.
+
+Phase 6  Product polish + full regression (no new scope). Responsive fixes so
+         scenario cards and the company coverage rows no longer overflow at
+         tablet/mobile widths; full 3-width x all-user-roles regression suite
+         now lives in the repo (scripts/browser-regression/).
+
+--------------------------------------------------------------------------------
+3. Fixes made
+--------------------------------------------------------------------------------
+  a. App.tsx LearningPage wiring: replaced a legacy search stub
+     (onNavigate={(s)=>setSection(s)}) that silently dropped the deep-path
+     focus object; LearningPage now receives the real focus-aware navigate.
+  b. navigate() roots the breadcrumb back-context only at a hub (Skills &
+     Roles or Dashboard), killing the learning<->scenarios navigation loop.
+  c. AssessmentsPage focus race: the incoming skill id is captured at mount
+     (focusSkillIdRef) and resolved in a second effect once allSkills load, so
+     "Verify a Skill" keeps + highlights the right item even with a slow fetch.
+  d. SkillsRolesPage drawer: replaced firstGapSkill (which misread name-presence
+     as "have" and left Start/Verify dead for catalog roles) with level-aware
+     resolution straight from the live gap-analysis ids (never fabricated).
+  e. Scenario results: "Review {skill} in Learning" / "Take the Assessment" now
+     deep-link only when the weakest competency maps to a real DB skill
+     (e.g. suspicious-login -> Incident Response id 32); otherwise the CTA is
+     honestly hidden and the follow-up message + Practice again remain.
+  f. Phase 6 CSS: .scn-card-top flex-wrap + .scn-card min-width:0, and
+     .cov-row/.cov-label/.cov-tally responsive rules <=640px eliminated the
+     only remaining horizontal overflows (scenario cards, company dashboard).
+  g. Fixed a "Scenarios" section name that silently remapped the
+     ("skills_roles") CTA to the Dashboard instead of the Skills & Roles page.
+
+--------------------------------------------------------------------------------
+4. Files changed / added (this upgrade effort)
+--------------------------------------------------------------------------------
+CHANGED
+  AGENTS.md                            backend/app/database.py
+  backend/app/main.py                  backend/app/models.py
+  backend/app/scenarios.py             backend/tests/test_scenarios.py
+  frontend/src/App.tsx                 frontend/src/components/Icons.tsx
+  frontend/src/components/ui.tsx       frontend/src/index.css
+  frontend/src/lib/api.ts              frontend/src/lib/types.ts
+  frontend/src/pages/AssessmentsPage.tsx  frontend/src/pages/DashboardPage.tsx
+  frontend/src/pages/LearningPage.tsx  frontend/src/pages/ScenariosPage.tsx
+  frontend/src/pages/SkillsRolesPage.tsx
+  README.md (new "Practice Scenarios & the connected journey (Phases 4-6)")
+
+ADDED
+  backend/app/scenario_catalog.py
+  backend/tests/test_scenarios_family_gating.py
+  backend/tests/test_scenarios_phase4_ux.py
+  backend/tests/test_runtime_roles_discovery_phase2_frontend.py
+  backend/tests/test_runtime_scenarios_phase3_frontend.py
+  backend/tests/test_runtime_scenarios_phase4_frontend.py
+  backend/tests/test_runtime_scenarios_phase5_frontend.py
+  frontend/scripts/check-roles-discovery-phase2.mjs
+  frontend/scripts/check-scenarios-family-phase3.mjs
+  frontend/scripts/check-scenarios-phase4.mjs
+  frontend/scripts/check-scenarios-phase5.mjs
+  scripts/browser-regression/phase6-regression.js
+  scripts/browser-regression/results/*   (JSON + passed marker + screenshots)
+
+REPLACED / REMOVED
+  - Nothing original was deleted. The two code paths above (a, c, d) were
+    replaced in place. .gitignore gained one line so the harness deps are not
+    committed; .env and DBs remain on disk and in the archive but are excluded
+    from Git (private runtime data, per policy).
+  - The archived practice flow's ResultsView gating, breadcrumb back-context and
+    role-drawer deep-links reflect the current intentional (honest) behavior.
+
+--------------------------------------------------------------------------------
+5. Setup instructions
+--------------------------------------------------------------------------------
+MAC (this machine)
+  - Backend:   cd backend && ../.venv/bin/python -m uvicorn app.main:app
+                 --host 0.0.0.0 --port 8000     (must run from backend/)
+  - Frontend:  cd frontend && npm ci && npm run build && npm run dev
+  - Browser regression harness:
+                 cd scripts/browser-regression && npm ci && node phase6-regression.js
+                 (uses the system Google Chrome; server must be running)
+  - One-click: ./start.sh   (also included: scripts/start.mjs, verify.sh)
+
+WINDOWS
+  - The bundled Mac dependencies (.venv binaries; frontend .bin launchers) may
+    NOT run on Windows. Create a fresh virtual environment and install fresh:
+        cd backend
+        py -3 -m venv ../.venv-win        (or .venv)
+        ../.venv-win/Scripts/activate
+        python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+      (requirements are declared in backend/requirements*.txt; reinstall with
+       pip install -r requirements.txt if the venv is rebuilt)
+    Frontend:
+        cd frontend && npm ci --force && npm run build && npm run dev
+    Fingerprint the Mac .venv instead of copying it; the packages are pinned the
+    same way, so a fresh install is deterministic.
+  - One-click: start.bat   /   start.ps1
+  - Docker (cross-platform): Dockerfile + docker-compose.yml /
+    docker-compose.prod.yml; see DOCKER_README.md and DOCKER_CHECKLIST.md.
+
+BOTH
+  - Restore real secrets: the .env shipped in this archive is already in place;
+    .env.example documents the expected shape for a fresh install.
+  - Server keeps running at http://localhost:8000 for inspection.
+
+--------------------------------------------------------------------------------
+6. Remaining warnings and limitations
+--------------------------------------------------------------------------------
+  - PRIVATE CREDENTIALS: this archive contains the real .env. Internal use only.
+  - vite build prints a pre-existing, non-blocking chunk-size warning
+    (largest chunk > 500 kB) - code-splitting is not applied.
+  - Backend 5 skipped tests are key-gated / intentionally offline (live feed
+    checks demand shell-exported provider keys; the suite never reads .env).
+  - Jobs feed provider health is host/key-dependent; without the optional
+    RapidAPI/Jooble keys the indicator honestly reads fewer providers online.
+  - Notifications chip is a "Coming soon" placeholder (existing team feature).
+  - "Take the Assessment" / "Review in Learning" deep-links appear only when the
+    finished scenario's weakest competency maps to a real skill (honest,
+    documented). Phishing's incident_response weakness has no DB mapping, so its
+    results keep the follow-up message + Practice again without a fake link.
+  - Demo mode banner shows whenever GenAI or SMTP keys are unset; AI content then
+    uses the deterministic fallback (by design).
+  - Practice never verifies skills and never claims readiness guarantees;
+    verification flows only from a passed Assessment attempt.
+  - The live-DB yara account is in an "all scenarios completed" state from real
+    regression runs; this is state drift, not a defect.
+
+--------------------------------------------------------------------------------
+7. Git checkpoint
+--------------------------------------------------------------------------------
+  Primary commit (required message):
+      ca90b8e  final: complete SkillBridge role and scenario UI upgrade
+      (parent: 7897f89 baseline: pristine merged SkillBridge repo state)
+  The .env, SQLite DBs, uploads, .venv/node_modules/dist and caches are NOT
+  committed (private/generated) but remain inside the project and the archive.
+  Full Git history is included in the archive '.git'.
+
+--------------------------------------------------------------------------------
+8. Archive facts (filled at end of handoff)
+--------------------------------------------------------------------------------
+  Path:        ~/Desktop/SkillBridge-Complete-Upgraded-Private-Handoff.zip
+  Size / Entries / SHA-256: see the handoff summary that accompanies this file.
+  Integrity:   unzip -t green; archive inventory matches the project tree.
+================================================================================

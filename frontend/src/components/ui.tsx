@@ -1,5 +1,24 @@
 import React from 'react'
 
+/* ---------------- Skeleton / non-layout-shifting loading primitives ---------------- */
+
+export function SkeletonText({ width = '100%', height = 16, className = '' }: { width?: number | string; height?: number | string; className?: string }) {
+  return <span className={`skeleton skeleton-text ${className}`} style={{ display: 'block', width, height, marginBottom: 8 }} />
+}
+
+export function SkeletonCard({ height = 190, width = '100%', className = '' }: { height?: number | string; width?: number | string; className?: string }) {
+  return <div className={`skeleton skeleton-card ${className}`} style={{ height, width }} />
+}
+
+export function LoadingBlock({ label = 'Loading…' }: { label?: string }) {
+  return (
+    <div className="loading-block" role="status" aria-live="polite">
+      <span className="spinner" aria-hidden="true" />
+      <span>{label}</span>
+    </div>
+  )
+}
+
 /* ---------------- Toast system ---------------- */
 
 export type ToastKind = 'success' | 'error'

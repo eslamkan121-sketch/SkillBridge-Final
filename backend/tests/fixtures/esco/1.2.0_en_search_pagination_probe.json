@@ -1,0 +1,714 @@
+{
+  "_meta": {
+    "note": "SYNTHETIC volume set for pagination tests. Structurally identical to recorded ESCO search results but the titles/uris are fabricated test data, clearly not real labour-market occupations.",
+    "endpoint": "GET https://ec.europa.eu/esco/api/search",
+    "params": {
+      "text": "pagination probe",
+      "type": "occupation",
+      "language": "en",
+      "selectedVersion": "1.2.0"
+    }
+  },
+  "results": [
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-001",
+      "title": "Synthetic occupation 001",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 001"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 001"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-002",
+      "title": "Synthetic occupation 002",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 002"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 002"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-003",
+      "title": "Synthetic occupation 003",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 003"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 003"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-004",
+      "title": "Synthetic occupation 004",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 004"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 004"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-005",
+      "title": "Synthetic occupation 005",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 005"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 005"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-006",
+      "title": "Synthetic occupation 006",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 006"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 006"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-007",
+      "title": "Synthetic occupation 007",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 007"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 007"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-008",
+      "title": "Synthetic occupation 008",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 008"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 008"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-009",
+      "title": "Synthetic occupation 009",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 009"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 009"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-010",
+      "title": "Synthetic occupation 010",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 010"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 010"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-011",
+      "title": "Synthetic occupation 011",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 011"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 011"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-012",
+      "title": "Synthetic occupation 012",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 012"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 012"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-013",
+      "title": "Synthetic occupation 013",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 013"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 013"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-014",
+      "title": "Synthetic occupation 014",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 014"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 014"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-015",
+      "title": "Synthetic occupation 015",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 015"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 015"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-016",
+      "title": "Synthetic occupation 016",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 016"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 016"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-017",
+      "title": "Synthetic occupation 017",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 017"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 017"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-018",
+      "title": "Synthetic occupation 018",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 018"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 018"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-019",
+      "title": "Synthetic occupation 019",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 019"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 019"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-020",
+      "title": "Synthetic occupation 020",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 020"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 020"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-021",
+      "title": "Synthetic occupation 021",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 021"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 021"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-022",
+      "title": "Synthetic occupation 022",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 022"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 022"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-023",
+      "title": "Synthetic occupation 023",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 023"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 023"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-024",
+      "title": "Synthetic occupation 024",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 024"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 024"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-025",
+      "title": "Synthetic occupation 025",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 025"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 025"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-026",
+      "title": "Synthetic occupation 026",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 026"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 026"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-027",
+      "title": "Synthetic occupation 027",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 027"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 027"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-028",
+      "title": "Synthetic occupation 028",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 028"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 028"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-029",
+      "title": "Synthetic occupation 029",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 029"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 029"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-030",
+      "title": "Synthetic occupation 030",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 030"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 030"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-031",
+      "title": "Synthetic occupation 031",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 031"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 031"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-032",
+      "title": "Synthetic occupation 032",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 032"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 032"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-033",
+      "title": "Synthetic occupation 033",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 033"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 033"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-034",
+      "title": "Synthetic occupation 034",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 034"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 034"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/syn-035",
+      "title": "Synthetic occupation 035",
+      "code": "2512.9",
+      "preferredLabel": {
+        "@language": "en",
+        "@value": "Synthetic occupation 035"
+      },
+      "altLabels": [
+        {
+          "@language": "en",
+          "@value": "Synthetic alternative 035"
+        }
+      ],
+      "hiddenLabels": [],
+      "broaderIscoGroup": {
+        "uri": "http://data.europa.eu/esco/isco/2512",
+        "code": "2512"
+      }
+    }
+  ]
+}

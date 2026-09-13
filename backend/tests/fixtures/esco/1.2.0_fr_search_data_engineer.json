@@ -1,0 +1,27 @@
+{
+  "_meta": {
+    "note": "Recorded, sanitized ESCO search payload (v1.2.0, fr). Real French result shape; placeholder metadata, no secrets.",
+    "params": {"text": "ingénieur de données", "type": "occupation", "language": "fr", "selectedVersion": "1.2.0"}
+  },
+  "results": [
+    {
+      "uri": "http://data.europa.eu/esco/occupation/174b1a5b-f93b-4d5e-b2b2-c6a2a5c9d001",
+      "title": "Ingénieur de données",
+      "code": "2511.3",
+      "preferredLabel": {"@language": "fr", "@value": "Ingénieur de données"},
+      "altLabels": [
+        {"@language": "fr", "@value": "Ingénieur(e) de données"}
+      ],
+      "hiddenLabels": [{"@language": "fr", "@value": "Ingénieur données"}],
+      "broaderIscoGroup": {"uri": "http://data.europa.eu/esco/isco/2511", "code": "2511"}
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/286c2b6c-a04c-5e6f-c3c3-d7b3b6dae112",
+      "title": "Spécialiste en big data",
+      "code": "2512.9",
+      "preferredLabel": {"@language": "fr", "@value": "Spécialiste en big data"},
+      "altLabels": [],
+      "hiddenLabels": []
+    }
+  ]
+}

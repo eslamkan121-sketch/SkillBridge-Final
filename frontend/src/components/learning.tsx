@@ -27,9 +27,11 @@ export type LearningTab = 'for-you' | 'my-skills' | 'continue' | 'completed'
 /** Sanctioned working modes of the Global Copilot, in UI order. */
 export const TUTOR_MODES: TutorMode[] = ['chat', 'practice', 'discuss', 'interview']
 
-/** The mode each persona arrives in; students may switch at any time.
- *  Persona and working mode are independent: picking Vex must not auto-enter a
- *  mock-interview session, so Vex defaults to ordinary chat like Nova. */
+/** The mode each persona arrives in; students may switch at any time. Vex
+ * arrives in chat like every tutor: 'interview' is a live Mock-Interview
+ * session mode (started only by the dedicated Interview flow), never a
+ * standing working mode — otherwise every fresh Vex chat becomes an interview.
+ */
 export const TUTOR_DEFAULT_MODES: Record<TutorId, TutorMode> = {
   nova: 'chat',
   axel: 'practice',

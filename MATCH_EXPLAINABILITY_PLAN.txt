@@ -1,0 +1,351 @@
+================================================================================
+Phase J — EXPLAINABLE ROLE AND JOB MATCHING — PLAN (guide lines 506-533)
+SkillBridge Complete Upgraded — Private Handoff
+================================================================================
+STATUS: COMPLETE — CODE + TESTS + BUILD + LIVE
+Status so far: backend full suite 1046 passed / 5 skipped (1019 Phase I
+baseline + 27 new Phase J tests: 26 backend explainability/endpoint + 1
+frontend runtime source-contract guard, zero regressions). Three read-only
+endpoints live in main.py; match_explain.py builders + _score_candidate
+inclusion + job_score_components/locate_feed_job proven offline. Frontend:
+MatchBreakdown.tsx pure disclosure component mounted on the target-role ring
+(DashboardPage), each JobsCard feed job (DashboardPage), and every rec-deck
+card (SkillsRolesPage); tsc --noEmit + vite build clean;
+frontend/scripts/check-match-breakdown-phaseJ.mjs green. Live smoke on the
+running server verified exact-sums: target-role 50.0 == line sum, role-match
+49.3 == raw 49.33 + rounding −0.03, job breakdown 100.0 ==
+relevance 54 + experience 20 + location 40 + rounding 0 + clamp −14.
+Wrap-up date: Sat Sep 12 2026. Baseline for this phase: backend
+1019 passed / 5 skipped (Post-Phase-I). Runtime ~264s. In-memory change only:
+NO DB migration, deploy is restart-only. Doc supersedes nothing; coach for
+the deploys is /tmp/sb-backend.log, live server PID lives under
+/Users/aboodmr/Desktop/SkillBridge-Complete-Upgraded-Private-Handoff/SkillBridge-Final-main.
+
+--------------------------------------------------------------------------------
+0. WHAT THE GUIDE REQUIRES (145-158)
+--------------------------------------------------------------------------------
+"Make every displayed role/job match reproducible and explainable. For each
+match, return: the formula and version identifier being used; each required
+role skill and its required level; the student's verified level (with proof);
+the self-reported / developing level; which evidence source was actually used;
+the contribution of every element to the total score; the missing-skill
+contribution; the supported location/work-type/seniority constraint; a concise
+explanation and the user's next action; a timestamp and role-data version.
+The components must sum EXACTLY to the existing displayed score. If the
+existing formula cannot be decomposed exactly, stop and document the conflict
+rather than changing the existing displayed score secretly (silent changes are
+a violation). Self-reported evidence must never appear verified; missing
+external data must remain unknown, never converted to a zero/false."
+
+This phase never changes any displayed score. Everything is additive.
+
+--------------------------------------------------------------------------------
+1. THE THREE DISPLAYED "MATCH" NUMBERS (decomposable, unchanged)
+--------------------------------------------------------------------------------
+A) Target-role match  Dashboard ScoreRing  `analysis.match_score`
+       source: backend/app/matching.py  `job_match_score(student, role)`
+       formula: per required skill, equal weight 1.0; credit = 1.0 if
+       student level >= required level else student/required (partial),
+       0 if missing.  pct = round(earned/total*100, 1). Violent-simple,
+       rows already live behind `categorize()` as strong/gap/missing.
+
+B) Recommended-role match  recommendation cards' rings  `recommendations[].match_score`
+       source: backend/app/recommendations.py  `recommend()` (lines ~343-396)
+       formula: per required skill w = specificity(key) * (essential ? 1.0 :
+       OPTIONAL_WEIGHT); credit = w * (1.0 if level >= required else
+       level/required); verified multiply by (1.0 + VERIFIED_BOOST 0.05);
+       ESCO discovery credit = specificity(dkey)*1.0 (boost template same);
+       pct = round(min(100.0, earned_w/total_w*100), 1). Note the clamp: an
+       ESCO discovery skill can push earned_w above total_w, so the min(100)
+       clamp is a REAL labelled line, never hidden.
+
+C) Job match  jobs feed cards  `jobs[].match_pct`
+       source: backend/app/jobs.py  `_score_job()` (lines 1228-1400) +
+       `_apply()` caps (2812-2815) + `_rerank_score` (1067, ordering only)
+       formula steps (each cap is its OWN labelled line):
+         relevance = min(56, hits*14)
+         [+24 if family-title hit]                 cap 70
+         [+6 if family hit and relevance>=40]      cap 80
+         (no family hit)<= max(rel, min(60, 18+len(title_hits)*18))
+         [+min(8, len(minor_hits)*2)]              cap 90
+         [+min(6, len(verified_hits)*3)]           cap 94
+         [+min(4, max(0, 4-int(listed_days_ago)))] cap 96   (only if fresh)
+         exp  = 0 / 20 / 12 from job_seniority vs student_seniority
+         loc  = _LOCATION_SCORES tier (city/country/country_remote/global_remote/
+                market/unknown/different) via _location_score()
+         score = max(0, min(100, int(round(relevance+exp+loc))))
+         [student_seniority==0 and job_sen>1]  score = min(score, 15)
+         [_apply]                                score = min(score, 40)
+                 only when loc_tier=="different"
+
+All three formulas are deterministic given (profile, role, job record); the
+goal is to re-run the same arithmetic with the same inputs and emit every
+intermediate as a labelled component/adjustment line that sums EXACTLY to the
+number already on screen. If recomputation ever disagrees, raise a 500 with a
+clear "cannot decompose" message and log it (guide: stop + document, never
+present a wrong sum). Test parity batteries below enforce this forever.
+
+--------------------------------------------------------------------------------
+2. SCOPE GRID (who sees what, and where the breakdown hooks in)
+--------------------------------------------------------------------------------
+Displayed surface          value                backend source        breakdown endpoint
+Dashboard target ScoreRing analysis.match_score matching.job_match_score GET /api/students/{id}/target-role-match/breakdown
+Recommendation card ring    rec.match_score      recommendations.recommend  GET /api/students/{id}/role-match/{role_id|external_id}/breakdown
+Jobs feed row               j.match_pct          jobs._score_job/_apply    GET /api/students/{id}/jobs/recent/{fingerprint}/breakdown
+
+OUT OF SLICE (documented, reuses nothing new):
+- Company Dashboard candidate `match_score` (matching.job_match_score per
+  candidate) and University stats. Same matching formula — a future phase can
+  surface per-candidate breakdowns by reusing the target-role helper.
+- SkillsRolesPage reference-catalog card rings (`matchPctOf`, a CLIENT-side
+  presence count, not the backend recommendation) — no backend formula
+  exists, so no backend breakdown. Honest note in the plan only.
+- No change to `_score_job`, `recommend()`, `matching.*`, or any displayed
+  number. Phase J is strictly additive/read-only.
+
+--------------------------------------------------------------------------------
+3. BACKEND DESIGN (new file match_explain.py + tiny additive hooks)
+--------------------------------------------------------------------------------
+3.1 NEW FILE backend/app/match_explain.py (coach for all three breakdowns)
+  Constants: TARGET_ROLE_MATCH_FORMULA="target-role-match-v1",
+             ROLE_MATCH_FORMULA="role-match-v1",
+             JOB_MATCH_FORMULA="job-match-v1".
+  Evidence vocabulary: "verified" | "self_reported" | "esco_discovery" | "none".
+
+  target_role_match_breakdown(student):
+    - reads student.target_role; None -> raise MatchExplainError(404) honest.
+    - reuses matching.categorize() rows; recomputes per-skill credit with the
+      SAME loop shape as matching.job_match_score (single source: it calls
+      matching.effective_skill_level under the hood via categorize).
+    - PARITY: recomputed_total must equal matching.job_match_score(student,
+      target_role); on mismatch raise (endpoint -> 500 + logged conflict).
+    - payload: {formula, version, as_of (UTC ISO), role_data_version =
+      target_role.source_version or "local", role_title, company, skill_gaps:
+      each {skill_id, skill_name, required_level, student_level|null,
+      evidence, status strong|gap|missing, contribution_points (credit in
+      points, max 1.0), required_flag}, total_points, max_points, raw_percent
+      (unrounded), displayed_percent, rounding_adjustment (displayed - raw,
+      rounded to 1dp; labelled "+0.00 from rounding" etc),
+      evidence_precedence ("verified > self_reported"), missing_data summary,
+      next_action (worst rows first: missing then gap; suggests the single
+      next skill to practice/verify). }
+
+  role_match_breakdown(student, role_id=None, external_id=None):
+    - runs recommendations.recommend(student) with the student's profile;
+      finds the candidate by role_id or external_id. Found -> use the
+      per-requirement detail produced by the refactored _score_candidate
+      (see 3.2) -> guaranteed identical pct.
+    - NOT found in current recommendations -> raise MatchExplainError(404)
+      with detail "not in the student's current recommendations".
+    - payload: {formula, version, as_of, role_data_version = cand.source_version
+      or "local", source (catalog|company|esco), title, company,
+      requirements: each {name, required_level, student_level|null, evidence,
+      essential, weight, level_factor|null, credit, is_discovery, verified},
+      total_weight, earned_weight, raw_unclamped_percent, clamp_to_100_adjustment
+      (only when earned>total), rounding_adjustment, displayed_percent,
+      matched_skills, missing_key_skills, verified_matches, next_action,
+      evidence_precedence, missing_data}.
+
+  job_match_breakdown: implemented in jobs.py (3.4) and wrapped here with the
+   profile context (student skills/role/country/location/requisites/market,
+   mirroring api_recent_jobs), the cache lookup, and the exact-input parity
+   guard. 404 honest for unknown fingerprint; 500 on parity mismatch.
+
+   Shared honest-rules module-level docstring + a tiny _fmt helper so every
+   adjustment line prints the same way ("<label> <signed-value> pts").
+
+  MatchExplainError(status_code, message) for clean endpoint mapping.
+
+3.2 recommendations.py — extract per-candidate scorer (behavior-preserving)
+    Move the existing per-candidate loop body (lines ~343-396) into a new
+    private function:
+      _score_candidate(cand, profile, specificity)
+        -> (pct, matched, missing, detail_rows)
+    pct/matched/missing computed with byte-identical arithmetic; detail_rows
+    carries for EVERY requirement the w / level_factor / credit / discovery
+    flag the loop already computes (no double arithmetic — the loop fills both
+    the existing matched/missing and the new detail_rows in one pass).
+    recommend() becomes: call _score_candidate; keep `if not matched:
+    continue`, missing.sort(key=-specificity), and the existing result
+    construction word-for-word. Result: recommend() output is bit-for-bit
+    unchanged (verified by existing suite + golden test in 5).
+
+3.3 NEW in jobs.py — job_score_components() mirror of _score_job arithmetic
+    Defensive mirror of lines 1254-1351 (verbatim constants/caps), calling the
+    SHARED helpers (_title_words, _ROLE_FAMILIES, _GENERIC_TITLE_TOKENS,
+    role_intent.classify_title/domain_tokens, _job_seniority, _location_score)
+    so no drift there; only the sequential relevance/exp/score block is
+    duplicated and DOCUMENTED as a mirror. Returns a dict with every
+    intermediate: per-primary-keyword matched list, title_hits, minor_hits,
+    verified_hits, base_points, family_bonus, family_top_bump,
+    title_fallback_boost, minor_bonus, verified_bonus, fresh_bonus, final
+    relevance, exp_points (with job_sen/student_seniority label), loc tier +
+    label + points, raw_total (relevance+exp+loc), rounded_total
+    int(round(raw)), clamp_0_100 (max(0,min(100,rounded))),
+    seniority_cap (student_seniority==0 and job_sen>1 => min(box,15)),
+    loc_cap (loc_tier=="different" => min(box,40)), final = displayed pct.
+    Guarantee: final == _score_job(job, ...)[0] for every input (proved by
+    the parity battery in 5). _score_job UNTOUCHED.
+
+3.4 NEW in jobs.py — explain_job(student_context, fingerprint)
+    - rebuild skills/role/requisites/country/location/market EXACTLY as
+      api_recent_jobs does (3.2's shared helpers: _cluster_keywords, _role_family,
+      _student_seniority, role_driven=bool(role), limit=16).
+    - key = jobs._cache_key(...); read jobs._cache[key] while holding _lock;
+      if absent, warm it with _build_result(...) (sync) so the job the user
+      clicked is guaranteed present; locate the record by fingerprint
+      (fallbacks: provider+provider_job_id, url). Sep 404 detail if absent.
+    - run job_score_components with those exact inputs; assert final == the
+      record's stored match_pct; on mismatch -> MatchExplainError(500).
+    - payload: {formula, version, as_of, role_data_version (target_role
+      source_version or "local"), job {title, company, location_label,
+      work_type|null, seniority|unknown, listed_days_ago, listing_status,
+      apply_url}, components (the 3.3 dict), constraints {location {tier,
+      label, supported: true|unknown-independent-flag}, work_type supported:
+      true when job.work_type not in (None,"","unknown") else "unknown" (never
+      false), seniority {job, student, supported}}, evidence_source (list of
+      verified-hit names vs self-reported-only hits), matched_keywords,
+      explanation (a sentence composed from the actual components:
+      "relevance +N (X primary hits), exp +N (job_seniority=J vs yours=S),
+      location +N (label)", then any cap/adjustment lines), next_action
+      ("learn/verify {skill}" when a missing matchable skill exists, else a
+      freshness/location nudge).}
+
+    Missing-data honesty baked in: work_type unknown stays "unknown";
+    location-less jobs use the real _LOCATION_SCORES["unknown"] points WITH the
+    tier label "unknown"; role_data_version NULL stays "local" (never guessed).
+
+3.5 main.py — three additive read-only endpoints (own-student gated)
+    GET  /api/students/{student_id}/target-role-match/breakdown
+    GET  /api/students/{student_id}/role-match/breakdown?role_id=INT|external_id=URI
+    GET  /api/students/{student_id}/jobs/recent/{fingerprint}/breakdown?location=&country=&market=&limit=
+    (URI-path key documented in the plan; final is query params because an
+    ESCO external_id is itself a full URI and cannot sit in the path cleanly.)
+    All follow the existing _own_student pattern (owner 200 / owner-student
+    self 200 / cross-student 403 / unknown 403 / guest 401); all read-only (no
+    writes, no cache mutation — the jobs one may warm the cache the same way the
+    feed would, never clearing it).
+
+--------------------------------------------------------------------------------
+4. FRONTEND (phase: AFTER backend contracts proven + full suite green)
+--------------------------------------------------------------------------------
+4.1 NEW frontend/src/components/MatchBreakdown.tsx — one accessible disclosure
+    - <details>/<summary> (native disclosure: keyboard + aria-expanded free),
+      labelled "Why {pct}%?" / "Why this score?"; heading, then:
+      formula chip `${formula} · ${version}` + `as_of` + role-data-version
+      line (small muted text).
+      Component table (per skill: name, required level, student's level,
+      evidence badge verified/self-reported/missing, contribution points).
+      Adjustment lines (rounding / clamp / seniority cap / loc cap) that make
+      the running total sum EXACTLY to the displayed number (monospace).
+      Constraints block: location tier + label; work-type (or "unknown");
+      seniority (job vs student) — each rendered supported/unknown honestly.
+      The "next action" sentence.
+    - aria roles: region aria-label per breakdown kind; table with proper
+      scope/headers; no live-recompute client-side (iss Dumb render: fetches
+      via api in the page, or receives the payload as prop).
+
+4.2 pages (three mounts)
+    - DashboardPage target-role ScoreRing block (line ~428): expandable
+      "How is this score built?" -> api.targetRoleMatchBreakdown(student.id).
+    - SkillsRolesPage recommendation cards (the rec deck ~1370):
+      "Why {pct}%?" -> api.roleMatchBreakdown(student.id, role_id|external_id).
+    - DashboardPage JobsCard rows (line ~216 job rows): "Why this match?" ->
+      api.jobMatchBreakdown(student.id, j.fingerprint).
+
+4.3 api.ts: targetRoleMatchBreakdown / roleMatchBreakdown / jobMatchBreakdown.
+    types.ts: TargetRoleMatchBreakdown, RoleMatchBreakdown, JobMatchBreakdown,
+    and the shared MatchAdjustmentLine + MatchRequirementRow + MatchConstraints
+    shapes. index.css: .mxb-* block (details/summary, chips, table, adjustment
+    mono lines, constraint chips, responsive <=640px). No score is recomputed
+    or shown anywhere except the backend value.
+
+--------------------------------------------------------------------------------
+5. TESTS
+--------------------------------------------------------------------------------
+5.1 NEW backend/tests/test_match_explainability_phaseJ.py
+  exact-total:
+   - for every skill row of a target-role breakdown: sum(contribution_points)
+     == total_points == matching.job_match_score*max_points/100;
+     displayed_percent - raw_percent == rounding_adjustment (float tolerance).
+   - role-match breakdown for a fixed student + several roles: sum(over
+     requirements rows credit + discovery credits) == earned_weight and
+     round(min(100, earned/total*100),1) == rec["match_score"] (parity with the
+     ring). Includes a battery where discovery pushes earned>total -> the
+     clamp_to_100 line is present and labelled.
+   - job breakdown parity battery (core guard): a list of >= 12
+     (job, context) fixtures covering EXACT/CLOSE/FAMILY/none tiers, verified
+     hits, minor-only boosts, freshness >0/None, remote country/global,
+     no-location unknown, empty keywords (relevance 0), begin-student
+     seniority cap ->15, different-loc cap ->40, multi-hit primary keyword
+     cap 56/70/80/90/94/96 boundaries -> assert
+     job_score_components(...)["final"] == stored match_pct from _apply for
+     EVERY fixture.
+  rounding:
+   - a pct whose raw is x.5/2 dp renders rounding line; 0.0 and 100.0 clamps.
+  evidence precedence:
+   - a skill present in BOTH verified and self_reported -> row.evidence
+     "verified", uses verified level; -r self_reported-only -> "self_reported"
+     and NEVER verified anywhere in the payload (scan keys).
+  missing-data:
+   - missing target-role skill: contribution 0.0 with status "missing" (not
+     presented as "worked against"); work_type unknown; unknown location tier
+     flagged unknown (never false/0 invented); role_data_version None ->
+     "local" (never a fabricated version string).
+  role-version:
+   - local catalog role -> "local"; an ESCO/imported candidate carries its
+     source_version through the breakdown.
+  cross-user:
+   - two students, same job fingerprint -> different breakdowns reflecting
+     their own profile; identical profiles -> identical breakdown
+     (deterministic); job breakdown is read-only: wrap calls with
+     clear_job_cache() / assert _fetch_all not invoked when the cache is warm.
+  regression:
+   - golden: recommend() on the seeded omar student returns the same
+     match_scores/dt-ring values as captured now (snapshot the current
+     output into the test as an explicit "do not change" anchor).
+  endpoints:
+   - 401 guest; 403 cross-student; 404 unknown role key / unknown fingerprint /
+     student with no target role; 200 additive field names on all three;
+     response never contains raw secrets (recipe: run _redact-style scanner).
+
+5.2 runtime frontend guard (repo pattern)
+   backend/tests/test_runtime_match_breakdown_phaseJ_frontend.py runs the
+   source-contract checker via node:
+   frontend/scripts/check-match-breakdown-phaseJ.mjs  — asserts MatchBreakdown
+   renders details/summary + only styles/types imports; pages call only
+   api.{targetRole,role,Job}MatchBreakdown; none of the three added
+   api functions appears in App/useApp code; no getElementById/score
+   recompute math in the component; JobsCard passes j.fingerprint.
+
+5.3 Full suite + deploy gate (await owner approval):
+   backend 1019 -> ~1020 (new tests) passed / 5 skipped, runtime unchanged.
+   Restart-only deploy from backend/ (
+       ../.venv-mac/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000)
+   Live smoke as omar@student.edu (target Junior AI Engineer):
+     GET /api/students/{omar}/target-role-match/breakdown
+     GET /api/students/{omar}/role-match/1/breakdown
+     GET /api/students/{omar}/jobs/recent/{fingerprint}/breakdown (fingerprint
+       from a live /api/jobs/recent row)
+   Verify every displayed total == sum of labelled lines, health unchanged,
+   provider statuses unchanged, config/demo-mode unchanged. Then tsc --noEmit
+   + vite build clean (frontend UI phase), Puppeteer smoke on omar at 1440/390
+   for the three disclosure mounts, console clean. Append AGENTS.md and this
+   doc's STATUS.
+
+--------------------------------------------------------------------------------
+6. EXACT-TOTAL INVARIANT (the heart of the phase)
+--------------------------------------------------------------------------------
+For every displayed number N shown today:
+  N == sum(existing components) + sum(labelled adjustment lines)
+The adjustment lines are present ONLY where the existing math applies a
+transformation (rounding, min-100 clamp, 0/100 clamp, 15-cap, 40-cap, freshness
+cap). Their labels make the transform legible ("int rounding +0.2 pts";
+"seniority cap -N pts (entry-level vs senior title)"; "relocation cap -N pts
+(different market)"). If recomputing N from the components ever fails to equal
+the value the app already displays, the code raises -> 500 + a documented
+conflict log line. Silent score changes are forbidden; this phase changes no
+score, only adds the breakdown view.
+================================================================================
+END PLAN
+================================================================================

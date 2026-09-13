@@ -6,7 +6,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:8000',
+      // A separate local preview can point at a separately-started backend
+      // without changing the normal developer default.
+      '/api': process.env.SKILLBRIDGE_BACKEND_URL || 'http://localhost:8000',
     },
   },
   build: {

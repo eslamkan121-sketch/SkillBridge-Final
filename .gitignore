@@ -26,9 +26,14 @@ frontend/.vite/
 # Env / secrets
 .env
 .env.*
+/env
 !.env.example
+
+# Transferred-separately environment bundles (never committed)
+SkillBridge-Private-Environment-*/
 
 # OS / editor
 .DS_Store
 
-env
+# Browser regression harness deps (reinstalled per machine)
+scripts/browser-regression/node_modules/

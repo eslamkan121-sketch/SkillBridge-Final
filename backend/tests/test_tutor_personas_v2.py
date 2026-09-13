@@ -28,7 +28,7 @@ def _deterministic(monkeypatch):
     """Lock generation into the deterministic fallback and keep jobs offline."""
     monkeypatch.setattr(genai, "genai_enabled", lambda: False)
     monkeypatch.setattr(jobs_mod, "_fetch_all", lambda *a, **k: [])
-    jobs_mod._cache.update({"at": 0.0, "key": "", "data": None})
+    jobs_mod.clear_job_cache()
 
 
 def _capture_complete(monkeypatch):
@@ -136,6 +136,22 @@ def test_math_question_is_allowed(monkeypatch):
     assert "graphic" not in low
 
 
+def test_direct_arithmetic_is_answered_not_quized(monkeypatch):
+    """B2: 'what is 2+2?' must return the number itself, deterministically —
+    never a counter-question (the persona-guided 'optional knowledge check'
+    used to turn it into 'What is 3 + 3?')."""
+    reply = genai.tutor_reply("what is 2+2?", "ctx", None, "Cybersecurity Analyst",
+                              tutor_id="vex", mode="chat", language="en")
+    assert "2 + 2 = 4." in reply
+    arabic = genai.tutor_reply("كام 2+2؟", "ctx", None, None,
+                               tutor_id="nova", mode="chat", language="ar")
+    assert "2 + 2 = 4." in arabic
+    # non-arithmetic questions still flow through the normal path untouched
+    baked = genai.tutor_reply("What is Docker?", "ctx", None, "Cybersecurity Analyst",
+                              tutor_id="vex", mode="chat", language="en")
+    assert "2 + 2" not in baked and "docker" in baked.lower()
+
+
 def test_general_knowledge_not_forced_into_target_career_across_personas(monkeypatch):
     for tutor_id in CANONICAL:
         reply = genai.tutor_reply("What is Docker?", "ctx", None, "Cybersecurity Analyst",
@@ -200,6 +216,60 @@ def test_identity_context_gate_omits_student_snapshot(monkeypatch):
     assert "Docker" not in captured["user"]
 
 
+def test_general_education_question_classifies_general_under_learning_page():
+    context = (
+        "Learning context:\n"
+        "Skill focus: Active Directory (cybersecurity)\n"
+        "Latest diagnostic score: 40/100 (needs work)."
+    )
+    # a standalone educational question must stay GENERAL even when the page
+    # banner routes toward the current learning context
+    assert genai._classify_tutor_turn(
+        "Explain why dinosaurs became extinct.",
+        skill_name="Active Directory",
+        target_role="Cybersecurity Analyst",
+        student_context=context,
+    ) == "GENERAL"
+
+
+def test_general_context_omits_role_learning_state_and_gaps():
+    targeted = (
+        "Trusted SkillBridge context route: CURRENT_LEARNING\n"
+        "Trusted current skill: Active Directory\n"
+        "Trusted target role: Cybersecurity Analyst\n"
+        "Trusted SkillBridge context:\n"
+        "Latest diagnostic score: 40/100 (needs work)."
+    )
+    out = genai._context_for_intent("GENERAL", targeted, "Active Directory", "Cybersecurity Analyst")
+    assert "Active Directory" not in out
+    assert "Cybersecurity Analyst" not in out
+    assert "40/100" not in out
+    assert "omitted for this standalone general turn" in out
+
+
+def test_explain_dinosaurs_from_learning_page_gets_no_student_snapshot(monkeypatch):
+    captured = _capture_complete(monkeypatch)
+    context = (
+        "Learning context:\n"
+        "Skill focus: Active Directory (cybersecurity)\n"
+        "Latest diagnostic score: 40/100 (needs work)."
+    )
+    genai.tutor_reply(
+        "Explain why dinosaurs became extinct.",
+        context,
+        "Active Directory",
+        "Cybersecurity Analyst",
+        tutor_id="nova",
+        mode="chat",
+        language="en",
+    )
+    assert "Context route: GENERAL" in captured["user"]
+    assert "Trusted SkillBridge context: omitted" in captured["user"]
+    assert "Active Directory" not in captured["user"]
+    assert "Cybersecurity Analyst" not in captured["user"]
+    assert "40/100" not in captured["user"]
+
+
 def test_personal_context_gate_preserves_trusted_skillbridge_state(monkeypatch):
     captured = _capture_complete(monkeypatch)
     context = (
@@ -261,6 +331,39 @@ def test_requested_followup_question_is_added_when_provider_omits_it(monkeypatch
     assert "certificate" in reply
     assert "Docker" not in reply
     assert "Docker" not in captured["user"]
+
+
+def test_vex_explain_dns_then_quiz_stays_general_under_learning_banner(monkeypatch):
+    """Pins the live FAIL 2 shape: on the Learning page (Active Directory focus)
+    Vex in chat mode explaining DNS keeps the turn GENERAL — no profile/current
+    skill snapshot leaks, the DNA topic is kept, and the quiz must be about the
+    topic the student named (never the reversed 'explain DNS to me')."""
+    captured = _capture_complete(monkeypatch)
+    context = (
+        "Learning context:\n"
+        "Skill focus: Active Directory (cybersecurity)\n"
+        "Latest diagnostic score: 40/100 (needs work)."
+    )
+    assert genai._classify_tutor_turn(
+        "Explain DNS, then ask me one question about what you just explained.",
+        skill_name="Active Directory",
+        target_role="Cybersecurity Analyst",
+        student_context=context,
+    ) == "GENERAL"
+    genai.tutor_reply(
+        "Explain DNS, then ask me one question about what you just explained.",
+        context,
+        "Active Directory",
+        "Cybersecurity Analyst",
+        tutor_id="vex",
+        mode="chat",
+        language="en",
+    )
+    assert "Context route: GENERAL" in captured["user"]
+    assert "Active Directory" not in captured["user"]
+    assert "40/100" not in captured["user"]
+    assert "DNS" in captured["user"]
+    assert "test question must be about the topic" in captured["user"]
 
 
 # ------------------------------------------------------------------ trust: no invented personal data
@@ -632,3 +735,96 @@ def test_endpoint_vex_persona_and_mode_are_independent(client, student_id, auth_
     assert iv.status_code == 200, iv.text
     assert "scatter" not in iv.json()["reply"].lower()
     assert "go deeper" in iv.json()["reply"].lower()
+
+
+# ------------------------------------------------------------------ greeting + identity determinism (Phase 1 retest)
+
+def test_pure_greeting_is_the_personas_own_greeting(monkeypatch):
+    """A bare 'hello' gets the persona's deterministic greeting — never the
+    model's meta-commentary ('You said hello...') or a topic/assessment offer."""
+    reply = genai.tutor_reply("hello", "ctx", None, "Cybersecurity Analyst",
+                              tutor_id="vex", mode="chat", language="en")
+    assert reply == genai._GREETING_EN["vex"]
+    for banned in ("you said", "this is", "as this", "acknowledge", "would you like",
+                   "assessment", "knowledge check", "topic you wish"):
+        assert banned not in reply.lower()
+    arabic = genai.tutor_reply("مرحبا", "ctx", None, "Cybersecurity Analyst",
+                               tutor_id="sage", mode="chat", language="ar")
+    assert arabic == genai._GREETING_AR["sage"]
+    assert "حسب" not in arabic  # never a profile/assessment redirect
+
+
+def test_greeting_stays_scoped_to_single_tokens(monkeypatch):
+    """'hello there' is not a pure greeting — it keeps the normal provider path."""
+    reply = genai.tutor_reply("hello there", "ctx", None, "Cybersecurity Analyst",
+                              tutor_id="nova", mode="chat", language="en")
+    assert reply != genai._GREETING_EN["nova"]
+
+
+def test_identity_reply_ends_on_canonical_identity_no_assessment_offer(monkeypatch):
+    """An identity question always ends on the canonical persona identity — never
+    a trailing knowledge-check, topic offer, or assessment nudge."""
+    reply = genai.tutor_reply("Who are you?", "ctx", None, "Cybersecurity Analyst",
+                              tutor_id="vex", mode="chat", language="en")
+    assert reply == genai._identity_fallback("vex", "en")
+    assert "Vex" in reply and "Examiner" in reply
+    for banned in ("would you like", "assessment", "knowledge check", "optional",
+                   "topic you wish", "as this is"):
+        assert banned not in reply.lower()
+    ar = genai.tutor_reply("مين انت؟", "ctx", None, "Cybersecurity Analyst",
+                           tutor_id="vex", mode="chat", language="ar")
+    assert ar == genai._identity_fallback("vex", "ar")
+
+
+def test_arabic_trusted_skills_block_dedupes_and_keeps_names_verbatim():
+    """The Arabic trusted block: fully-Arabic counts (never 'skill مطلوب'),
+    verbatim English skill names (never a fumbled calque), no duplicates."""
+    ctx = (
+        "University: Cairo University\n"
+        "Target career: Cybersecurity Analyst\n"
+        "Career readiness: 62.5% match to the target role\n"
+        "Required-skill status: 12 required skills (7 below requirement).\n"
+        "- Active Directory: you do not have it yet\n"
+        "- Communication: you already meet the requirement [Verified]\n"
+        "- Threat Detection: you already meet the requirement\n"
+        "- Threat Detection: you already meet the requirement\n"
+        "- Security Monitoring: you do not have it yet\n"
+        "Recommended next step: work on 'Active Directory' next.\n"
+    )
+    block = genai._arabic_trusted_skills_block(ctx, "Cybersecurity Analyst")
+    assert "Threat Detection" in block
+    assert block.count("Threat Detection") == 1  # deduped
+    assert block.count("Security Monitoring") == 1
+    assert "Security Monitoring" in block  # verbatim English, never calque
+    assert "الاحتجاز" not in block and "detention" not in block
+    assert "12 مهارة مطلوبة" in block
+    assert "7" in block
+    assert "skill مطلوب" not in block and "skill" not in block.lower()
+    assert "متقنة تماماً" in block
+    assert "(موثّقة)" in block  # Verified marker present
+    assert "لسه محتاج تكتسبها" in block
+
+
+def test_arabic_profile_turn_injects_trusted_block_and_keeps_fallback(monkeypatch):
+    """The real Arabic personal-claim turn receives the trusted Arabic block in
+    the user prompt (source data for the provider) while the deterministic
+    fallback still answers from the trusted English context."""
+    cap = _capture_complete(monkeypatch)
+    ctx = (
+        "Target career: Cybersecurity Analyst\n"
+        "Career readiness: 62% match to the target role\n"
+        "Required-skill status: 12 required skills (7 below requirement).\n"
+        "- Active Directory: you do not have it yet\n"
+        "- Security Monitoring: you do not have it yet\n"
+        "- Threat Detection: you already meet the requirement\n"
+    )
+    reply = genai.tutor_reply("هل أكون جاهز للدور ده حسب SkillBridge؟", ctx,
+                              "Threat Detection", "Cybersecurity Analyst",
+                              tutor_id="nova", mode="chat", language="ar")
+    user = cap["user"]
+    assert "Trusted Arabic SkillBridge summary" in user
+    assert "12 مهارة مطلوبة" in user
+    assert "Security Monitoring" in user
+    assert "- Threat Detection: متقنة تماماً" in user
+    assert "Security Monitoring: لسه محتاج تكتسبها" in user
+    assert "حسب بروفايلك في SkillBridge" in reply  # deterministic fallback answer

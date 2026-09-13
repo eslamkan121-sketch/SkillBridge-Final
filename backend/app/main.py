@@ -8,9 +8,24 @@ access their own records, companies only their own roles/candidates, and the
 university view only sees anonymized, aggregated data.
 """
 import json
+import logging
 import os
 import sys
+import time
+import uuid
 from pathlib import Path
+
+
+def _sb_logger():
+    """skillbridge logger. A handler is attached only outside pytest so the test
+    suite stays quiet; under uvicorn the request/error lines are visible."""
+    logger = logging.getLogger("skillbridge")
+    if sys.modules.get("pytest") is None and not logger.handlers:
+        logger.setLevel(logging.INFO)
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("[%(levelname)s] %(name)s: %(message)s"))
+        logger.addHandler(handler)
+    return logger
 
 
 def _load_env():
@@ -45,11 +60,13 @@ _load_env()
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse, JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import models, matching, genai, integrity, seed, auth as auth_mod, mailer, activity, jobs, career_roadmap, diagnostics, path_builder, lessons, coverage, skill_blueprint, tts, copilot, escoe, practice, recommendations, scenarios
+from . import models, matching, genai, integrity, seed, auth as auth_mod, mailer, activity, jobs, career_roadmap, diagnostics, path_builder, lessons, coverage, skill_blueprint, tts, copilot, escoe, practice, recommendations, scenarios, esco_import, role_mapping, match_explain, tutor_memory
 from .resources import _CHECK_CACHE, annotate_resources
-from .database import init_db, get_cursor
+from .database import init_db, get_cursor, applied_migrations
 
 FRONTEND_DIST = os.environ.get(
     "SKILLBRIDGE_FRONTEND_DIST",
@@ -64,6 +81,88 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ------------------------------------------------------------------ request ids
+# Every request gets a short id so support can correlate a user-facing error with
+# a backend log line. The id travels as a response header and (additively, next
+# to the existing `detail`) inside error bodies - no existing field is replaced.
+
+
+def _attach_request_context(request: Request):
+    rid = getattr(request.state, "request_id", None) or uuid.uuid4().hex[:12]
+    request.state.request_id = rid
+    return rid
+
+
+def _error_body(request, detail):
+    body = {"detail": detail}
+    rid = getattr(request.state, "request_id", None)
+    if rid:
+        body["request_id"] = rid
+    return body, rid
+
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    rid = _attach_request_context(request)
+    started = time.time()
+    try:
+        response = await call_next(request)
+    except Exception:
+        _sb_logger().exception("[%s] %s %s unhandled", rid, request.method, request.url.path)
+        raise
+    response.headers["X-Request-Id"] = rid
+    response.headers["X-Response-Time-Ms"] = f"{round((time.time() - started) * 1000, 1)}"
+    _sb_logger().info(
+        "[%s] %s %s -> %s", rid, request.method, request.url.path, response.status_code
+    )
+    return response
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    body, rid = _error_body(request, exc.detail)
+    response = JSONResponse(status_code=exc.status_code, content=body)
+    if rid:
+        response.headers["X-Request-Id"] = rid
+    return response
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    body, rid = _error_body(request, "Invalid request parameters")
+    body["errors"] = [{"loc": e.get("loc"), "msg": e.get("msg"), "type": e.get("type")} for e in exc.errors()]
+    response = JSONResponse(status_code=422, content=body)
+    if rid:
+        response.headers["X-Request-Id"] = rid
+    return response
+
+
+# ------------------------------------------------------------------ input limits
+# Bounds for any endpoint this migration touches. Existing endpoints are left
+# untouched; new endpoints that accept user text must use these so no unvalidated
+# input ever reaches storage or logs.
+
+_FIELD_LIMITS = {
+    "display_name": 120,
+    "email": 254,
+    "location": 200,
+    "tutor": 40,
+    "message": 20000,
+    "text": 20000,
+    "reason": 500,
+}
+
+
+def _check_field_lengths(payload: dict, allowed: dict):
+    """Reject payload fields whose string length exceeds an allowed bound."""
+    for key, limit in allowed.items():
+        value = payload.get(key)
+        if isinstance(value, str) and len(value) > limit:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{key} exceeds the maximum length of {limit} characters",
+            )
 
 
 PASS_THRESHOLD = 70.0
@@ -97,6 +196,9 @@ def on_startup():
         # Existing databases are only migrated so their new columns appear.
         init_db()
     seed.ensure_catalog_roles()
+    # Phase D: fill canonical metadata for rows created before migration 0003
+    # (idempotent; a no-op for fresh databases).
+    models.backfill_role_canonical_metadata()
 
 
 # ------------------------------------------------------------------ auth helpers
@@ -237,14 +339,23 @@ def signup(body: dict, background_tasks: BackgroundTasks):
 
 
 @app.post("/api/auth/login")
-def login(body: dict):
+def login(body: dict, request: Request):
     email = (body.get("email") or "").strip().lower()
     password = body.get("password") or ""
+    ip = _request_ip(request)
+    if auth_mod.login_failure_exceeded(email) or auth_mod.login_ip_exceeded(ip):
+        raise HTTPException(status_code=429, detail="Too many login attempts. Please try again later.")
     user = models.check_credentials(email, password)
     if not user:
+        auth_mod.record_login_failure(email, ip)
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    auth_mod.clear_login_failures(email)
     token = models.create_session(user["id"])
     return {"token": token, **_entity_bundle(user)}
+
+
+def _request_ip(request: Request):
+    return (request.client.host if request.client else "unknown") or "unknown"
 
 
 @app.post("/api/auth/logout")
@@ -348,6 +459,10 @@ def google_complete(body: dict):
 @app.post("/api/auth/reset/request")
 def reset_request(body: dict, background_tasks: BackgroundTasks):
     email = (body.get("email") or "").strip().lower()
+    # Rate limit by email so an attacker cannot spam reset emails for one account.
+    if auth_mod.reset_request_exceeded(email):
+        raise HTTPException(status_code=429, detail="Too many password reset requests. Please try again later.")
+    auth_mod.record_reset_request(email)
     user = models.get_user_by_email(email)
     if not user or user.get("auth_provider") == "google":
         # Do not leak whether an account exists.
@@ -373,6 +488,7 @@ def reset_confirm(body: dict):
     if not user_id:
         raise HTTPException(status_code=400, detail="Reset token is invalid or expired")
     models.set_user_password(user_id, new_password)
+    models.revoke_user_sessions(user_id)
     return {"ok": True}
 
 
@@ -416,7 +532,101 @@ def api_demo_mode():
         "genai_enabled": genai.genai_enabled(),
         "email_configured": mailer.email_configured(),
         "provider": genai.provider_status(),
+        "jobs": jobs.provider_status(),
     }
+
+
+@app.get("/api/system/db-status")
+def api_db_status(limit: int = 200):
+    """Read-only database health: engine, honest applied-migration ledger, and a
+    bounded listing of the last N migrations (clamped to 1..200). No auth, no
+    secrets, no data rows - only schema-level observability."""
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200")
+    migrations = applied_migrations()
+    return {
+        "database": {"engine": "sqlite", "ok": True},
+        "migrations": {
+            "applied_count": len(migrations),
+            "applied": migrations[-limit:],
+        },
+    }
+
+
+@app.get("/api/system/esco/status")
+def api_esco_status(request: Request):
+    """Read-only ESCO import/refresh observability for University Admins:
+    configured version/language (the operator pin), the esco-market cache age,
+    catalogue scores of ESCO/managed rows, and the most recent run. No network.
+    """
+    user = _current_user(request)
+    _require_roles(user, "University Admin")
+    with get_cursor() as conn:
+        total_esco = conn.execute(
+            "SELECT COUNT(*) AS c FROM roles WHERE source='esco'").fetchone()["c"]
+        managed = conn.execute(
+            "SELECT canonical_status, COUNT(*) AS c FROM roles "
+            "WHERE source='esco' AND import_imprint IS NOT NULL "
+            "GROUP BY canonical_status").fetchall()
+    cache_age = None
+    at = getattr(escoe, "_cache", {}).get("at")
+    if at:
+        cache_age = max(0, int(time.time() - at))
+    last = esco_import.latest_import_runs(1)
+    return {
+        "configured": {"version": esco_import.configured_version(),
+                       "language": esco_import.configured_language()},
+        "esco_market_cache_age_seconds": cache_age,
+        "roles": {
+            "total_esco": total_esco,
+            "managed_by_status": {r["canonical_status"]: r["c"] for r in managed},
+        },
+        "last_run": last[0] if last else None,
+    }
+
+
+@app.post("/api/system/esco/preview")
+def api_esco_preview(request: Request, body: dict):
+    """Dry-run preview of a managed ESCO import/refresh. Persists the dry-run
+    run + change ledger; never mutates any role. University Admins only.
+    """
+    user = _current_user(request)
+    _require_roles(user, "University Admin")
+    uris = [u for u in (body.get("uris") or []) if str(u).strip()]
+    query = body.get("query") or ""
+    if isinstance(query, str):
+        query = query.strip()
+    language = (body.get("language") or "").strip() or None
+    if not uris and not query:
+        raise HTTPException(status_code=400, detail="provide uris or query")
+    result = esco_import.preview(
+        esco_import.build_default_transport(),
+        esco_import.configured_version(), language or esco_import.configured_language(),
+        uris=uris, query=query,
+        max_occupations=esco_import.configured_max_occupations(),
+        triggered_by_user_id=user.get("id"))
+    return result
+
+
+@app.post("/api/system/esco/apply")
+def api_esco_apply(request: Request, body: dict):
+    """Apply a previously previewed dry-run set (the only managed write path).
+    Refuses when the previewed version/language no longer match the current
+    configuration. University Admins only.
+    """
+    user = _current_user(request)
+    _require_roles(user, "University Admin")
+    preview_run_id = body.get("preview_run_id")
+    if not isinstance(preview_run_id, int) or preview_run_id <= 0:
+        raise HTTPException(status_code=400, detail="preview_run_id required")
+    try:
+        result = esco_import.apply_refresh(
+            esco_import.build_default_transport(), preview_run_id,
+            esco_import.configured_version(), esco_import.configured_language(),
+            triggered_by_user_id=user.get("id"))
+    except esco_import.EscoApplyError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return result
 
 
 @app.get("/api/universities")
@@ -462,10 +672,11 @@ def api_list_companies(request: Request):
 # ------------------------------------------------------------------ roles
 
 @app.get("/api/roles")
-def api_list_roles(request: Request):
+def api_list_roles(request: Request, search: str = ""):
     user = _current_user(request)
-    roles = models.list_roles()
-    catalog = models.list_catalog_roles()
+    search = (search or "").strip()
+    roles = models.list_roles(search=search)
+    catalog = models.list_catalog_roles(search=search)
     user_location = (user.get("location") or "").strip()
     user_country = (user.get("country") or "").strip()
     if user["role"] == "Company":
@@ -488,13 +699,15 @@ def api_list_roles(request: Request):
     return {"roles": roles, "catalog": catalog,
             "location": user_location,
             "is_company": user["role"] == "Company",
-            "company_id": (models.get_company_by_user(user["id"]) or {}).get("id") if user["role"] == "Company" else None}
+            "company_id": (models.get_company_by_user(user["id"]) or {}).get("id") if user["role"] == "Company" else None,
+            "role_data_version": models.roles_catalog_version()}
 
 
 @app.get("/api/roles/catalog")
-def api_catalog_roles(request: Request):
+def api_catalog_roles(request: Request, search: str = ""):
     _current_user(request)
-    return models.list_catalog_roles()
+    search = (search or "").strip()
+    return models.list_catalog_roles(search=search)
 
 
 @app.get("/api/roles/esco-market")
@@ -544,6 +757,25 @@ def api_get_role(role_id: int, request: Request):
     raise HTTPException(status_code=403, detail="Not allowed to view this role")
 
 
+@app.get("/api/roles/{role_id}/provenance")
+def api_role_provenance(role_id: int, request: Request):
+    """Canonical metadata for one role: aliases, ISCO mappings, per-skill
+    provenance and source fields, under the same ownership/visibility rules as
+    GET /api/roles/{role_id}. A locally authored role is never shown with ESCO
+    labels."""
+    user = _current_user(request)
+    role = models.get_role(role_id)
+    if not role:
+        raise HTTPException(status_code=404, detail="Role not found")
+    if not role.get("is_reference"):
+        if user["role"] != "Company":
+            raise HTTPException(status_code=403, detail="Not allowed to view this role")
+        company = models.get_company_by_user(user["id"])
+        if not company or role.get("company_id") != company["id"]:
+            raise HTTPException(status_code=403, detail="Not allowed to view this role")
+    return models.role_provenance(role_id)
+
+
 @app.post("/api/roles")
 def api_create_role(request: Request, body: dict):
     user = _current_user(request)
@@ -591,6 +823,54 @@ def api_role_candidates(role_id: int, request: Request):
         })
     rows.sort(key=lambda r: r["match_score"], reverse=True)
     return rows
+
+
+@app.get("/api/company/roles/{role_id}/canonical-matches")
+def api_role_canonical_matches(role_id: int, request: Request):
+    """Ranked canonical-role suggestions for a company's own role, with a real
+    confidence score and a literal explanation. Suggestions are computed on
+    demand and never persisted; roles below the confidence floor simply stay
+    unmapped."""
+    user = _current_user(request)
+    _own_company_role(user, role_id)
+    result = role_mapping.suggest_matches(role_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Role not found")
+    return result
+
+
+@app.post("/api/company/roles/{role_id}/canonical-mapping")
+def api_role_canonical_mapping(role_id: int, request: Request, body: dict):
+    """Confirm (or clear) a company role's canonical mapping. ``body`` carries
+    ``canonical_role_id`` (int) or ``null`` to unmap. Server-side only: the
+    target must be an active reference role. Append-only audit; the local
+    role's title, description and skills are never touched."""
+    user = _current_user(request)
+    _own_company_role(user, role_id)
+    canonical_role_id = body.get("canonical_role_id") if body else None
+    if canonical_role_id is not None:
+        try:
+            canonical_role_id = int(canonical_role_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid canonical_role_id")
+    try:
+        role = models.set_mapping(role_id, canonical_role_id, user)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {
+        "role_id": role["id"],
+        "canonical_role_id": role.get("canonical_role_id"),
+        "mapped": models.mapping_of(role_id),
+        "mapping_updated_at": role.get("canonical_mapping_updated_at"),
+    }
+
+
+@app.get("/api/company/roles/{role_id}/mapping-history")
+def api_role_mapping_history(role_id: int, request: Request):
+    """Append-only mapping audit for a company's own role, newest first."""
+    user = _current_user(request)
+    _own_company_role(user, role_id)
+    return models.mapping_history(role_id)
 
 
 
@@ -976,6 +1256,7 @@ def api_tutor_new_chat(student_id: int, request: Request, body: dict = None):
                                 detail="Unknown tutor (allowed: nova, axel, sage, vex)")
     tutor_id = tutor_id or models.get_tutor_preference(student_id) or "nova"
     models.clear_tutor_messages(student_id, tutor_id)
+    tutor_memory.clear_memory(student_id, tutor_id)
     return {"cleared": True, "tutor_id": tutor_id}
 
 
@@ -1013,7 +1294,14 @@ def api_tutor_chat(student_id: int, request: Request, body: dict):
         if body_tutor not in copilot.ALLOWED_TUTOR_IDS:
             raise HTTPException(status_code=400,
                                 detail="Unknown tutor persona (allowed: nova, axel, sage, vex)")
+    # A built copilot (Build-Your-Copilot) pins the voice agent that speaks it and
+    # carries the per-user personality/capability config. The personality composes
+    # the system prompt; the voice stays a shared agent reference.
+    copilot_config = models.get_copilot_config(student_id)
+    personality = copilot.personality_for_config(copilot_config)
     tutor_id = body_tutor or models.get_tutor_preference(student_id) or "nova"
+    if copilot_config:
+        tutor_id = copilot_config["voice_agent_id"]
     raw_mode = body.get("mode")
     if raw_mode is not None:
         mode = copilot.validate_mode(raw_mode)
@@ -1022,6 +1310,11 @@ def api_tutor_chat(student_id: int, request: Request, body: dict):
                                 detail="Unknown tutor mode (allowed: chat, practice, discuss, interview)")
     else:
         mode = models.get_tutor_mode(student_id) or copilot.default_mode_for(tutor_id)
+        # 'interview' is a request-driven session mode, never a standing
+        # preference: a stored 'interview' must not hijack a fresh chat into
+        # interview framing. Only an explicit body mode can enter interview.
+        if mode == "interview":
+            mode = copilot.default_mode_for(tutor_id)
     # Language: the backend makes the final call. An optional validated body
     # value pins the reply (used by the interview session to stay stable); the
     # stored preference is used otherwise, and 'auto' decides per message.
@@ -1036,6 +1329,10 @@ def api_tutor_chat(student_id: int, request: Request, body: dict):
         question,
     )
     ctx_text = f"{ctx['label']} context:\n{ctx['context']}\nLanguage: {copilot.language_label(language)}"
+    # Bounded, persona-scoped memory for THIS mentor's thread, built from the
+    # pre-turn history so the inbound message is never double-shown.
+    pre_turn = models.list_tutor_messages(student_id, tutor_id=tutor_id)
+    memory_block = tutor_memory.memory_block_for(student_id, tutor_id, messages=pre_turn)
     models.add_tutor_message(student_id, tutor_id, skill_id, "user", question)
     if mode == "interview":
         reply = genai.interview_reply(
@@ -1056,8 +1353,11 @@ def api_tutor_chat(student_id: int, request: Request, body: dict):
             tutor_id=tutor_id,
             mode=mode,
             language=language,
+            personality=personality,
+            conversation_memory=memory_block,
         )
     msg = models.add_tutor_message(student_id, tutor_id, skill_id, "assistant", reply)
+    tutor_memory.after_turn(student_id, tutor_id)
     return {**msg, "reply": reply, "tutor_id": tutor_id, "mode": mode, "language": language}
 
 
@@ -1067,10 +1367,20 @@ def api_get_tutor_preference(student_id: int, request: Request):
     user = _current_user(request)
     _require_roles(user, "Student")
     _own_student(user, student_id)
-    tutor_id = models.get_tutor_preference(student_id) or "nova"
+    copilot_config = models.get_copilot_config(student_id)
+    tutor_id = (copilot_config["voice_agent_id"] if copilot_config
+                else models.get_tutor_preference(student_id) or "nova")
     mode = models.get_tutor_mode(student_id) or copilot.default_mode_for(tutor_id)
     language = models.get_tutor_language(student_id) or copilot.TUTOR_DEFAULT_LANGUAGE
-    return {"tutor_id": tutor_id, "mode": mode, "language": language}
+    payload = {"tutor_id": tutor_id, "mode": mode, "language": language}
+    if copilot_config:
+        payload["copilot"] = {
+            "configured": True,
+            "choice": copilot_config["choice"],
+            "name": copilot_config["name"],
+            "voice_agent_id": copilot_config["voice_agent_id"],
+        }
+    return payload
 
 
 @app.put("/api/students/{student_id}/tutor/preference")
@@ -1118,6 +1428,149 @@ def api_set_tutor_preference(student_id: int, request: Request, body: dict):
     current_mode = models.get_tutor_mode(student_id) or copilot.default_mode_for(current_tutor)
     current_language = models.get_tutor_language(student_id) or copilot.TUTOR_DEFAULT_LANGUAGE
     return {"tutor_id": current_tutor, "mode": current_mode, "language": current_language}
+
+
+@app.get("/api/students/{student_id}/copilot")
+def api_get_copilot(student_id: int, request: Request):
+    """The student's Build-Your-Copilot configuration, or None + the options.
+
+    ``options`` are the EXACT four current mentors (never more). ``copilot`` is
+    the frozen per-user snapshot when one has been built, else None.
+    """
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    config = models.get_copilot_config(student_id)
+    return {"configured": config is not None,
+            "copilot": config,
+            "options": copilot.copilot_options()}
+
+
+@app.put("/api/students/{student_id}/copilot")
+def api_set_copilot(student_id: int, request: Request, body: dict):
+    """Build (or rebuild) the student's copilot from exactly one of the 4 mentors.
+
+    Snapshotting the chosen preset per-student (personality/capability config
+    + the one shared voice agent it speaks through). The voice agent also
+    becomes the active tutor so the SPA chat and TTS follow the copilot's voice.
+    """
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    choice = copilot.validate_choice(body.get("choice"))
+    if choice is None:
+        raise HTTPException(status_code=400,
+                            detail="Unknown copilot (allowed: nova, axel, sage, vex)")
+    snapshot = copilot.snapshot_for(choice)
+    config = models.set_copilot_config(student_id, snapshot)
+    models.set_tutor_preference(student_id, snapshot["voice_agent_id"])
+    models.mark_copilot_manual(student_id)
+    return {"configured": True,
+            "copilot": config,
+            "options": copilot.copilot_options()}
+
+
+@app.delete("/api/students/{student_id}/copilot")
+def api_clear_copilot(student_id: int, request: Request):
+    """Remove the student's copilot and return to the fixed persona picker."""
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    models.clear_copilot_config(student_id)
+    return {"configured": False,
+            "copilot": None,
+            "options": copilot.copilot_options()}
+
+
+@app.get("/api/students/{student_id}/copilot/onboarding-state")
+def api_copilot_onboarding_state(student_id: int, request: Request):
+    """Where the student stands on the first-run copilot quiz (read-only).
+
+    ``state`` is not_started/completed/skipped, ``source`` records how the last
+    outcome was reached (quiz/skip/manual_change), and ``configured`` tells the
+    SPA whether a copilot is built, so the modal can show "already built → open
+    the picker instead" on a retake. A row that has never been written is
+    honestly reported as not_started. Lives on its own table so DELETE copilot
+    never resets the only-ask-once flag.
+    """
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    onboarding = models.get_copilot_onboarding(student_id)
+    config = models.get_copilot_config(student_id)
+    return {
+        "state": onboarding["state"],
+        "source": onboarding["source"],
+        "answered_at": onboarding["answered_at"],
+        "configured": config is not None,
+        "copilot": config,
+        "options": copilot.copilot_options(),
+    }
+
+
+@app.post("/api/students/{student_id}/copilot/onboarding")
+def api_copilot_onboarding(student_id: int, request: Request, body: dict):
+    """Resolve the first-run copilot quiz (complete or skip).
+
+    Exactly one resolution must be provided: ``skipped=true`` (builds the
+    default nova mentor, state=skipped/source=skip) OR ``answers`` — a
+    list of exactly four valid mentor keys. The winner is ALWAYS the
+    server's recompute from ``answers`` (pure tally; ties break on Question 4,
+    then Question 1, then the default nova); an
+    optional ``choice`` field is validated but recomputed over, so a
+    mismatched client-submitted mentor can never win (spec: server is the
+    source of truth; the result screen's "choose this instead" is encoded by
+    the client substituting the desired key into the answer set). Completing
+    snapshots the winning mentor, pins the active tutor's voice agent, and
+    records state=completed/source=quiz with the raw answers persisted for
+    audit.
+    """
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Payload must be a JSON object")
+    skipped = body.get("skipped")
+    answers = body.get("answers")
+    choice = body.get("choice")
+
+    if skipped is True and answers not in (None, []):
+        raise HTTPException(
+            status_code=400,
+            detail="skipped and answers are mutually exclusive (choose one resolution)")
+
+    if skipped is True:
+        winner = copilot.DEFAULT_ARCHETYPE
+        state, source = "skipped", "skip"
+        stored_answers = []
+    else:
+        validated = copilot.validate_onboarding_answers(answers)
+        if validated is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(f"answers must be a list of exactly {copilot.ONBOARDING_QUESTION_COUNT} "
+                        "valid mentors (nova, axel, sage, vex)"))
+        if choice not in (None, ""):
+            if copilot.validate_choice(choice) is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Unknown copilot (allowed: nova, axel, sage, vex)")
+        winner = copilot.score_archetype(validated)
+        state, source = "completed", "quiz"
+        stored_answers = validated
+
+    snapshot = copilot.snapshot_for(winner)
+    config = models.set_copilot_config(student_id, snapshot)
+    models.set_tutor_preference(student_id, snapshot["voice_agent_id"])
+    onboarding = models.set_copilot_onboarding(student_id, state, source, stored_answers)
+    return {
+        "state": onboarding["state"],
+        "source": onboarding["source"],
+        "assigned": winner,
+        "answered_at": onboarding["answered_at"],
+        "copilot": config,
+        "options": copilot.copilot_options(),
+    }
 
 
 @app.post("/api/students/{student_id}/assessments/session")
@@ -2213,6 +2666,16 @@ def api_list_scenarios(student_id: int, request: Request):
     return scenarios.list_scenarios(student)
 
 
+@app.get("/api/students/{student_id}/scenarios/history")
+def api_scenario_history(student_id: int, request: Request):
+    """Per-attempt scenario history: date, version, score, role, status."""
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    student = models.get_student(student_id)
+    return scenarios.scenario_history(student)
+
+
 @app.post("/api/students/{student_id}/scenarios/{scenario_id}/start")
 def api_start_scenario(student_id: int, scenario_id: str, request: Request):
     """Start (or resume) a scenario; returns the interactive player payload."""
@@ -2220,7 +2683,7 @@ def api_start_scenario(student_id: int, scenario_id: str, request: Request):
     _require_roles(user, "Student")
     _own_student(user, student_id)
     student = models.get_student(student_id)
-    scenario = scenarios._scenario(scenario_id)
+    scenario = scenarios.lookup_scenario(student, scenario_id)
     if not scenario:
         raise HTTPException(status_code=404, detail="Scenario not found")
     if not scenarios.scenario_eligible(student, scenario) and not scenarios.has_attempt(student_id, scenario_id):
@@ -2229,7 +2692,7 @@ def api_start_scenario(student_id: int, scenario_id: str, request: Request):
         attempt, scenario = scenarios.start_scenario(student_id, scenario_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="Scenario not found")
-    return scenarios.player_view(attempt, scenario)
+    return scenarios.player_view(attempt, scenario, student=student)
 
 
 @app.get("/api/students/{student_id}/scenarios/attempts/{attempt_id}")
@@ -2244,8 +2707,9 @@ def api_get_scenario_attempt(student_id: int, attempt_id: int, request: Request)
             match_before=(fb.get("_match_before")),
             match_after=(fb.get("_match_after")),
             deltas=attempt.get("skill_deltas") or [],
+            student=models.get_student(student_id),
         )
-    return scenarios.player_view(attempt, scenario)
+    return scenarios.player_view(attempt, scenario, student=models.get_student(student_id))
 
 
 @app.post("/api/students/{student_id}/scenarios/attempts/{attempt_id}/decide")
@@ -2259,7 +2723,7 @@ def api_decide_scenario(student_id: int, attempt_id: int, body: dict, request: R
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     if not completed:
-        return scenarios.player_view(updated, scenario)
+        return scenarios.player_view(updated, scenario, student=models.get_student(student_id))
 
     match_before = (matching.analyze_student(student_id) or {}).get("match_score")
     deltas = scenarios.improve_skill_confidence(student_id, scenario)
@@ -2284,6 +2748,7 @@ def api_scenario_hint(student_id: int, attempt_id: int, body: dict, request: Req
     if not (body or {}).get("question"):
         attempt = scenarios.mark_hint(attempt, scenario)
     hint["hints_used"] = attempt.get("hints_used") or 0
+    hint["hint_policy"] = scenarios._hint_policy(attempt.get("hints_used") or 0)
     return hint
 
 
@@ -2319,6 +2784,34 @@ def api_unsave_role(student_id: int, role_id: int, request: Request):
     return {"role_ids": models.list_saved_roles(student_id)}
 
 
+@app.get("/api/students/{student_id}/recent-roles")
+def api_list_recent_roles(student_id: int, request: Request):
+    """Roles this student opened most recently (Phase L recently-viewed). The
+    list is private to the student, newest-first, capped in the data layer."""
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    return {"roles": models.list_recent_role_views(student_id)}
+
+
+@app.post("/api/students/{student_id}/recent-roles")
+def api_record_role_view(student_id: int, request: Request, body: dict):
+    """Record a student opening a role's details so the explorer can surface it
+    under Recently viewed. Unknown role -> 404; a re-view just refreshes the
+    timestamp (upsert, never duplicates)."""
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    role_id = (body or {}).get("role_id")
+    if not isinstance(role_id, int) or role_id <= 0:
+        raise HTTPException(status_code=400, detail="role_id must be a positive integer")
+    try:
+        viewed_at = models.record_role_view(student_id, role_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"viewed_at": viewed_at}
+
+
 @app.post("/api/students/{student_id}/learning/{skill_id}/lessons/{competency}/mini-check")
 def api_submit_mini_check(student_id: int, skill_id: int, competency: str,
                           request: Request, body: dict):
@@ -2350,6 +2843,31 @@ def api_submit_mini_check(student_id: int, skill_id: int, competency: str,
 
 # ------------------------------------------------------------------ recent jobs
 
+def _student_feed_profile(user, location="", country="", market=""):
+    """Feed coordinates for the current user: student profile, skills, role
+    title, country, location, and role requisites — the EXACT inputs both the
+    recent-jobs feed and the Phase K job saver run on, so a saved snapshot
+    always matches what the student actually saw."""
+    loc = location or user.get("location") or ""
+    cty = country or user.get("country") or ""
+    skills = []
+    requisites = []
+    role = ""
+    student = None
+    if user["role"] == "Student":
+        student = models.get_student_by_user(user["id"])
+        if student:
+            for s in student.get("self_reported_skills") or []:
+                skills.append((s["name"], s.get("level") or "Beginner", False))
+            for v in student.get("verified_skills") or []:
+                skills.append((v["name"], v.get("level") or "Intermediate", True))
+            role = (student.get("target_role") or {}).get("title") or ""
+            for rs in (student.get("target_role") or {}).get("required_skills") or []:
+                if rs.get("name"):
+                    requisites.append(rs["name"])
+    return student, skills, role, cty, loc, requisites
+
+
 @app.get("/api/jobs/recent")
 def api_recent_jobs(request: Request, limit: int = 10, location: str = "", country: str = "", market: str = ""):
     """Real, recent job postings matched + ranked (most → least fitting) to the
@@ -2361,39 +2879,210 @@ def api_recent_jobs(request: Request, limit: int = 10, location: str = "", count
     a Cairo student) that widens reach via location-scoped feeds like Adzuna —
     clearly surfaced as a relocation search, never implied to be local."""
     user = _current_user(request)
-    loc = location or user.get("location") or ""
-    cty = country or user.get("country") or ""
-    skills = []
-    context = {"country": cty, "role": ""}
-    requisites = []
-    student = None
-    if user["role"] == "Student":
-        student = models.get_student_by_user(user["id"])
-        if student:
-            for s in student.get("self_reported_skills") or []:
-                skills.append((s["name"], s.get("level") or "Beginner", False))
-            for v in student.get("verified_skills") or []:
-                skills.append((v["name"], v.get("level") or "Intermediate", True))
-            role = (student.get("target_role") or {}).get("title")
-            context["role"] = role or ""
-            for rs in (student.get("target_role") or {}).get("required_skills") or []:
-                if rs.get("name"):
-                    requisites.append(rs["name"])
-    elif user["role"] == "Company":
-        # Companies see general recent openings so they can gauge the market.
-        context["role"] = ""
+    student, skills, role, cty, loc, requisites = _student_feed_profile(
+        user, location=location, country=country, market=market)
     # Students only search AFTER their CV is uploaded: the role feed is matched
     # to their CV-derived profile, so we never fetch before an upload populates
     # self-reported skills.
     if user["role"] == "Student" and not student.get("self_reported_skills"):
         return {"source": "no-cv", "jobs": [], "groups": {
             "local_count": 0, "broader_count": 0, "other_count": 0}}
-    return jobs.recent_jobs(skills=skills, role=context["role"],
-                            country=context["country"],
+    return jobs.recent_jobs(skills=skills, role=role,
+                            country=cty,
                             location=loc,
                             limit=min(max(int(limit), 1), 16),
                             role_requisites=requisites,
-                            market_country=market)
+                            market_country=market,
+                            request_id=getattr(request.state, "request_id", "") or "")
+
+
+# ------------------------------------------------------------------ Phase K: saved jobs + private tracker
+
+def _tracker_or_http(e):
+    if isinstance(e, models.TrackerError):
+        return HTTPException(status_code=e.code, detail=e.message)
+    raise e
+
+
+@app.get("/api/students/{student_id}/jobs/tracker")
+def api_job_tracker_list(student_id: int, request: Request):
+    """The student's private application tracker (saved/preparing/applied/...).
+    Student-only and ownership-gated; companies and universities never see it."""
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    items = models.list_job_tracker(student_id)
+    return {
+        "items": items,
+        "counts": {stage: sum(1 for i in items if i["stage"] == stage)
+                   for stage in models.JOB_TRACKER_STAGES},
+    }
+
+
+@app.get("/api/students/{student_id}/jobs/tracker/{tracker_id}")
+def api_job_tracker_get(student_id: int, tracker_id: int, request: Request):
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    entry = models.get_tracker_entry(student_id, tracker_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Tracker entry not found")
+    return entry
+
+
+@app.post("/api/students/{student_id}/jobs/saved")
+def api_save_job(student_id: int, request: Request, body: dict):
+    """Save a currently-surfaced feed job into the tracker (idempotent).
+
+    The snapshot is taken from the student's own live feed at save time via the
+    same machinery that rendered the number they saw (locate_feed_job); a job
+    that is not in the current feed is a 404 — a snapshot is never fabricated.
+    """
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    fingerprint = (body or {}).get("fingerprint")
+    if not fingerprint:
+        raise HTTPException(status_code=400, detail="fingerprint is required")
+    student, skills, role, cty, loc, requisites = _student_feed_profile(
+        user, location=(body or {}).get("location") or "",
+        country=(body or {}).get("country") or "")
+    market = (body or {}).get("market") or ""
+    if not student or not student.get("self_reported_skills"):
+        raise HTTPException(status_code=404, detail="No CV yet — nothing to save")
+    job = jobs.locate_feed_job(skills, role, cty, loc, requisites, market, fingerprint)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found in the current feed")
+    tracker_id, created = models.save_job_snapshot(student_id, job)
+    return {"tracker_id": tracker_id, "created": created,
+            "item": models.get_tracker_entry(student_id, tracker_id)}
+
+
+@app.patch("/api/students/{student_id}/jobs/tracker/{tracker_id}")
+def api_update_tracker_item(student_id: int, tracker_id: int, request: Request, body: dict):
+    """Update note/optional dates, or move the job across the stage allow-list.
+    Every stage change is appended to the tracker_stage_history audit table;
+    re-applying the same stage is a no-op. Invalid transitions -> 409/400."""
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    try:
+        return models.update_tracker_entry(
+            student_id, tracker_id,
+            stage=body.get("stage"), note=body.get("note"),
+            interview_date=body.get("interview_date"),
+            application_deadline=body.get("application_deadline"))
+    except models.TrackerError as e:
+        raise _tracker_or_http(e)
+
+
+@app.delete("/api/students/{student_id}/jobs/tracker/{tracker_id}")
+def api_delete_tracker_item(student_id: int, tracker_id: int, request: Request):
+    """Delete ONLY a still-'saved' tracker row (the frontend asks for
+    confirmation). Anything beyond saved keeps its history — 409 with a reason."""
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    try:
+        models.delete_saved_only(student_id, tracker_id)
+    except models.TrackerError as e:
+        raise _tracker_or_http(e)
+    return {"deleted": True}
+
+
+# ------------------------------------------------------------------ Phase N: job-link reports
+
+@app.get("/api/students/{student_id}/jobs/link-reports")
+def api_job_link_reports(student_id: int, request: Request):
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    return {"reports": models.list_job_link_reports(student_id)}
+
+
+@app.post("/api/students/{student_id}/jobs/recent/{fingerprint}/report-dead-link")
+def api_report_job_link(student_id: int, fingerprint: str, request: Request, body: dict | None = None):
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    student, skills, role, cty, loc, requisites = _student_feed_profile(
+        user, location=(body or {}).get("location") or "", country=(body or {}).get("country") or "")
+    market = (body or {}).get("market") or ""
+    job = jobs.locate_feed_job(skills, role, cty, loc, requisites, market, fingerprint)
+    if job is None:
+        # A previously saved snapshot is a valid report target even if it has
+        # disappeared from the short-lived live feed.
+        job = next((x for x in models.list_job_tracker(student_id) if x["fingerprint"] == fingerprint), None)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found in your feed or tracker")
+    report_id, created = models.report_job_link(student_id, job)
+    return {"report_id": report_id, "created": created, "fingerprint": fingerprint}
+
+
+# ------------------------------------------------------------------ Phase J: explainable role and job matching
+
+def _breakdown_or_http(e):
+    if isinstance(e, match_explain.MatchExplainError):
+        return HTTPException(status_code=e.status_code, detail=e.message)
+    raise e
+
+
+@app.get("/api/students/{student_id}/target-role-match/breakdown")
+def api_target_role_match_breakdown(student_id: int, request: Request):
+    """Read-only decomposition of the student's Dashboard role-match score
+    (the ``analysis.match_score`` ring) into per-required-skill contributions
+    plus labelled rounding adjustments that sum EXACTLY to the displayed
+    number. Self-reported evidence is never shown as verified; a missing skill
+    contributes zero and is labelled missing, never a penalty."""
+    user = _current_user(request)
+    _own_student(user, student_id)
+    student = models.get_student(student_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    try:
+        return match_explain.target_role_match_breakdown(student)
+    except match_explain.MatchExplainError as e:
+        raise _breakdown_or_http(e)
+
+
+@app.get("/api/students/{student_id}/role-match/breakdown")
+def api_role_match_breakdown(student_id: int, request: Request,
+                             role_id: int | None = None, external_id: str = ""):
+    """Read-only decomposition of one recommendation card's match_score ring
+    (role_id for local/catalog roles, external_id for ESCO occupations)."""
+    user = _current_user(request)
+    _own_student(user, student_id)
+    student = models.get_student(student_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    query = str(role_id) if role_id is not None else (external_id.strip() or None)
+    if not query:
+        raise HTTPException(status_code=400, detail="Provide role_id or external_id")
+    try:
+        return match_explain.role_match_breakdown(student, query)
+    except match_explain.MatchExplainError as e:
+        raise _breakdown_or_http(e)
+
+
+@app.get("/api/students/{student_id}/jobs/recent/{fingerprint}/breakdown")
+def api_job_match_breakdown(student_id: int, fingerprint: str, request: Request,
+                            location: str = "", country: str = "", market: str = "",
+                            limit: int = 10):
+    """Read-only decomposition of one jobs-feed row's match_pct badge, rebuilt
+    from the exact normalized record the student saw (same feed cache key, same
+    scoring context), with components + labelled cap/rounding lines summing
+    EXACTLY to the stored match_pct. Missing external data stays unknown."""
+    user = _current_user(request)
+    _own_student(user, student_id)
+    student = models.get_student(student_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    try:
+        return match_explain.job_match_breakdown(
+            student, fingerprint, location=location, country=country, market=market,
+            limit=max(1, min(int(limit), 16)))
+    except match_explain.MatchExplainError as e:
+        raise _breakdown_or_http(e)
 
 
 # ------------------------------------------------------------------ public verified-skills profile

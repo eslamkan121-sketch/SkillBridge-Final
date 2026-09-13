@@ -1,0 +1,191 @@
+======================================================================
+PHASE F — COMPANY ROLE TO CANONICAL ROLE MAPPING — IMPLEMENTATION PLAN
+======================================================================
+Guide: PHASE F (lines 386-407). Supersedes: nothing (new phase).
+Approval gates: (1) this plan, (2) deploy gate at the end (user approval
+before the live server/Db is touched).
+
+======================================================================
+1. SUMMARY
+======================================================================
+A company's locally authored job role may reference a canonical role while
+remaining company-owned and retaining its original title and requirements.
+Suggestion + human confirmation only. Nothing is ever auto-linked or
+overwritten. Mapping is pure additive linkage + append-only audit.
+
+Canonical pool = active reference roles:
+  roles.is_reference = 1  AND  canonical_status = 'active'
+(covers the seeded talent catalog AND managed ESCO-imported occupations;
+the exact is_reference flag of imported ESCO rows is confirmed at
+implementation time and the pool filter uses whatever flag makes those rows
+canonical targets).
+
+======================================================================
+2. DESIGN DECISIONS (locked)
+======================================================================
+D1. NEVER modify the local role when (un)mapping.
+    Mapping writes ONLY: roles.canonical_role_id + roles.canonical_mapping_updated_at
+    + one append-only row in role_mapping_events. It never calls update_role,
+    never touches title/description/required_skills bytes, never deletes.
+D2. Suggestions are ephemeral, never persisted.
+    GET matches computes candidates on demand. "Low-confidence mappings remain
+    unmapped" is structural: below the floor there are no suggestions, and the
+    confirm endpoint rejects any target that is not an active reference role
+    (server-side validate, never trust the client's pick).
+D3. Company skills stay distinguishable from canonical skills.
+    The local role keeps its own role_skills/role_skill_sources (source='company');
+    the canonical role keeps its own under its own roles.id. They are different
+    rows. role_skill_sources provenance (Phase D) already records which role owns
+    a skill link.
+D4. Audit is append-only. role_mapping_events records every set/change/unmap
+    with actor + timestamp + to_canonical_role_id. Re-targeting the same
+    canonical role again is a no-op (no duplicate event). No event is ever
+    deleted/edited (matches "changing a mapping must preserve audit history").
+D5. Ownership: every new endpoint goes through the existing _own_company_role
+    guard (owner company only). Another company gets 403, students 403, guest
+    401 — same contract as GET /api/roles/{id}.
+D6. Compatibility: additive columns/tables only. list_roles / list_feed_roles /
+    list_catalog_roles / candidates / job feed unchanged. Existing applications
+    (students.target_role_id, saved_roles, assessments, scenarios, learning)
+    reference the role's own id and are untouched by (un)mapping.
+D7. Unmap never deletes the local role and never clears students' target_role_id
+    pointing at it.
+
+======================================================================
+3. MIGRATION (0005_company_role_mapping)
+======================================================================
+Additive, backward-compatible, idempotent, rollback-safe:
+- ALTER roles ADD canonical_role_id INTEGER REFERENCES roles(id) ON DELETE SET NULL;
+- ALTER roles ADD canonical_mapping_updated_at TEXT;
+- CREATE TABLE role_mapping_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+    action TEXT NOT NULL CHECK (action IN ('mapped','unmapped','changed')),
+    from_canonical_role_id INTEGER REFERENCES roles(id) ON DELETE SET NULL,
+    to_canonical_role_id   INTEGER REFERENCES roles(id) ON DELETE SET NULL,
+    actor_user_id INTEGER NOT NULL,
+    actor_role TEXT NOT NULL,
+    created_at TEXT NOT NULL);
+- Index on role_mapping_events(role_id);
+- MIGRATIONS becomes [0001..0005].
+No backfill (nothing was mapped before; NULL is the honest initial state).
+Update migration assertions in the Phase B/C/D/E test files (they assert the
+MIGRATIONS list / expected migration ids).
+
+======================================================================
+4. BACKEND MODULE: backend/app/role_mapping.py  (NEW)
+======================================================================
+- _canonical_pool(cur)   -> active reference roles with their required_skills.
+- suggest_matches(role_id) -> {mapped, matches[]}; deterministic, no network,
+  no AI. Score = 0.6 * title_sim + 0.4 * skill_sim:
+    title_sim = Dice coefficient over token sets of normalized_title
+                (existing fold normalization stays display-preserving).
+    skill_sim = Jaccard over normalized required-skill names of the two roles.
+  confidence is normalized to [0,1]; labels: >=0.70 High, >=0.45 Medium, else Low.
+  CONFIDENCE_FLOOR = 0.45 -> candidates below the floor are omitted entirely
+  (the role stays unmapped). Amber (ambiguous) = 2+ candidates at >= floor with
+  the top two within 0.10 of each other -> all returned, none auto-selected.
+  explanation is literal text built from real numbers, e.g.
+    "Title shares 2 of 3 words (data analyst); shares 4 of 6 required skills
+     (SQL, Statistics, Python, Excel)."  — never invented wording/certainty.
+- set_mapping(role_id, canonical_role_id, actor) -> writes link + appends one
+  event (mapped / changed / unmapped). Raises ValueError on non-canonical-
+  pool target or self-mapping.
+- mapping_history(role_id) -> events newest-first with canonical titles
+  resolved at read time (additive join; historical targets that were themselves
+  later superseded still show their stored id + resolved title).
+
+======================================================================
+5. ENDPOINTS: backend/app/main.py  (all _own_company_role-guarded)
+======================================================================
+- GET  /api/company/roles/{role_id}/canonical-matches
+      -> {role_id, mapped: {...}|null, matches: [{role_id,title,source,
+         confidence, confidence_label, explanation}]}
+- POST /api/company/roles/{role_id}/canonical-mapping
+      body {canonical_role_id: int|null}
+      null = unmap (keeps the role + student refs). Sets/clears link + audit.
+      400: target not an active reference role, or target == the role itself.
+      200 -> {role_id, canonical_role_id, mapped: {...}|null, mapping_updated_at}
+- GET  /api/company/roles/{role_id}/mapping-history  -> ordered events.
+- GET  /api/roles/{role_id}  gains additive fields only:
+      canonical_role_id, canonical_mapping_updated_at, and (when mapped) the
+      canonical role's title + source in the existing shape (extra keys are
+      ignored by RoleRecord).
+- GET  /api/roles/{role_id}/provenance  gains an additive "mapping" summary
+      {canonical_role_id, mapped_title, mapping_confirmed_at} for owners.
+
+======================================================================
+6. FRONTEND (confirmation UI, current design components)
+======================================================================
+In frontend/src/pages/SkillsRolesPage.tsx — the company role manager (where
+create/edit/delete of own roles lives, ~lines 1850-1980):
+- Per own company role row/editor: a "Map to canonical role" panel.
+  - Mapped state: shows canonical title + source pill + "Unmap" button.
+  - Unmapped: "Find canonical match" -> opens match list; each suggestion is a
+    card row (title, source pill, confidence label + bar, explanation) with a
+    Confirm button; "Confirm" posts the mapping; "Change" shows the list again;
+    "Unmap" clears. Low-confidence roles show the honest empty state
+    ("No close canonical match — this role stays as-is.") — consistent with D2.
+- Accessible: buttons have aria-labels, list is a <section aria-label="Canonical
+  role mapping">, focus is moved into the panel on open; keyboard reachable.
+- Styles in frontend/src/index.css under a `.rm-*` prefix (reusing existing
+  card/chip/button tokens); responsive at <=640px.
+- frontend/src/lib/types.ts + api.ts: RoleMappingMatch / RoleMapping / events,
+  api.canonicalMatches / api.setCanonicalMapping / api.mappingHistory;
+  add the two fields to the RoleRecord shape when the API returns them.
+
+======================================================================
+7. TESTS
+======================================================================
+NEW backend/tests/test_role_canonical_mapping_phaseF.py (~16):
+ migration fresh + legacy-row-preserve + FK ON DELETE SET NULL + idempotent +
+ rollback-safe;
+ confidence tiers (High/Medium/Low) + floor exclusion (below floor -> no
+ suggestions AND POST to a low-conf role rejects 400);
+ ambiguous-title: two similar canonical roles -> both presented, none auto-linked;
+ confirm persists mapped link + exactly one 'mapped' event with actor + ts;
+ change mapping appends 'changed' event (from->to recorded), re-confirm no-dup;
+ unmap keeps the local role row + students.target_role_id still pointing at it,
+ appends 'unmapped' event;
+ title/description/required_skills byte-identical after map AND unmap (D1);
+ company vs canonical skills distinguishable via role_skill_sources (D3);
+ authorization matrix: owner 200, other-company 403, student 403, guest 401
+ (all three endpoints);
+ cannot map a reference/canonical role to another role (400), cannot self-map
+ (400), cannot map to inactive/deprecated canonical (400);
+ compatibility: list_roles / list_feed_roles / candidates / job feed unchanged,
+ additive fields only.
+Frontend: tsc --noEmit, vite build clean, source-contract checker
+ frontend/scripts/check-company-mapping-phaseF.mjs + backend runtime wrapper
+ (established pattern), Puppeteer smoke on live server.
+
+======================================================================
+8. ORDER / SLICES
+======================================================================
+Slice F1: migration 0005 + models.set_mapping/mapping_history + migration/
+          audit tests.
+Slice F2: role_mapping.suggest_matches + confidence/ambiguity/floor tests.
+Slice F3: three endpoints + ownership/validation tests + additive fields on
+          GET /api/roles/{id} and provenance.
+          Run full backend suite (expect 907 + ~16 = ~923, 0 regressions).
+Slice F4: frontend types/api + confirmation panel + contract checker +
+          tsc + vite build.
+Slice F5: deploy gate — copy-DB dry-run (row preservation), user approval,
+          backup live DB, restart :8000, live smoke (hr@northstar.com),
+          AGENTS.md Phase F section.
+
+======================================================================
+9. DO-NOT list (hard)
+======================================================================
+- Do NOT auto-map, auto-suggest-confirm, or write any suggestion to the DB.
+- Do NOT call update_role / rewrite skills / delete anything during mapping.
+- Do NOT put confidence numbers in "explanation" that are not the real score.
+- Do NOT expose another company's roles or mapping state (403).
+- Do NOT remove providers/routes; phase is purely additive.
+- Do NOT touch .env or print secrets.
+
+======================================================================
+Acceptance: backend full suite green (no regressions), tsc + vite build clean,
+contract checker green, browser smoke on live, live deploy after explicit
+user approval, AGENTS.md updated.
+======================================================================

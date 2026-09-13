@@ -17,7 +17,7 @@ def _deterministic(monkeypatch):
     """Lock generation into the deterministic fallback and keep jobs offline."""
     monkeypatch.setattr(genai, "genai_enabled", lambda: False)
     monkeypatch.setattr(jobs_mod, "_fetch_all", lambda *a, **k: [])
-    jobs_mod._cache.update({"at": 0.0, "key": "", "data": None})
+    jobs_mod.clear_job_cache()
 
 
 def _capture_complete(monkeypatch):
@@ -212,3 +212,100 @@ def test_phase5_preference_and_chat_still_work(client, student_id, auth_headers,
     r = _set_pref(client, student_id, h, {"tutor_id": "sarah", "mode": "chat"})
     assert r.status_code == 400
     assert models.get_tutor_preference(student_id) == "axel"
+
+
+# ------------------------------------------------------------------ stored 'interview' never hijacks a fresh chat
+
+def test_stored_interview_preference_never_hijacks_chat_without_explicit_mode(client, student_id, auth_headers, monkeypatch):
+    _capture_complete(monkeypatch)
+    h = auth_headers("aisha@student.edu")
+    _set_pref(client, student_id, h, {"tutor_id": "vex", "mode": "interview"})
+    assert models.get_tutor_mode(student_id) == "interview"
+    # a fresh chat with NO explicit mode must land on the persona default (chat),
+    # not auto-route into an interview framing
+    r = _tutor(client, student_id, h)
+    assert r.status_code == 200
+    assert r.json()["mode"] == "chat"
+    # the stored preference itself is untouched by the mode resolution
+    got = client.get(f"/api/students/{student_id}/tutor/preference", headers=h).json()
+    assert got["tutor_id"] == "vex" and got["mode"] == "interview"
+
+
+def test_explicit_body_interview_still_wins_over_stored_preference(client, student_id, auth_headers, monkeypatch):
+    _capture_complete(monkeypatch)
+    h = auth_headers("aisha@student.edu")
+    _set_pref(client, student_id, h, {"tutor_id": "vex", "mode": "interview"})
+    # the user explicitly selecting Interview still gets the interview engine
+    r = _tutor(client, student_id, h, {"mode": "interview"})
+    assert r.status_code == 200 and r.json()["mode"] == "interview"
+    # other explicit modes are likewise unaffected by a stored interview pref
+    for mode in ("chat", "practice", "discuss"):
+        r = _tutor(client, student_id, h, {"mode": mode})
+        assert r.status_code == 200 and r.json()["mode"] == mode, (mode, r.text)
+
+
+def test_vex_chat_payload_never_touches_interview_engine(client, student_id, auth_headers, monkeypatch):
+    """Regressed live bug: a fresh Vex chat sent mode='interview' (the UI hit
+    this route with the interview default) and got interview framing. The fixed
+    frontend sends mode='chat' for Vex (TUTOR_DEFAULT_MODES.vex = 'chat'), so
+    that exact payload must go through the normal chat path and must never
+    reach the interview engine — even when a stale preference still says
+    vex/interview on disk.
+    """
+    captured = _capture_complete(monkeypatch)
+    h = auth_headers("aisha@student.edu")
+    _set_pref(client, student_id, h, {"tutor_id": "vex", "mode": "interview"})
+    assert models.get_tutor_mode(student_id) == "interview"
+
+    def _boom(*a, **k):
+        raise AssertionError("interview engine must not be called for a Vex chat payload")
+
+    monkeypatch.setattr(genai, "interview_reply", _boom)
+    r = client.post(f"/api/students/{student_id}/tutor",
+                    json={"message": "hello", "tutor_id": "vex", "mode": "chat",
+                          "skill_id": None, "page": "dashboard", "competency": None,
+                          "job_title": None, "job_url": None, "language": "auto"},
+                    headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["mode"] == "chat"
+    # a pure greeting is answered deterministically by the persona — no provider
+    # prompt, and the interview engine is never called (chat path preserved)
+    assert captured == {}
+    assert r.json()["reply"] == genai._GREETING_EN["vex"]
+    assert "mock interview coach" not in r.json()["reply"].lower()
+
+
+def test_vex_explain_then_quiz_is_plain_chat_not_interview(client, student_id, auth_headers, monkeypatch):
+    """Pins the expected Vex chat answer shape for 'Explain X then quiz me':
+    Vex must explain first and then ask a question about the named topic —
+    never flip it into an interviewer asking the STUDENT to explain.
+    """
+    captured = _capture_complete(monkeypatch)
+    h = auth_headers("aisha@student.edu")
+    question = "Explain DNS, then ask me one question about what you just explained."
+    r = client.post(f"/api/students/{student_id}/tutor",
+                    json={"message": question, "tutor_id": "vex", "mode": "chat",
+                          "skill_id": None, "page": "dashboard", "competency": None,
+                          "job_title": None, "job_url": None, "language": "auto"},
+                    headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["mode"] == "chat"
+    # not the interview scaffolding, and the chat prompt carries the DNS topic
+    assert "mock interview coach" not in captured["system"]
+    assert "DNS" in captured["user"] or "DNS" in question
+    # the follow-up-request instruction stays: test question about the named topic
+    assert "the test question must be about the topic they named" in captured["user"]
+
+
+def test_browser_what_is_2_plus_2_answers_4(client, student_id, auth_headers, monkeypatch):
+    """B2 acceptance with the exact fixed-frontend payload: 'what is 2+2?'
+    must be answered with the literal number 4, never a counter-question."""
+    _capture_complete(monkeypatch)
+    h = auth_headers("aisha@student.edu")
+    r = client.post(f"/api/students/{student_id}/tutor",
+                    json={"message": "what is 2+2?", "tutor_id": "vex", "mode": "chat",
+                          "skill_id": None, "page": "dashboard", "competency": None,
+                          "job_title": None, "job_url": None, "language": "en"},
+                    headers=h)
+    assert r.status_code == 200, r.text
+    assert "2 + 2 = 4" in r.json()["reply"]

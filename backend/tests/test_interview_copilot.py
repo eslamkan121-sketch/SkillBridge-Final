@@ -26,7 +26,7 @@ def _deterministic(monkeypatch):
     """Lock generation into the deterministic fallback and keep jobs offline."""
     monkeypatch.setattr(genai, "genai_enabled", lambda: False)
     monkeypatch.setattr(jobs_mod, "_fetch_all", lambda *a, **k: [])
-    jobs_mod._cache.update({"at": 0.0, "key": "", "data": None})
+    jobs_mod.clear_job_cache()
 
 
 def _capture_complete(monkeypatch):

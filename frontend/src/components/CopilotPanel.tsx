@@ -3,14 +3,21 @@ import Markdown from 'react-markdown'
 import { useApp } from '../AppContext'
 import { api } from '../lib/api'
 import type { LearningItem, TutorMessage, TutorMode } from '../lib/types'
-import { TUTOR_PROFILES, TutorAbout, TutorSelector } from './learning'
+import { TUTOR_PROFILES, TutorAbout } from './learning'
 import type { TutorId } from '../lib/tutorProfiles'
 import { effectiveLanguage, LANGUAGE_LABELS, LANGUAGE_SHORT, quickActionsFor, TUTOR_LANGUAGES, tutorUi } from '../lib/tutorI18n'
 import { useBrowserSpeech } from '../hooks/useBrowserSpeech'
-import { IconBack, IconChat, IconChevron, IconCollapse, IconExpand, IconLock, IconMic, IconPlus, IconSend, IconStop, IconTrash, IconTutor, IconVolume } from './Icons'
+import { IconBack, IconBackRTL, IconChat, IconChevron, IconCollapse, IconExpand, IconLock, IconMic, IconPlus, IconSend, IconSendRTL, IconStop, IconTrash, IconTutor, IconVolume } from './Icons'
 
 function SafeMarkdown({ children }: { children: React.ReactNode }) {
   return <Markdown>{String(children ?? '')}</Markdown>
+}
+
+const ARABIC_RE = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/
+function messageDir(text: string): 'rtl' | 'ltr' {
+  const ar = (text.match(ARABIC_RE) || []).length
+  const en = (text.match(/[A-Za-z]/g) || []).length
+  return ar > 0 && ar >= en ? 'rtl' : 'ltr'
 }
 
 const PAGE_LABELS: Record<string, string> = {
@@ -33,7 +40,7 @@ interface InterviewItem {
 type InterviewVoiceState = 'interviewer_speaking' | 'student_ready' | 'student_listening' | 'processing'
 
 export function CopilotPanel() {
-  const { session, copilot, tutorId, setTutorId, mode, setMode, language, setLanguage, assessmentActive, interview, startInterview, sendInterviewAnswer, endInterview, resetInterview } = useApp()
+  const { session, copilot, tutorId, mode, setMode, language, setLanguage, assessmentActive, interview, startInterview, sendInterviewAnswer, endInterview, resetInterview } = useApp()
   const studentId = session?.student?.id ?? 0
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -68,6 +75,7 @@ export function CopilotPanel() {
   const tutor = TUTOR_PROFILES.find((t) => t.id === tutorId) || TUTOR_PROFILES[0]
   const lang = effectiveLanguage(language, lastReply)
   const ui = tutorUi(lang)
+  const greetingText = ui.greeting.replace('{name}', tutor.name).replace('{purpose}', tutor.purpose)
   const interviewLang: 'en' | 'ar' = interview.language === 'ar' ? 'ar' : 'en'
   const selectedInterviewLang: 'en' | 'ar' = language === 'ar' ? 'ar' : 'en'
 
@@ -308,6 +316,10 @@ export function CopilotPanel() {
     setInterviewVoiceState('student_ready')
     setTypedFallbackOpen(false)
     if (interview.phase === 'active' || interview.phase === 'starting') endInterview()
+    // Restore the tutor's working mode exactly like Return to Chat, so a
+    // message sent after ending the interview stays a normal chat and can
+    // never ride a leftover 'interview' mode into the /tutor payload.
+    setMode(prevModeRef.current === 'interview' ? 'chat' : prevModeRef.current)
   }
 
   const leaveInterview = () => {
@@ -461,12 +473,17 @@ export function CopilotPanel() {
             </div>
           </div>
 
+          {/* Normal chat shows ONLY the currently selected mentor. The other
+              mentors appear only in the dedicated change-mentor UI
+              (account menu → Change your copilot). */ }
           <div className="copilot-tutors">
-            <TutorSelector selected={tutorId} onSelect={setTutorId} compact disabled={interviewLocked} />
-            <div className="copilot-current">
-              <strong>{tutor.name}</strong>
-              <small>{tutor.origin} · {tutor.specialty}</small>
-              <small className="copilot-current-traits">{tutor.traits.slice(0, 3).join(' · ')}</small>
+            <div className="copilot-current-row">
+              <img className="copilot-current-avatar" src={tutor.avatar} alt={tutor.name} />
+              <div className="copilot-current">
+                <strong>{tutor.name} · {ui.copilotBar}</strong>
+                <small>{tutor.origin} · {tutor.specialty}</small>
+                <small className="copilot-current-traits">{tutor.traits.slice(0, 3).join(' • ')}</small>
+              </div>
             </div>
           </div>
 
@@ -526,7 +543,7 @@ export function CopilotPanel() {
             <div className="copilot-about-wrap">
               <div className="copilot-about-back">
                 <button type="button" onClick={() => setAboutOpen(false)}>
-                  <IconBack size={14} /> {ui.backToChat}
+                  {lang === 'ar' ? <IconBackRTL size={14} /> : <IconBack size={14} />} {ui.backToChat}
                 </button>
               </div>
               <TutorAbout tutor={tutor} />
@@ -559,12 +576,12 @@ export function CopilotPanel() {
                 <>
                   <div className="tutor-messages copilot-messages" ref={scrollRef}>
                     {interview.phase === 'starting' && (
-                      <div className="msg assistant">
+                      <div className="msg assistant" dir={messageDir(ui.startingInterview)}>
                         <div className="md-body"><em>{ui.startingInterview}</em></div>
                       </div>
                     )}
                     {interviewItems.map((item) => (
-                      <div key={item.id} className={`msg ${item.kind === 'answer' ? 'user' : 'assistant'} copilot-interview`}>
+                      <div key={item.id} className={`msg ${item.kind === 'answer' ? 'user' : 'assistant'} copilot-interview`} dir={messageDir(item.text)}>
                         <span className={`copilot-interview-tag ${item.kind}`}>
                           {item.kind === 'question' ? ui.questionTag : item.kind === 'answer' ? ui.youTag : ui.feedbackTag}
                         </span>
@@ -646,10 +663,11 @@ export function CopilotPanel() {
                             value={interviewInput}
                             onChange={(e) => setInterviewInput(e.target.value)}
                             placeholder={ui.typedAnswerPlaceholder}
+                            dir="auto"
                             aria-label={ui.submitTypedAnswer}
                           />
                           <button type="submit" className="btn btn-primary" disabled={busy || !interviewInput.trim() || !studentId} aria-label={ui.submitTypedAnswer}>
-                            <IconSend size={15} />
+                            {lang === 'ar' ? <IconSendRTL size={15} /> : <IconSend size={15} />}
                           </button>
                         </form>
                       )}
@@ -677,14 +695,14 @@ export function CopilotPanel() {
                 <>
                   <div className="tutor-messages copilot-messages" ref={scrollRef}>
                     {messages.length === 0 && (
-                      <div className="msg assistant">
+                      <div className="msg assistant" dir={messageDir(greetingText)}>
                         <div className="md-body">
-                          {ui.greeting.replace('{name}', tutor.name).replace('{purpose}', tutor.purpose)}
+                          {greetingText}
                         </div>
                       </div>
                     )}
                     {messages.map((message) => (
-                      <div key={message.id} className={`msg ${message.role}`}>
+                      <div key={message.id} className={`msg ${message.role}`} dir={messageDir(message.content)}>
                         <div className="md-body">
                           {message.role === 'assistant' ? <SafeMarkdown>{message.content}</SafeMarkdown> : message.content}
                         </div>
@@ -717,6 +735,7 @@ export function CopilotPanel() {
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                       placeholder={ui.askPlaceholder.replace('{name}', tutor.name)}
+                      dir="auto"
                       aria-label={ui.sendAria}
                     />
                     <button
@@ -730,7 +749,7 @@ export function CopilotPanel() {
                       {speech.listening && micTarget === 'chat' ? <IconStop size={15} /> : <IconMic size={15} />}
                     </button>
                     <button type="submit" className="btn btn-primary" disabled={busy || !input.trim() || !studentId} aria-label={ui.sendAria}>
-                      <IconSend size={15} />
+                      {lang === 'ar' ? <IconSendRTL size={15} /> : <IconSend size={15} />}
                     </button>
                   </form>
                   {(speech.listening || speech.error) && micTarget === 'chat' && (

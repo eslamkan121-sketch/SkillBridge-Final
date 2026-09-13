@@ -1,0 +1,223 @@
+PHASE E — VERSIONED ESCO IMPORT AND REFRESH SERVICE
+====================================================
+
+Scope
+-----
+Build a controlled, versioned ESCO import/refresh service on top of the Phase D
+canonical role model. Source metadata is persisted, refreshes are dry-run first
+then explicitly applied, deprecations are mapped without deleting or rewriting
+history, and everything works fully offline in tests against recorded,
+sanitized fixtures. Nothing imports live data automatically (in particular, NO
+live import at startup).
+
+Existing behaviour (constraints, unchanged)
+-------------------------------------------
+- backend/app/escoe.py is a live, cached, keyless ESCO client used by the
+  student-facing flows. It hardcodes language="en", sends NO version pin, and
+  queries exactly two public endpoints:
+    GET https://ec.europa.eu/esco/api/search
+       params {text, type=occupation, language=en}        (titles + isco code)
+    GET https://ec.europa.eu/esco/api/resource/occupation
+       params {uri, language=en}                          (description + skills)
+  It appears NOT to send selectedVersion today, so it implicitly assumes ESCO's
+  server default. Its in-memory caches are one query slot + one skill-set slot,
+  30-minute TTL. Unreachable ESCO degrades to empty lists / an honest
+  "unavailable" message (never a dropped request).
+- Routes that consume it (must keep working, unchanged):
+    GET  /api/roles/esco-market                 main.py:636
+    POST /api/students/{id}/target-role/esco    main.py:842  -> recommendations.select_esco_role (recommendations.py:441)
+                                                     -> models.import_esco_role (models.py) — Phase D canonical import
+- Recommendations pull ESCO skill tops via escoe.market_occupations_for_skills
+  (recommendations.py:255/316) — untouched.
+- models.import_esco_role(uri, title, essential, optional) is already idempotent
+  on URI, records skill provenance, aliases, ISCO codes, and canonical fields.
+  In Phase D, ESCO rows keep source_version NULL and no import imprint.
+- University-Admin-only endpoints already exist (authz helper `_require_roles(user, "University Admin")`).
+
+Provenance / version persistence today: roles.source_version (nullable), roles.fetched_at/imported_at/updated_at, role_skill_sources(source_uri, provenance 'esco'|'catalog'|'company'), role_aliases, role_isco_codes.
+
+Requirements -> design mapping
+------------------------------
+R1  Pin/configure an explicit ESCO version
+    ESCO_VERSION env (default "1.2.0", a published ESCO release; operator overrides it).
+    The managed client sends it as the API's selectedVersion parameter on every
+    call. The effective version is stored per run and per applied role
+    (roles.source_version), and a config-drift guard refuses to apply a preview
+    whose version/language no longer match the configured values.
+R2  Search by preferred/alternative title AND stable URI
+    Adapter contract supports both fetch_by_uri(uri, lang) and search(text, lang).
+    ESCO search matches preferred AND alternative titles; both paths normalise to
+    the same record shape, so alternative-title results land as role_aliases.
+R3  Normalize upstream payloads behind ONE adapter contract
+    esco_import.EscoOccupation dataclass: uri, title, alt_titles, hidden_titles,
+    code (ISCO unit group), description, essential, optional, parent_uri,
+    language. All upstream shapes (search result vs resource payload) fold into
+    this within adapters.py — app code never reads raw ESCO JSON.
+R4  Persist source version, language, timestamps, provenance
+    Migration 0004 (additive, below). Run metadata + per-uri change records +
+    roles.source_language + roles.import_imprint. Provenance continues via
+    role_skill_sources and the Phase D provenance reader.
+R5  Dry-run showing add/change/deprecate/conflict counts
+    POST preview -> persists a dry_run run + per-uri `esco_import_changes` rows
+    with action in {add, change, deprecate, supersede, conflict, noop, unmanaged}
+    and reasons. No row is mutated during preview.
+R6  Explicit apply action
+    POST apply accepts ONLY a previewed run id (which locks the exact
+    version+language+uri/query set). Applying is the single mutation point;
+    there is no other path that imports live ESCO into the catalogue. Manual,
+    admin-gated, never automatic.
+R7  Never delete local roles or historical references
+    Apply never issues DELETE for roles/skills/aliases/codes. Deprecation only
+    flips roles.canonical_status to 'deprecated'. A student's existing
+    target_role_id that points at a deprecated role is left intact (history not
+    rewritten); recommendations already gate such roles out via
+    _ACTIVE_ROLE_CLAUSE, so behaviour is consistent.
+R8  Map deprecations/supersessions without rewriting history
+    A managed occupation absent at the new pinned version: if the new version
+    exposes EXACTLY ONE occupation with the same normalized title in the same
+    family, propose 'supersede' (superseded_by_role_id = that new role, which is
+    imported if new); otherwise propose 'deprecate' (canonical_status only). We
+    invent no replacement where ESCO does not clearly provide one.
+R9  Cache source data with TTL + safe stale-data fallback
+    Managed adapter keeps an in-memory bounded LRU {version lang uri/text -> data}
+    with TTL (reuse 30 min). On a fresh-fetch failure, expired-but-present data
+    MAY be returned flagged stale=True; status endpoint and preview annotate
+    stale hits so they are never mistaken for fresh. Cache is cleared before a
+    managed run and evicted over a size cap.
+R10 Bound timeouts, pagination, retries, import size
+    httpx timeout 8s (matches escoe.py), 2 retries with 0.5s backoff for
+    5xx/timeout, 429 honored. Search paginates hun pages of 30 via offset/limit;
+    per-run maximum occupations = ESCO_IMPORT_MAX_OCCUPATIONS (default 250).
+R11 Redact config / never log sensitive user queries
+    The service never receives CV text, emails, or tokens. It logs catalogue-
+    level identifiers only (uri/title/version/counts). Error messages are
+    sanitized to status codes (no URLs/query strings). A test asserts nothing
+    sensitive lands in logs/caplog.
+R12 Offline tests via recorded sanitized fixtures
+    backend/tests/fixtures/esco/ ships sanitized recorded payloads covering two
+    versions (v1.2.0, v1.2.1) and two languages (en, fr), plus malformed-payload
+    fixtures. A FixtureTransport resolves version+language+uri/text deterministically;
+    tests run entirely offline. Live transport is exercised only by hand/manual.
+
+Schema changes — migration 0004 (additive; base 0003)
+------------------------------------------------------
+ALTER TABLE roles ADD COLUMN source_language TEXT DEFAULT NULL;
+ALTER TABLE roles ADD COLUMN import_imprint      TEXT DEFAULT NULL;
+
+CREATE TABLE esco_import_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  mode TEXT NOT NULL DEFAULT 'dry_run',            -- dry_run | apply
+  status TEXT NOT NULL DEFAULT 'running',          -- running|succeeded|failed
+  version TEXT NOT NULL,
+  language TEXT NOT NULL DEFAULT 'en',
+  triggered_by_user_id INTEGER,                    -- NULL-safe; no FK on users? use FK if users table keyed
+  previewed_run_id INTEGER REFERENCES esco_import_runs(id),  -- apply -> its dry_run
+  started_at TEXT NOT NULL, finished_at TEXT, error TEXT,
+  stats_json TEXT NOT NULL DEFAULT '{}',
+  CHECK (mode IN ('dry_run','apply')),
+  CHECK (status IN ('running','succeeded','failed'))
+);
+CREATE TABLE esco_import_changes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id INTEGER NOT NULL REFERENCES esco_import_runs(id) ON DELETE CASCADE,
+  uri TEXT NOT NULL,
+  title TEXT,
+  action TEXT NOT NULL,                            -- add|change|deprecate|supersede|conflict|noop|unmanaged
+  role_id INTEGER REFERENCES roles(id) ON DELETE SET NULL,
+  reason TEXT,
+  detail_json TEXT
+);
+CREATE INDEX idx_esco_import_changes_run ON esco_import_changes(run_id);
+CREATE INDEX idx_esco_import_runs_mode ON esco_import_runs(mode);
+
+Migration list becomes [0001, 0002, 0003, 0004]; existing tests that assert the
+list/db-status entries (test_migrations_phaseB, test_auth_sessions_phaseC) get
+the same mechanical update already used in Phase D. Fresh DB and copied existing
+DB both migrate.
+
+New module: backend/app/esco_import.py
+--------------------------------------
+- EscoOccupation dataclass + EscoAdapter (transport-injected).
+- LiveTransport: httpx, selectedVersion, language, offset/limit, timeouts,
+  retries/backoff/429, bounded pagination via iter_search(text) generator.
+- FixtureTransport: offline, deterministic over backend/tests/fixtures/esco/.
+- Imprint helpers: hash of (title, family, normalized_title, parent_uri,
+  sorted skills, sorted aliases incl. hidden, sorted ISCO codes) — recomputable
+  from the DB, so change detection compares current DB imprint vs the imprint
+  the new upstream data would produce (no hidden state).
+- Compare/plan engine: classify each fetch result and each existing managed row
+  into the action set above; produce run + change records.
+- Apply executor: single writer, idempotent, deprecates/supersedes only managed
+  rows (source='esco' AND import_imprint IS NOT NULL), never deletes, writes
+  source_version/source_language/import_imprint, records skill provenance, sets
+  roles.updated_at.
+- Conflict rule: an applied-ish managed row whose roles.updated_at > roles.imported_at
+  (edited outside the import) or is_local_authoring=1 is a target of 'change' ->
+  reclassified 'conflict'; apply SKIPS it with a reason (local edits never
+  overwritten).
+- Models glue: extend models.import_esco_role with optional language + imprint;
+  add models for runs/changes read/write. Backward-compatible keyword defaults
+  so the existing student target-role flow is untouched.
+
+API (all University Admin only, mirroring _require_roles(user, "University Admin"))
+-----------------------------------------------------------------------------------
+GET  /api/system/esco/status   -> configured version/language, last run summary,
+       scores of ESCO roles in catalogue, cache age, esco-market health;
+       ESCO unreachable -> honest "unavailable" (same degraded style as esco-market).
+POST /api/system/esco/preview  -> body {uris?: [...], query?: str, language?: str}
+       bounded by RSS/read-only; persists dry_run run + change rows; returns counts.
+POST /api/system/esco/apply    -> body {preview_run_id: int}; applies exactly that
+       previewed set; failure/shortcircuit on config drift; persists apply run.
+No startup call, no automatic scheduler, no UI in E (frontend for admins can be
+a later phase; existing student/company UI is untouched).
+
+Compatibility & rollback
+------------------------
+- Additive columns/rows only; existing routes/providers/env untouched; nothing
+  reads source_language/import_imprint for behaviour yet (search semantics and
+  recommendation scoring identical).
+- escoe.py (live student-facing client) is NOT modified by this phase.
+- Rollback: reverting migration 0004 + dropping the two new columns is lossless
+  for every pre-existing feature (imprint/language are import-only metadata).
+
+Failure handling
+----------------
+- Network failure: mark fetch failed -> use stale cache only if TTL-expired data
+  exists (flagged stale), else fail the run honestly ({status:'failed', error}).
+  Never leave a partially-applied half: apply is transactional per run (single
+  transaction; on exception the run rows update to 'failed' and the DB rolls
+  back). A student-facing flow that hits ESCO still degrades exactly as today.
+- Malformed payload: adapter raises -> run failed with sanitized reason.
+- Config drift / version mismatch between preview and apply: apply refuses.
+
+Test plan (all offline via FixtureTransport)
+--------------------------------------------
+- pagination: >30 occupations across pages are walked; page budget enforced.
+- aliases: altLabels/hiddenLabels -> role_aliases incl. hidden alias type; duplicate rejection.
+- multiple languages: same uri under en+fr fixtures -> source_language, alt titles per language.
+- version pinning: preview/apply persist effective version; roles.source_version set; drift guard refuses stale previews.
+- dry run: correct counts; byte-for-byte DB fingerprint unchanged before/after.
+- repeat import: already-applied set returns all-noop; no skill/chore rows duplicated.
+- changed upstream data: v1.2.0 vs v1.2.1 fixtures -> change rows; apply updates skills/aliases; imprint refreshed.
+- deprecation: removed occupation -> 'deprecated', row retained, student references intact.
+- supersession: exact single-title successor -> 'supersede' with superseded_by_role_id.
+- network failure: raising transport -> run failed / stale fallback flagged; no partial writes.
+- malformed payload: malformed fixture -> run failed with sanitized reason.
+- redaction: caplog asserts no uri/query/title-bearing sensitive content beyond allowed catalogue identifiers.
+- authorization: students/companies blocked from all three new endpoints.
+- compatibility: existing esco-market, target-role/esco, list_roles search, catalog search, and recommendation tests still pass.
+
+Approval slices (implemented in order after this plan is approved)
+-----------------------------------------------------------------
+1. Adapter + transports + fixtures + config + tests (pagination, aliases, languages, malformed, network failure).
+2. Migration 0004 + run/change storage + preview/plan engine + dry-run tests (incl. version pinning, repeat import).
+3. Apply executor + deprecate/supersede/conflict + status endpoint + compat search tests + full suite + real-DB dry-run + deploy gate.
+
+Definition of done for this phase
+---------------------------------
+- No live ESCO call occurs during any automated test.
+- No production import happens at startup or on read endpoints.
+- Every managed refresh is previewed (dry run) before an explicit apply.
+- Deprecations touch canonical_status only; nothing is deleted; history preserved.
+- All existing routes/providers/env names preserved; no secrets logged; no new deps.
+- Backend suite (859 expected) green on fresh and copied databases.

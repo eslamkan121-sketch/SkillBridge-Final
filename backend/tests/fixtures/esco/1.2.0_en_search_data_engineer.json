@@ -1,0 +1,37 @@
+{
+  "_meta": {
+    "note": "Recorded, sanitized ESCO search payload (v1.2.0, en). Real result shape; values are placeholder occupation metadata, no secrets.",
+    "endpoint": "GET https://ec.europa.eu/esco/api/search",
+    "params": {"text": "data engineer", "type": "occupation", "language": "en", "selectedVersion": "1.2.0"}
+  },
+  "results": [
+    {
+      "uri": "http://data.europa.eu/esco/occupation/174b1a5b-f93b-4d5e-b2b2-c6a2a5c9d001",
+      "title": "Data engineer",
+      "code": "2511.3",
+      "preferredLabel": {"@language": "en", "@value": "Data engineer"},
+      "altLabels": [
+        {"@language": "en", "@value": "Engineer (data)"},
+        {"@language": "en", "@value": "Data engineering consultant"}
+      ],
+      "hiddenLabels": [{"@language": "en", "@value": "LE data engineer"}],
+      "broaderIscoGroup": {"uri": "http://data.europa.eu/esco/isco/2511", "code": "2511"}
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/286c2b6c-a04c-5e6f-c3c3-d7b3b6dae112",
+      "title": "Big data specialist",
+      "code": "2512.9",
+      "preferredLabel": {"@language": "en", "@value": "Big data specialist"},
+      "altLabels": [{"@language": "en", "@value": "Big data consultant"}],
+      "hiddenLabels": []
+    },
+    {
+      "uri": "http://data.europa.eu/esco/occupation/397d3c7d-b15d-6f70-d4d4-e8c4c7ebf223",
+      "title": "Data scientist",
+      "code": "2512.0",
+      "preferredLabel": {"@language": "en", "@value": "Data scientist"},
+      "altLabels": [{"@language": "en", "@value": "Data science analyst"}]
+    },
+    {"uri": "", "title": "no-uri row must be skipped"}
+  ]
+}

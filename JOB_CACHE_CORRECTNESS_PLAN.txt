@@ -1,0 +1,144 @@
+JOB CACHE CORRECTNESS PLAN (Phase G)
+====================================
+
+Goal (guide lines 409-435): audit + repair job caching so users, roles, markets,
+filters, pages and providers cannot overwrite or reuse incompatible results;
+bound memory; dedup concurrent fetches; protect against races; distinguish
+fresh/cached/stale/unavailable; keep provider failure request-safe; never leak
+private ranking metadata across users.
+
+THE AUDIT (current `jobs.py` faults)
+------------------------------------
+1. SINGLE-SLOT CACHE.  `_cache = {"at", "key", "data"}` holds exactly ONE entry
+   globally. User A ("dentist/ae") and user B ("data analyst/eg") eject each
+   other; concurrent users flip-flop the entry (line 383, read 2452, write 2404).
+2. INCOMPLETE CANONICAL KEY (line 2444).  Includes skill NAMES only (sorted) —
+   drops each skill's LEVEL and VERIFIED flag — plus role/country/city/
+   requisites/market.  But:
+   - `_student_seniority(skill_levels)` and the reranker's `verified_skills`
+     are inputs to ranking, so two users with identical skill names but
+     different levels/verification share a key yet would get different
+     rankings => INCOMPATIBLE REUSE (privacy-adjacent + correctness bug).
+   - `limit` slices the payload (2454, 2384) but is NOT in the key.
+   - No provider-set / algorithm config version => env/config changes can
+     silently reuse rows computed under old settings.
+3. RACE ON RESET.  Every build resets the GLOBAL `_provider_status` dict at
+   start (2335-2337) while concurrent builds read it => one request's provider
+   failure/status can corrupt another's payload (2359 `_any_provider_ok()`,
+   2390-2399 providers list) and the health snapshot.
+4. NO FRESHNESS VOCABULARY.  Only `source: live|empty|unavailable` inside data.
+   No stale-fallback; an expired entry is treated as a plain miss (unavailable)
+   with no distinction between "stale but usable" and "never fetched".
+5. BUFFER-BOUND MISSING.  No cap on cache size (today 1 slot; with a dict we
+   bound it). Lazy expiry is possible; a hard LRU cap is required.
+6. `_bg_fetching` check+add (2470-2473) is NOT atomic under `_lock` => two
+   threads can both kick a background fetch for the same key.
+
+THE PLAN (slices, each landing green then stopping for review)
+----------------------------------------------------------------
+
+SLICE G1 — Canonical key + bounded LRU/TTL cache
+  - `_cache_tag()` = "jobs-cache-v1" (module-level constant that embedders bump
+    whenever provider set / env semantics / ranking change).  Any future bump
+    orphans old rows (they simply miss and rebuild).
+  - `_cache_key(skills, role, country, city, requisites, market, limit)`:
+    deterministic, secret-free, sorted:
+      skills   -> "|".join(sorted(f"{name.lower()}:{level or '':{verified}"))
+      + role.lower() + normalised country + normalised city
+      + sorted requisites + normalised market + str(limit)
+      + "|" + tag
+    Never contains raw CV text, email, tokens or secrets.  Levels/verified ->
+    distinct entries => differing rankings never share a row.
+  - `_cache = OrderedDict()` LRU keyed by the canonical key; each entry
+    `{"at": float, "data": dict}`.  Access moves to front; insert past
+    `_CACHE_MAX_ENTRIES` (env `JOBS_CACHE_MAX_ENTRIES`, default 256) evicts the
+    oldest.  TTL = existing `JOBS_CACHE_TTL_SECONDS`.  `clear_job_cache()` test
+    helper added; the single-slot reset idiom is replaced across the ~9 tests
+    that used `_cache.update({...})`.
+  - `recent_jobs` recomputes the SAME key for cache read, `_bg_fetching`
+    dedup, and the returned data; `_sync` builds cache their result as today.
+
+SLICE G2 — Fresh / cached / stale_fallback / unavailable statuses
+  - Read path:
+      within TTL         -> "cached" (same payload + additive `status:"cached"`)
+      expired but present -> "stale_fallback": return last data with additive
+                             `status:"stale_fallback"` (never curated/demo
+                             jobs) AND kick a background refresh (unlike today).
+      absent             -> "unavailable": background fetch, empty `jobs` (as
+                             today, honest, never fallback jobs injected).
+  - Fresh build returns `status:"fresh"`.  The existing `source` field
+    (live/empty/unavailable) is preserved inside the payload for the UI; the
+    new `status` is additive and the frontend ignores unknown keys.
+  - Both "cached" and "stale_fallback" responses carry the same provider
+    report the build recorded (request-safe).
+
+SLICE G3 — Request-safe provider health + race-hardened dedup
+  - `_build_result` builds its OWN report dict (all `skipped`) — never resets
+    the shared global mid-flight.
+  - `_fetch_all(report=None)`: provider fetches record into the passed report
+    via a per-build thread-local set by a `ThreadPoolExecutor(initializer=...)`
+    (executor worker threads inherit the build's report); the cooldown-skip
+    branch (2331-2334) records into the same report.  `_record_status`/
+    `_skip_status` write to the active per-build report when present, ELSE the
+    global (keeps all existing direct-call tests and the health endpoint
+    meaningful).
+  - `_any_provider_ok(report)` now reads the build's OWN report (no global).
+    The payload `providers` list is built from the build's report — one
+    request's failure can never corrupt another's payload.
+  - At the END of each build, atomically (under `_lock`) commit the build's
+    report INTO `_provider_status` (observability snapshot = last completed
+    build; no mid-fetch flip-flop).  `_stats` counters stay cumulative + locked.
+  - `_bg_fetching` check+add for misses moves under `_lock` (atomic dedup).
+
+SLICE G4 — Deterministic tests (`test_job_cache_correctness_phaseG.py`)
+  All providers mocked via `_fetch_all` monkeypatch / recorder; no network.
+  - Key completeness: same names, different LEVELS -> different cached rows
+    (no incompatible reuse).  Verified vs unverified likewise.  Different
+    `limit` -> different rows.  Same key + different user id/email -> SAME row
+    served to both (results are a pure function of the key inputs) => no
+    private metadata in keys, no cross-user leak.
+  - Cross-user / cross-market isolation: AE vs EG, and two different profiles,
+    each keeps its own payload; request A's data is byte-identical on its own
+    second call (cache hit, no refetch).
+  - TTL: short TTL -> second read within window = "cached"; after expiry ->
+    "stale_fallback" returns prior data and triggers exactly one background
+    refresh; no entry at all -> "unavailable" + one background fetch; fresh
+    build -> "fresh".
+  - LRU bound: insert > max entries -> oldest evicted; TTL-expired rows are
+    lazily evicted on access/insert (memory stays bounded).
+  - Concurrency/dedup: N threads miss the same key simultaneously -> only ONE
+    fetch (count via recorder) and one `_bg_fetching` entry; N threads hit
+    different keys -> each returns its own payload, no cross-talk.
+  - Provider failure isolation: build A succeeds + build B's provider fails ->
+    A's payload keeps `ok`/counts, B's keeps the failure; `provider_status()`
+    health reflects the last COMPLETED build only.
+  - Privacy: a fake "CV secret" token threaded into inputs never appears in
+    any key or log line (assert on `repr` of keys and the cache dict); keys
+    carry no user id/email.
+  - No regression: cache-hit-returns-identical-payload proven again; existing
+    `_cache_key`/reset helpers in `test_jobs_features.py`, `test_jobs_expiry.py`
+    and the tutor/copilot copies updated to the new key/reset shape.
+
+SLICE G5 — Full suite + deploy gate (NO DB migration — memory-only)
+  - Run the full job suites + entire backend suite (expect baseline 927 + G4
+    tests, zero regressions).  `policy: stick to the guide`.
+  - Deploy = restart the live :8000 server (in-memory cache is cleared by
+    restart; nothing persisted, no schema change, no env/key touched).
+  - Live smoke: `/api/jobs?limit=...` for a real student returns a coherent
+    payload with `source` + (additive) `status`; repeated identical calls trip
+    from "fresh"->"cached"; provider-status endpoint stays secret-free.
+  - Pre-live backup of the DB still taken per house rule for rollback safety
+    (though this phase mutates no DB data).
+  - Append AGENTS.md Phase G section.
+
+KNOWN / DOCUMENTED-AS-NOT-APPLICABLE (guide 419): page / page_size / work-type /
+seniority are NOT inputs anywhere (no pagination or such filters exist in the
+feed or UI); the key includes every input that DOES change results, and the
+cache-tag guards provider-set/config changes — the plan will note this rather
+than invent dead parameters.
+
+APPROACH GATE: plan -> your approval -> slices G1..G4 (code+tests, each green)
+-> G5 full suite + deploy gate -> AGENTS.md update.  Do-not list: no provider
+removed, no env var renamed/removed, no key/token touched, no network calls in
+automated tests, no curated/demo jobs injected on miss, ranking stays a pure
+function of input dimensions (deterministic across users).

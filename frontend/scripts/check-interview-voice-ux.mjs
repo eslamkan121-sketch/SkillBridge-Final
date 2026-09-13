@@ -33,8 +33,8 @@ ok(/autoSpeakInterview\(`i-\$\{item\.id\}`,\s*feedback\)/.test(panel) &&
 ok(/api\.interviewTts\(studentId, tutorId, text\)/.test(panel),
    'Interview: selected tutorId is passed to interview TTS')
 ok(/interviewThreads/.test(panel) && /Record<TutorId, InterviewItem\[\]>/.test(panel) &&
-   /disabled=\{interviewLocked\}/.test(panel) && !/Use Vex|Vex \(recommended\)|\(recommended\)/.test(panel),
-   'Interview: tutor switching preserves the selected avatar voice/persona and never forces Vex')
+   !/TutorSelector/.test(panel) && !/Use Vex|Vex \(recommended\)|\(recommended\)/.test(panel),
+   'Interview: no in-panel tutor switching (avatar voice/persona is pinned) and never forces Vex')
 ok(/const finishInterview = \(\) => \{[\s\S]*speech\.stopListening\(\)[\s\S]*stopSpeak\(\)[\s\S]*endInterview\(\)/.test(panel),
    'Interview: End Interview stops listening and audio')
 ok(/setMode\(prevModeRef\.current === 'interview' \? 'chat' : prevModeRef\.current\)/.test(panel) &&

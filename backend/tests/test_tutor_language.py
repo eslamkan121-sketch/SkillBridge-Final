@@ -30,7 +30,7 @@ def _deterministic(monkeypatch):
     """Lock generation into the deterministic fallback and keep jobs offline."""
     monkeypatch.setattr(genai, "genai_enabled", lambda: False)
     monkeypatch.setattr(jobs_mod, "_fetch_all", lambda *a, **k: [])
-    jobs_mod._cache.update({"at": 0.0, "key": "", "data": None})
+    jobs_mod.clear_job_cache()
 
 
 def _capture_complete(monkeypatch):
@@ -274,8 +274,10 @@ def test_discuss_mode_arabic(client, student_id, auth_headers, monkeypatch):
 def test_interview_mode_arabic_via_copilot(client, student_id, auth_headers, monkeypatch):
     captured = _capture_complete(monkeypatch)
     h = auth_headers("aisha@student.edu")
-    _set_pref(client, student_id, h, {"tutor_id": "vex", "mode": "interview", "language": "ar"})
-    r = _tutor(client, student_id, h, {"turn": 3})
+    # Interview is opt-in per request; the preference pins tutor + language and
+    # the message explicitly selects the interview engine.
+    _set_pref(client, student_id, h, {"tutor_id": "vex", "mode": "chat", "language": "ar"})
+    r = _tutor(client, student_id, h, {"turn": 3, "mode": "interview"})
     assert r.status_code == 200 and r.json()["mode"] == "interview" and r.json()["language"] == "ar"
     assert has_arabic(r.json()["reply"])
     assert "mock interview coach" in captured["system"]
@@ -485,3 +487,71 @@ def test_english_chat_regression(client, student_id, auth_headers, monkeypatch):
     assert r.status_code == 200 and r.json()["language"] == "en" and r.json()["mode"] == "chat"
     assert not has_arabic(r.json()["reply"])
     assert "Working mode: CHAT." in captured["system"]
+
+
+# ------------------------------------------------------------------ Arabic current-learning identity echo (FAIL 3)
+#
+# Live regression: "أنا بتعلم إيه دلوقتي حسب SkillBridge؟" classified as
+# CURRENT_LEARNING, but the nemotron family answered with only the persona
+# identity line ("أنا Nova، مدرّبك الذكي في SkillBridge."). A content turn
+# must never resolve to a bare identity echo.
+
+def test_arabic_current_learning_question_classifies_current_learning():
+    context = (
+        "Dashboard context:\n"
+        "University: London University\n"
+        "Target career: Senior SOC Analyst\n"
+        "Recommended next step: work on 'Active Directory' next."
+    )
+    assert genai._classify_tutor_turn(
+        "أنا بتعلم إيه دلوقتي حسب SkillBridge؟",
+        skill_name=None,
+        target_role="Senior SOC Analyst",
+        student_context=context,
+    ) == "CURRENT_LEARNING"
+
+
+def test_arabic_current_learning_identity_echo_is_replaced_by_full_state(monkeypatch):
+    """The provider returning only the identity opening must be replaced by the
+    deterministic full-state answer: current learning (skill) + target role."""
+    def fake_complete(system, user, fallback=None, **kw):
+        assert "LANGUAGE LOCK" in system
+        return "أنا Nova، مدرّبك الذكي في SkillBridge."
+
+    monkeypatch.setattr(genai, "complete", fake_complete)
+    reply = genai.tutor_reply(
+        "أنا بتعلم إيه دلوقتي حسب SkillBridge؟",
+        "Dashboard context:\nTarget career: Cybersecurity Analyst\nRecommended next step: work on 'Active Directory' next.",
+        skill_name="Active Directory",
+        target_role="Cybersecurity Analyst",
+        tutor_id="nova",
+        mode="chat",
+        language="ar",
+    )
+    assert has_arabic(reply)
+    assert reply.strip() != "أنا Nova، مدرّبك الذكي في SkillBridge."
+    assert len(reply) > 60
+    assert "Active Directory" in reply and "Cybersecurity Analyst" in reply
+
+
+def test_endpoint_arabic_identity_echo_never_surfaces(client, student_id, auth_headers, monkeypatch):
+    """Same guard end-to-end: even when the provider (simulated) answers a
+    content question with the bare identity line, the /tutor endpoint returns
+    a real deterministic Arabic answer that is not that echo."""
+    def echo_complete(system, user, fallback=None, **kw):
+        return "أنا Nova، مدرّبك الذكي في SkillBridge."
+
+    monkeypatch.setattr(genai, "complete", echo_complete)
+    h = auth_headers("aisha@student.edu")
+    _set_pref(client, student_id, h, {"language": "ar"})
+    r = client.post(f"/api/students/{student_id}/tutor",
+                    json={"message": "أنا بتعلم إيه دلوقتي حسب SkillBridge؟",
+                          "tutor_id": "nova", "mode": "chat", "language": "ar",
+                          "page": "dashboard", "skill_id": None, "competency": None,
+                          "job_title": None, "job_url": None},
+                    headers=h)
+    assert r.status_code == 200, r.text
+    reply = r.json()["reply"]
+    assert has_arabic(reply)
+    assert reply.strip() != "أنا Nova، مدرّبك الذكي في SkillBridge."
+    assert len(reply) > 60

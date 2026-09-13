@@ -1,0 +1,154 @@
+JOB_TRACKER_PHASEK_PLAN.txt
+==========================
+Phase K — Saved Jobs and Private Application Tracker (guide Phase K)
+
+STATUS: COMPLETE (implemented, tested, deployed, documented)
+
+Design (approved by the user before implementation)
+====================================================
+
+Scope
+-----
+A student can save any surfaced live-feed job (GET /api/jobs/recent) into a
+private, per-student tracker and move it through an application career:
+saved -> preparing -> applied -> screening -> interview -> offer -> hired
+(plus honest terminal states rejected / withdrawn / archived_or_expired).
+
+The tracker is STUDENT-PRIVATE. Companies see an aggregate hired/offer count
+only where the existing analytics already surface such aggregates; no company
+or university endpoint ever reads a student's tracker rows or notes.
+
+Rules locked by the guide prompt
+--------------------------------
+- Stage vocabulary is EXACTLY:
+  saved, preparing, applied, screening, interview, offer, hired,
+  rejected, withdrawn, archived_or_expired  (validated by test).
+- A saved row snapshots the normalized feed record the student actually saw
+  (parity by construction with locate_feed_job): fingerprint (unique key),
+  title/company/url/apply_url/location/country/provider/source/match_pct/
+  work_type/seniority/listing_status/link_state/is_expired + created_at/
+  updated_at. Snapshot is never re-derived from the live feed at read time
+  (the record survives feed churn).
+- Saving is IDEMPOTENT: UNIQUE(student_id, fingerprint), INSERT OR IGNORE.
+- Stage transitions are VALIDATED (an allow-list adjacency map, tested) and
+  every stage change is APPENDED to an append-only tracker_stage_history audit
+  table (from_stage -> to_stage, note, created_at). Re-PATCH to the same stage
+  is a no-op that never writes a history row.
+- Notes are free text, private to the student, stored in the tracker row and
+  copied into the history row for the stage change.
+- Optional dates: application_deadline (ISO date) and interview_date (ISO date).
+- DELETE is restricted to stage 'saved' ONLY (410/409 otherwise). Archive /
+  expiry is a STAGE (archived_or_expired) — records are never destroyed once
+  applied; expired/dead listings keep their stored listing_status/link_state
+  and remain visible as archived. Re-activation is allowed from
+  archived_or_expired -> saved/preparing/applied.
+- NO email, NO calendar integration, NO external service, NO automatic
+  messages. Tracked jobs are always private; nothing is ever shared.
+
+Data model (migration 0006_saved_jobs_tracker, additive, no backfill)
+---------------------------------------------------------------------
+student_job_tracker (
+  id INTEGER PK AUTOINCREMENT,
+  student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  fingerprint TEXT NOT NULL,
+  title TEXT NOT NULL,
+  company TEXT NOT NULL DEFAULT '',
+  url TEXT NOT NULL DEFAULT '',
+  apply_url TEXT NOT NULL DEFAULT '',
+  location TEXT NOT NULL DEFAULT '',
+  country TEXT NOT NULL DEFAULT '',
+  provider TEXT,
+  source TEXT,
+  match_pct REAL,
+  work_type TEXT,
+  seniority TEXT,
+  listing_status TEXT,
+  link_state TEXT,
+  is_expired INTEGER NOT NULL DEFAULT 0,
+  stage TEXT NOT NULL DEFAULT 'saved'
+    CHECK (stage IN ('saved','preparing','applied','screening','interview',
+                     'offer','hired','rejected','withdrawn','archived_or_expired')),
+  note TEXT NOT NULL DEFAULT '',
+  interview_date TEXT,
+  application_deadline TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (student_id, fingerprint)
+)
+index idx_job_tracker_student ON student_job_tracker(student_id, updated_at DESC)
+index idx_job_tracker_fingerprint ON student_job_tracker(fingerprint)
+
+tracker_stage_history (
+  id INTEGER PK AUTOINCREMENT,
+  tracker_id INTEGER NOT NULL REFERENCES student_job_tracker(id) ON DELETE CASCADE,
+  stage TEXT NOT NULL,                 -- stage MOVED TO
+  changed_from TEXT,                   -- NULL when just saved (initial row)
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+)
+index idx_tracker_history_tracker ON tracker_stage_history(tracker_id)
+
+Endpoints (all Student-only, ownership-gated by _own_student; additive)
+----------------------------------------------------------------------
+GET    /api/students/{id}/jobs/tracker            list (newest updated first)
+POST   /api/students/{id}/jobs/saved              body {fingerprint, location?,
+                                                      country?, market?};
+                                                  404 when the job is not in the
+                                                  student's CURRENT feed (never
+                                                  fabricates a snapshot); save is
+                                                  idempotent; returns the tracker
+                                                  list
+GET    /api/students/{id}/jobs/tracker/{tid}      single entry (ownership)
+PATCH  /api/students/{id}/jobs/tracker/{tid}      body any of {stage, note,
+                                                  interview_date,
+                                                  application_deadline};
+                                                  stage change validated (400 on
+                                                  invalid target; 409/400 on
+                                                  illegal transition) + history
+                                                  row appended; returns entry
+DELETE /api/students/{id}/jobs/tracker/{tid}      ONLY when stage == 'saved';
+                                                  else 409 "move to
+                                                  archived_or_expired instead";
+                                                  returns {deleted: true}
+
+Tests (backend/tests/test_job_tracker_phaseK.py)
+------------------------------------------------
+- Migration 0006: fresh-DB tables/CHECK/UNIQUE, upgrade from 0005 preserves
+  rows, rollback-safe.
+- Stage vocabulary exact set + transition map (valid moves, blocked moves).
+- Save: snapshot fidelity (all fields), idempotency (single row, both calls
+  return it), 404 unknown fingerprint, never fabricates.
+- Tracker is private: second student 403, company 403, guest 401.
+- PATCH: legal transition writes history (from/to/note/created_at), re-PATCH
+  same stage is a no-op (no history row), invalid stage 400, illegal
+  transition 409/400, notes/optional dates update without history spam.
+- Archive: -> archived_or_expired keeps record; record reappears on
+  reactivation.
+- DELETE: saved-only OK; applied-stage DELETE -> 409 and row retained.
+- Expiry honesty: a snapshot saved with listing_status 'expired' /
+  'link-unavailable' / is_expired stays stored, never deleted.
+- Existing migration-count tests bumped to 0006.
+
+Frontend (additive)
+-------------------
+- types.ts: JobStage union, TrackedJob, TrackerStageHistory, TrackerResponse,
+  SaveJobRequest; api.ts: saveJobTracked / jobTracker / trackerItem /
+  updateTrackerItem / deleteTrackerItem.
+- DashboardPage JobsCard: Save toggle button per job row (uses the row's own
+  location/country/market so locate matches), "Saved" state from the tracker
+  list.
+- TrackedJobsCard: a responsive applications panel listing the student's
+  tracked jobs grouped "Saved / Active / Archived"; per row: title/company/
+  stage badge, notes (editable), optional dates, transition controls
+  (forward/back through legal moves + Archive), delete-with-confirm for
+  saved-only, honest empty state.
+- index.css .tracked-* / .job-save-* block (desktop + 640px mobile rules).
+
+Deploy gate
+-----------
+- Full backend suite green (baseline 1046/5 + new).
+- tsc --noEmit + vite build clean; repo-pattern frontend contract checker
+  (frontend/scripts/check-job-tracker-phaseK.mjs) green.
+- Dry-run migration 0006 on a copy of backend/skillbridge.db; live restart;
+  live + browser smoke as omar@student.edu.
+- Docs: this file + AGENTS.md Phase K section + README section.

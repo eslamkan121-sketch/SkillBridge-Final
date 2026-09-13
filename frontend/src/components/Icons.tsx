@@ -87,6 +87,11 @@ export const IconSend = (p: IconProps) => (
     <path d="M22 2L11 13" /><path d="M22 2l-7 20-4-9-9-4 20-7z" />
   </svg>
 )
+export const IconSendRTL = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M2 22L13 11" /><path d="M2 22l7 20 4-9 9-4-20-7z" />
+  </svg>
+)
 export const IconMic = (p: IconProps) => (
   <svg {...base(p.size, p.className, p.style)}>
     <rect x="9" y="3" width="6" height="12" rx="3" /><path d="M5 11a7 7 0 0 0 14 0" />
@@ -291,5 +296,18 @@ export const IconCollapse = (p: IconProps) => (
 export const IconBack = (p: IconProps) => (
   <svg {...base(p.size, p.className, p.style)}>
     <path d="M19 12H5M11 6l-6 6 6 6" />
+  </svg>
+)
+export const IconBackRTL = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M5 12H19M13 6l6 6-6 6" />
+  </svg>
+)
+export const IconCompare = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <rect x="3" y="5" width="6" height="8" rx="1.5" />
+    <rect x="15" y="5" width="6" height="8" rx="1.5" />
+    <path d="M6 20v-6M6 16.5l-2 2M6 16.5l2 2" />
+    <path d="M18 20v-6M18 16.5l-2 2M18 16.5l2 2" />
   </svg>
 )

@@ -61,7 +61,21 @@ def config_status():
         "available": tts_available(),
         "api_key_loaded": bool(ELEVENLABS_API_KEY),
         "tutor_voices_loaded": tutor_voice_status(),
+        "tts_configured": tts_available(),
     }
+
+
+def _log_startup_status():
+    import logging
+    log = logging.getLogger("skillbridge.tts")
+    if tts_available():
+        log.info("TTS provider configured: ElevenLabs (api_key_loaded=%s, voices=%s)",
+                 bool(ELEVENLABS_API_KEY), {k: bool(v) for k, v in TUTOR_VOICES.items()})
+    else:
+        log.warning("TTS provider NOT configured: missing ElevenLabs API key or voice IDs")
+
+
+_log_startup_status()
 
 
 def synthesize(tutor, text):

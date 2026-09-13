@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Build Your Copilot — SkillBridge</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+
+  :root {
+    --navy: #0D1B2A;
+    --navy-soft: #1B2E42;
+    --canvas: #F8FAFC;
+    --panel: #FFFFFF;
+    --line: #E2E8F0;
+    --muted: #64748B;
+    --coral: #FF6B2C;
+    --coral-soft: #FFE3D3;
+    --teal: #14B8A6;
+    --teal-soft: #D9F5F0;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { transition: none !important; animation: none !important; }
+  }
+
+  body {
+    margin: 0;
+    background: var(--canvas);
+    color: var(--navy);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    line-height: 1.5;
+  }
+
+  h1, h2, h3 {
+    font-family: 'Inter', sans-serif;
+    font-weight: 700;
+    color: var(--navy);
+    margin: 0;
+    letter-spacing: -0.01em;
+  }
+
+  a { color: inherit; }
+
+  .wrap {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 0 32px;
+  }
+
+  /* ---------- Masthead ---------- */
+
+  .masthead {
+    background: var(--navy);
+  }
+
+  .masthead .wrap {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    padding: 18px 32px;
+  }
+
+  .masthead .mark {
+    font-size: 17px;
+    font-weight: 700;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+
+  .masthead .mark .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--coral);
+    display: inline-block;
+  }
+
+  .masthead .crumb {
+    font-size: 13.5px;
+    color: #A9B7C6;
+  }
+
+  .masthead .crumb a {
+    text-decoration: none;
+    border-bottom: 1px solid rgba(169, 183, 198, 0.4);
+    padding-bottom: 1px;
+  }
+
+  .masthead .crumb a:hover {
+    color: #fff;
+    border-bottom-color: #fff;
+  }
+
+  /* ---------- Hero ---------- */
+
+  .hero {
+    padding: 64px 0 52px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .hero .kicker {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--coral);
+    background: var(--coral-soft);
+    padding: 6px 12px;
+    border-radius: 100px;
+    margin: 0 0 22px;
+  }
+
+  .hero h1 {
+    font-size: clamp(30px, 4.4vw, 42px);
+    line-height: 1.18;
+    max-width: 16ch;
+  }
+
+  .hero p {
+    margin: 20px 0 0;
+    max-width: 54ch;
+    font-size: 16.5px;
+    color: var(--muted);
+  }
+
+  /* ---------- Section shell ---------- */
+
+  section.block {
+    padding: 52px 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .block-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 24px;
+    margin-bottom: 32px;
+  }
+
+  .block-head h2 {
+    font-size: 22px;
+  }
+
+  .block-head .note {
+    font-size: 13.5px;
+    color: var(--muted);
+    max-width: 30ch;
+    text-align: right;
+  }
+
+  @media (max-width: 720px) {
+    .block-head { flex-direction: column; align-items: flex-start; }
+    .block-head .note { text-align: left; }
+  }
+
+  /* ---------- Copilot options (the 3-outcome strip) ---------- */
+
+  .options {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+  }
+
+  @media (max-width: 780px) {
+    .options { grid-template-columns: 1fr; }
+  }
+
+  /*
+    EXTENSION POINT — do not exceed 3 options right now.
+    Each .copilot-option below corresponds to exactly one currently
+    available voice agent. To add a new option once ElevenLabs voice
+    capacity allows it: duplicate one full <article class="copilot-option">
+    block, give it a new .persona-dot colour if desired, replace the name,
+    description, "good for" list and voice line, and widen the grid to
+    repeat(4, 1fr) at that breakpoint. Do not add a 4th block until a
+    real voice agent exists for it.
+  */
+
+  .copilot-option {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 26px 24px 24px;
+    position: relative;
+  }
+
+  .copilot-option.is-selected {
+    border-color: var(--coral);
+    box-shadow: 0 0 0 1px var(--coral);
+  }
+
+  .persona-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--line);
+    display: inline-block;
+    margin-bottom: 18px;
+  }
+
+  .copilot-option.is-selected .persona-dot {
+    background: var(--coral);
+  }
+
+  .copilot-option h3 {
+    font-size: 19px;
+    margin-bottom: 8px;
+  }
+
+  .copilot-option .role-line {
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 16px;
+  }
+
+  .copilot-option p.desc {
+    font-size: 14.5px;
+    color: #33414F;
+    margin: 0 0 18px;
+    max-width: 34ch;
+  }
+
+  .copilot-option .good-for {
+    list-style: none;
+    margin: 0 0 20px;
+    padding: 0;
+    font-size: 13.5px;
+    color: var(--muted);
+  }
+
+  .copilot-option .good-for li {
+    padding: 6px 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .copilot-option .good-for li:first-child {
+    border-top: none;
+  }
+
+  .copilot-option .voice-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--teal);
+    background: var(--teal-soft);
+    padding: 5px 10px;
+    border-radius: 100px;
+  }
+
+  .copilot-option .voice-tag .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--teal);
+  }
+
+  .selected-flag {
+    position: absolute;
+    top: 26px;
+    right: 24px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--coral);
+  }
+
+  /* ---------- Preview panel ---------- */
+
+  .preview {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 36px;
+    display: grid;
+    grid-template-columns: 1.1fr 0.9fr;
+    gap: 36px;
+    align-items: center;
+  }
+
+  @media (max-width: 780px) {
+    .preview { grid-template-columns: 1fr; padding: 26px; }
+  }
+
+  .preview .eyebrow-free {
+    font-size: 13.5px;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+
+  .preview h2 {
+    font-size: 24px;
+    margin-bottom: 12px;
+  }
+
+  .preview p {
+    font-size: 14.5px;
+    color: var(--muted);
+    max-width: 46ch;
+    margin: 0;
+  }
+
+  .preview .side {
+    border-left: 1px solid var(--line);
+    padding-left: 32px;
+  }
+
+  @media (max-width: 780px) {
+    .preview .side { border-left: none; padding-left: 0; border-top: 1px solid var(--line); padding-top: 24px; }
+  }
+
+  .preview dl {
+    margin: 0 0 24px;
+  }
+
+  .preview dt {
+    font-size: 12.5px;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+
+  .preview dd {
+    margin: 0 0 16px;
+    font-size: 15px;
+    color: var(--navy);
+    font-weight: 500;
+  }
+
+  .cta {
+    display: inline-block;
+    background: var(--coral);
+    color: #fff;
+    font-family: 'Inter', sans-serif;
+    font-size: 14.5px;
+    font-weight: 600;
+    padding: 13px 26px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    text-decoration: none;
+    line-height: 1.5;
+  }
+
+  .cta:disabled {
+    opacity: 0.55;
+    cursor: wait;
+  }
+
+  .cta.link {
+    background: transparent;
+    color: var(--coral);
+    border: 1px solid var(--coral);
+    margin-top: 8px;
+    display: block;
+    width: 100%;
+  }
+
+  .cta:focus-visible {
+    outline: 2px solid var(--navy);
+    outline-offset: 3px;
+  }
+
+  .helper-text {
+    margin-top: 12px;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+
+  /* ---------- Build status ---------- */
+
+  .status-banner {
+    margin: 20px 0 0;
+    padding: 12px 16px;
+    border-radius: 8px;
+    font-size: 14px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--navy);
+  }
+
+  .status-banner.ok {
+    border-color: var(--teal);
+    background: var(--teal-soft);
+    color: #0B5A4E;
+  }
+
+  .status-banner.err {
+    border-color: #F87171;
+    background: #FEE2E2;
+    color: #991B1B;
+  }
+
+  .options-loading {
+    grid-column: 1 / -1;
+    font-size: 14px;
+    color: var(--muted);
+  }
+
+  .done-panel {
+    margin-top: 24px;
+    background: var(--teal-soft);
+    border: 1px solid var(--teal);
+    border-radius: 12px;
+    padding: 28px 32px;
+  }
+
+  .done-panel .eyebrow-free {
+    font-size: 13px;
+    font-weight: 600;
+    color: #0B5A4E;
+    margin: 0 0 8px;
+  }
+
+  .done-panel h2 {
+    font-size: 22px;
+    margin-bottom: 8px;
+  }
+
+  .done-panel p {
+    font-size: 14.5px;
+    color: #0B5A4E;
+    max-width: 58ch;
+    margin: 0 0 18px;
+  }
+
+  /* ---------- Footer note ---------- */
+
+  footer {
+    padding: 36px 0 60px;
+  }
+
+  footer p {
+    font-size: 13.5px;
+    color: var(--muted);
+    max-width: 56ch;
+    margin: 0;
+  }
+
+</style>
+</head>
+<body>
+
+  <header class="masthead">
+    <div class="wrap">
+      <span class="mark"><span class="dot"></span>SkillBridge</span>
+      <span class="crumb"><a href="/">Back to AI Copilot</a></span>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="wrap">
+        <p class="kicker">New: build your copilot</p>
+        <h1>Choose the copilot that will work with you.</h1>
+        <p>
+          Instead of switching between separate tutors, pick one copilot and
+          shape how it works with you. It carries every capability —
+          learning, practice, job search, and career planning — in a single
+          conversation.
+        </p>
+      </div>
+    </section>
+
+    <div class="wrap" id="statusSlot"></div>
+
+    <section class="block">
+      <div class="wrap">
+        <div class="block-head">
+          <h2>Three ways to start</h2>
+          <p class="note">More voices are on the way — for now, choose from what's currently available.</p>
+        </div>
+
+        <div class="options" id="copilotOptions">
+          <p class="options-loading" id="optionsLoading">Checking available copilots…</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" style="border-bottom: none;">
+      <div class="wrap">
+        <div class="block-head">
+          <h2>Your copilot</h2>
+        </div>
+
+        <div class="preview" id="preview">
+          <div>
+            <p class="eyebrow-free">Based on your selection</p>
+            <h2 id="previewName">The Navigator</h2>
+            <p id="previewBlurb">Practical and steady. It will help with learning, practice, job matches, and planning — all through one conversation, in the voice you picked above.</p>
+          </div>
+          <div class="side">
+            <dl>
+              <dt>Personality</dt>
+              <dd id="previewPersonality">Steady, practical, one step at a time</dd>
+              <dt>Voice</dt>
+              <dd id="previewVoice">Currently available agent</dd>
+            </dl>
+            <button class="cta" id="createBtn" type="button">Create my copilot</button>
+            <button class="cta link" id="removeBtn" type="button" hidden>Remove my copilot</button>
+            <p class="helper-text" id="helperText">Pick a copilot above, then create it. It becomes the voice and personality of your AI copilot across SkillBridge.</p>
+          </div>
+        </div>
+
+        <div class="done-panel" id="donePanel" hidden>
+          <p class="eyebrow-free">Success</p>
+          <h2 id="doneName"></h2>
+          <p id="doneBlurb">Your copilot is set. Open the AI copilot panel and start chatting — it carries every capability in one conversation.</p>
+          <a class="cta" href="/">Open the AI Copilot</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <p>Every copilot here uses a voice that's already available in SkillBridge. New voices are being worked on — once they're ready, more starting points will appear on this page.</p>
+    </div>
+  </footer>
+
+  <script>
+    const TOKEN_KEY = 'skillbridge_token';
+
+    const $ = (sel) => document.querySelector(sel);
+    const els = {
+      options: $('#copilotOptions'),
+      loading: $('#optionsLoading'),
+      preview: $('#preview'),
+      previewName: $('#previewName'),
+      previewBlurb: $('#previewBlurb'),
+      previewPersonality: $('#previewPersonality'),
+      previewVoice: $('#previewVoice'),
+      createBtn: $('#createBtn'),
+      removeBtn: $('#removeBtn'),
+      helperText: $('#helperText'),
+      donePanel: $('#donePanel'),
+      doneName: $('#doneName'),
+      doneBlurb: $('#doneBlurb'),
+      statusSlot: $('#statusSlot'),
+    };
+
+    const VOICE_NAMES = { nova: 'Nova', axel: 'Axel', sage: 'Sage', vex: 'Vex' };
+    const BLURBS = {
+      navigator: 'Practical and steady. It will help with learning, practice, job matches, and planning — all through one conversation, in the voice you picked above.',
+      strategist: 'Market-aware and direct. It maps your skills to the path, tells you plainly where the gaps are, and keeps each move concrete.',
+      confidant: 'Calm and reflective. It listens, weighs tradeoffs with you, and helps you decide with confidence — at a pace that never feels like a checklist.',
+    };
+
+    const state = { studentId: null, options: [], configured: null, selected: null };
+
+    function api(path, init) {
+      const headers = Object.assign({ 'Content-Type': 'application/json' }, (init && init.headers) || {});
+      const token = localStorage.getItem(TOKEN_KEY);
+      if (token) headers['Authorization'] = 'Bearer ' + token;
+      return fetch(path, Object.assign({}, init, { headers })).then((res) => {
+        if (res.status === 401) {
+          localStorage.removeItem(TOKEN_KEY);
+          throw new Error('Your session expired. Please sign in again.');
+        }
+        return res.json().then((data) => {
+          if (!res.ok) {
+            const detail = data && data.detail;
+            const msg = typeof detail === 'string' ? detail : ('Request failed: ' + res.status);
+            throw new Error(msg);
+          }
+          return data;
+        });
+      });
+    }
+
+    let statusTimer = null;
+    function status(msg, kind) {
+      els.statusSlot.innerHTML = msg
+        ? '<p class="status-banner ' + (kind || '') + '" role="status">' + msg + '</p>'
+        : '';
+      els.statusSlot.style.display = msg ? '' : 'none';
+      if (statusTimer) clearTimeout(statusTimer);
+      if (msg) statusTimer = setTimeout(() => { els.statusSlot.innerHTML = ''; els.statusSlot.style.display = 'none'; }, 9000);
+      else statusTimer = null;
+    }
+
+    function optionByKey(key) {
+      return (state.options || []).find((o) => o.key === key) || null;
+    }
+
+    function renderCards() {
+      els.options.innerHTML = '';
+      state.options.forEach((o) => {
+        const card = document.createElement('article');
+        card.className = 'copilot-option' + (o.key === state.selected ? ' is-selected' : '');
+        card.dataset.key = o.key;
+        card.setAttribute('aria-pressed', String(o.key === state.selected));
+        card.setAttribute('tabindex', '0');
+        const flag = document.createElement('span');
+        flag.className = 'selected-flag';
+        flag.textContent = o.key === state.selected ? 'Selected' : '';
+        const dot = document.createElement('span');
+        dot.className = 'persona-dot';
+        const h3 = document.createElement('h3');
+        h3.textContent = o.name || '';
+        const title = document.createElement('p');
+        title.className = 'role-line';
+        title.textContent = o.title || '';
+        const blurb = document.createElement('p');
+        blurb.className = 'desc';
+        blurb.textContent = BLURBS[o.key] || (o.title || '');
+        const tag = document.createElement('span');
+        tag.className = 'voice-tag';
+        tag.innerHTML = '<span class="dot"></span>Voice ready';
+        card.appendChild(flag);
+        card.appendChild(dot);
+        card.appendChild(h3);
+        card.appendChild(title);
+        card.appendChild(blurb);
+        card.appendChild(tag);
+        card.addEventListener('click', () => select(o.key));
+        card.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(o.key); }
+        });
+        els.options.appendChild(card);
+      });
+    }
+
+    function select(key) {
+      if (!(state.options || []).some((o) => o.key === key)) return;
+      state.selected = key;
+      renderCards();
+      renderPreview();
+    }
+
+    function renderPreview() {
+      const o = optionByKey(state.selected);
+      if (!o) return;
+      els.previewName.textContent = o.name;
+      els.previewBlurb.textContent = BLURBS[o.key] || o.title || '';
+      els.previewPersonality.textContent = o.title;
+      els.previewVoice.textContent = (VOICE_NAMES[o.voice_agent_id] || o.voice_agent_id) + ' voice agent (voice ready)';
+    }
+
+    function setEnabled(on) {
+      els.createBtn.disabled = !on;
+      els.removeBtn.disabled = !on;
+      els.createBtn.textContent = on ? 'Create my copilot' : 'Creating…';
+    }
+
+    function renderConfigured() {
+      const c = state.configured;
+      const o = c && optionByKey(c.choice);
+      if (c && o) {
+        els.createBtn.textContent = 'Update my copilot';
+        els.removeBtn.hidden = false;
+        els.donePanel.hidden = false;
+        els.doneName.textContent = 'Your copilot is ' + o.name;
+        els.doneBlurb.textContent = BLURBS[o.key] || (o.title || '');
+        els.previewName.textContent = o.name;
+        els.previewBlurb.textContent = BLURBS[o.key] || (o.title || '');
+        els.previewPersonality.textContent = o.title;
+        els.previewVoice.textContent = (VOICE_NAMES[o.voice_agent_id] || o.voice_agent_id) + ' voice agent (voice ready)';
+      } else {
+        els.removeBtn.hidden = true;
+        els.donePanel.hidden = true;
+        els.createBtn.textContent = 'Create my copilot';
+      }
+    }
+
+    function createCopilot() {
+      if (!state.selected) return;
+      setEnabled(false);
+      api('/api/students/' + state.studentId + '/copilot', {
+        method: 'PUT',
+        body: JSON.stringify({ choice: state.selected }),
+      }).then((data) => {
+        state.configured = data.copilot || state.configured;
+        renderConfigured();
+        renderPreview();
+        setEnabled(true);
+        const o = optionByKey(state.selected);
+        status('Your copilot is now set to ' + (o ? o.name : state.selected) + ' — it stays with you across SkillBridge.', 'ok');
+      }).catch((err) => {
+        setEnabled(true);
+        status(err.message, 'err');
+      });
+    }
+
+    function removeCopilot() {
+      setEnabled(false);
+      api('/api/students/' + state.studentId + '/copilot', { method: 'DELETE' }).then(() => {
+        state.configured = null;
+        state.selected = (state.options[0] && state.options[0].key) || null;
+        renderCards();
+        renderPreview();
+        renderConfigured();
+        setEnabled(true);
+        status('Your copilot was removed — you\u2019re back to the standard persona picker.', 'ok');
+      }).catch((err) => {
+        setEnabled(true);
+        status(err.message, 'err');
+      });
+    }
+
+    function noAuth(errMsg) {
+      els.options.innerHTML = '';
+      els.loading.remove();
+      const note = document.createElement('p');
+      note.className = 'options-loading';
+      note.textContent = (errMsg || 'Please sign in') + ' — ';
+      const link = document.createElement('a');
+      link.href = '/';
+      link.textContent = 'Back to SkillBridge';
+      note.appendChild(link);
+      els.options.appendChild(note);
+      els.preview.hidden = true;
+      els.createBtn.disabled = true;
+      els.removeBtn.hidden = true;
+    }
+
+    function init() {
+      const token = localStorage.getItem(TOKEN_KEY);
+      if (!token) { noAuth('Please sign in to build your copilot.'); return; }
+      api('/api/auth/me').then((me) => {
+        const sid = (me && (me.student ? me.student.id : me.id)) || null;
+        if (sid == null) throw new Error('Only students can build a copilot.');
+        state.studentId = sid;
+        return api('/api/students/' + sid + '/copilot');
+      }).then((data) => {
+        state.options = data.options || [];
+        state.configured = data.copilot || null;
+        state.selected = (state.configured && state.configured.choice)
+          || (state.options[0] && state.options[0].key) || null;
+        renderCards();
+        renderPreview();
+        renderConfigured();
+        setEnabled(true);
+        if (state.configured) status('You already have a copilot — you can keep it or switch above.', 'ok');
+      }).catch((err) => {
+        noAuth(err.message);
+      });
+    }
+
+    els.createBtn.addEventListener('click', createCopilot);
+    els.removeBtn.addEventListener('click', () => {
+      if (window.confirm('Remove your copilot and go back to the standard persona picker?')) removeCopilot();
+    });
+
+    setEnabled(false);
+    init();
+  </script>
+
+</body>
+</html>

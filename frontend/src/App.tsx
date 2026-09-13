@@ -9,12 +9,14 @@ import AssessmentsPage from './pages/AssessmentsPage'
 import UniversityPage from './pages/UniversityPage'
 import PublicProfilePage from './pages/PublicProfilePage'
 import { api } from './lib/api'
-import { IconDashboard, IconRoles, IconLearning, IconAssessment, IconUniversity, IconLogout, IconAlert, IconTarget, IconBell, IconChevron, IconBolt } from './components/Icons'
+import { IconDashboard, IconRoles, IconLearning, IconAssessment, IconUniversity, IconLogout, IconAlert, IconTarget, IconBell, IconChevron, IconBolt, IconSparkles } from './components/Icons'
 import SuccessAnimationOverlay from './components/SuccessAnimationOverlay'
 import ErrorBoundary from './components/ErrorBoundary'
 import { CopilotPanel } from './components/CopilotPanel'
+import CopilotOnboarding from './components/CopilotOnboarding'
+import CopilotSettingsModal from './components/CopilotSettingsModal'
 
-type Section = 'dashboard' | 'skills' | 'learning' | 'scenarios' | 'assessments' | 'university'
+type Section = 'dashboard' | 'skills' | 'learning' | 'scenarios' | 'assessments' | 'university' | 'copilot'
 
 function avatarInitials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean)
@@ -46,7 +48,10 @@ function Shell() {
   const [notifOpen, setNotifOpen] = React.useState(false)
   const [userMenuOpen, setUserMenuOpen] = React.useState(false)
   const [learningFocus, setLearningFocus] = React.useState<{ skillId: number; roleTitle: string } | null>(null)
+  const [prevSection, setPrevSection] = React.useState<Section | null>(null)
   const [demo, setDemo] = React.useState<{ genai_enabled: boolean; email_configured: boolean } | null>(null)
+  const [copilotSettingsOpen, setCopilotSettingsOpen] = React.useState(false)
+  const [copilotOnboardingForce, setCopilotOnboardingForce] = React.useState(false)
 
   React.useEffect(() => {
     api.demoMode().then(setDemo).catch((e) => console.error('[app] demo-mode config failed:', e))
@@ -60,7 +65,7 @@ function Shell() {
 
   const titles: Record<Section, string> = {
     dashboard: 'Dashboard', skills: 'Skills & Roles', learning: 'Learning', scenarios: 'Practice Scenarios',
-    assessments: 'Assessments', university: 'University Dashboard',
+    assessments: 'Assessments', university: 'University Dashboard', copilot: 'AI Copilot',
   }
   React.useEffect(() => {
     document.title = `${titles[section]} · SkillBridge`
@@ -69,23 +74,35 @@ function Shell() {
   if (!session) return <LoginPage />
 
   const role = session.role
-  const nav: { key: Section; label: string; icon: React.ReactNode; show: boolean }[] = [
+  const studentId = role === 'Student' ? (session.student?.id ?? 0) : 0
+  const nav: { key: Section; label: string; icon: React.ReactNode; show: boolean; href?: string }[] = [
     { key: 'dashboard', label: 'Dashboard', icon: <IconDashboard size={18} />, show: true },
     { key: 'skills', label: 'Skills & Roles', icon: <IconRoles size={18} />, show: true },
     { key: 'learning', label: 'Learning', icon: <IconLearning size={18} />, show: role === 'Student' },
     { key: 'scenarios', label: 'Practice', icon: <IconBolt size={18} />, show: role === 'Student' },
     { key: 'assessments', label: 'Assessments', icon: <IconAssessment size={18} />, show: role === 'Student' },
+    { key: 'copilot', label: 'AI Copilot', icon: <IconSparkles size={18} />, show: role === 'Student', href: '/build-your-copilot.html' },
     { key: 'university', label: 'University Dashboard', icon: <IconUniversity size={18} />, show: role === 'University Admin' },
   ]
   const visibleNav = nav.filter((n) => n.show)
   if (!visibleNav.some((n) => n.key === section)) setSection(visibleNav[0]?.key || 'dashboard')
 
-  const goTo = (key: Section) => { setSection(key); setNavOpen(false) }
+  const goTo = (key: Section) => { setPrevSection(section); setSection(key); setNavOpen(false) }
 
-  // Cross-page deep link: Skills & Roles asks Learning to open a specific skill
-  // with the role that motivated it as context.
-  const navigate = (section: string, focus?: { skillId: number; roleTitle: string }) => {
-    setSection(section as Section)
+  // Cross-page deep link: Skills & Roles / Dashboard / scenario results ask the
+  // destination page to open a specific skill, with the role that motivated it
+  // as context. The previous section is kept so every page can offer a
+  // predictable "Back to ..." action (browser Back still behaves normally).
+  //
+  // Phase 5 contract: the focus object is consumed by whichever page mounts,
+  // then cleared via onFocusConsumed — no URL params, no navigation loops.
+  const navigate = (dest: string, focus?: { skillId: number; roleTitle: string }) => {
+    // A journey roots itself at the hub it started from (Skills & Roles or the
+    // Dashboard). Moves between deep-link pages (learning <-> scenarios ->
+    // assessments) keep that back-context, so breadcrumbs never spiral into a
+    // learning<->scenarios loop. The navbar uses goTo() and resets the target.
+    if (section === 'skills' || section === 'dashboard') setPrevSection(section)
+    setSection(dest as Section)
     setNavOpen(false)
     if (focus) setLearningFocus(focus)
   }
@@ -97,6 +114,8 @@ function Shell() {
         ? me?.company ? `Hiring at ${me.company.name}` : 'Company account'
         : 'Administrator'
   const roleClass = role === 'Student' ? 'student' : role === 'Company' ? 'company' : 'university'
+
+  const backTo = prevSection ? { key: prevSection, label: titles[prevSection] } : null
 
   return (
     <>
@@ -114,9 +133,25 @@ function Shell() {
         <button className="nav-close" aria-label="Close menu" onClick={() => setNavOpen(false)}>✕</button>
         <nav className="main-nav">
           {visibleNav.map((n) => (
-            <button key={n.key} className={`nav-item ${section === n.key ? 'active' : ''}`} onClick={() => goTo(n.key)}>
+            n.href ? (
+              <a
+                key={n.key}
+                className="nav-item"
+                href={n.href}
+                onClick={() => setNavOpen(false)}
+              >
+                {n.icon} {n.label}
+              </a>
+            ) : (
+            <button
+              key={n.key}
+              className={`nav-item ${section === n.key ? 'active' : ''}`}
+              aria-current={section === n.key ? 'page' : undefined}
+              onClick={() => goTo(n.key)}
+            >
               {n.icon} {n.label}
             </button>
+            )
           ))}
         </nav>
         <div className="sidebar-spacer" />
@@ -128,7 +163,7 @@ function Shell() {
           </div>
         </div>
       </aside>
-      <div className="nav-backdrop" onClick={() => setNavOpen(false)} />
+      <div className={`nav-backdrop ${navOpen ? 'visible' : ''}`} onClick={() => setNavOpen(false)} />
         <main className="content" id="main-content">
           {demo && (!demo.genai_enabled || !demo.email_configured) && (
             <div className="demo-banner">
@@ -156,20 +191,22 @@ function Shell() {
               {roleLabel}
             </span>
             <div className="topbar-popover-anchor">
-              <button className="topbar-bell" aria-label="Notifications" aria-expanded={notifOpen}
+              <button className="topbar-bell" aria-label="Notifications — coming soon" aria-expanded={notifOpen}
                 onClick={(e) => { e.stopPropagation(); setNotifOpen((v) => !v) }}>
                 <IconBell size={17} />
+                <span className="soon-badge" aria-hidden="true">Coming soon</span>
                 {notifOpen && <span className="popover-caret" />}
               </button>
               {notifOpen && (
                 <div className="topbar-popover notif-popover" role="dialog" aria-label="Notifications">
                   <div className="popover-title">Notifications</div>
-                  <p className="popover-empty">No new notifications yet. In-app alerts land here once you have activity.</p>
+                  <p className="popover-empty"><strong>Coming soon.</strong> This is a placeholder — in-app alerts are not wired to real activity yet, so nothing here is live.</p>
                 </div>
               )}
             </div>
             <div className="topbar-popover-anchor">
-              <button className="user-chip" title={me?.display_name || session.display_name}
+              <button className="user-chip" aria-label={`Account menu for ${me?.display_name || session.display_name}`}
+                title={me?.display_name || session.display_name}
                 aria-haspopup="menu" aria-expanded={userMenuOpen}
                 onClick={(e) => { e.stopPropagation(); setUserMenuOpen((v) => !v) }}>
                 <span className="avatar">{avatarInitials(me?.display_name || session.display_name)}</span>
@@ -181,18 +218,24 @@ function Shell() {
                   <div className="popover-title">Signed in as</div>
                   <p className="popover-meta">{me?.display_name || session.display_name}</p>
                   <p className="popover-meta">{session.role}</p>
+                  {role === 'Student' && (
+                    <button
+                      className="btn btn-ghost popover-logout"
+                      role="menuitem"
+                      onClick={() => { setUserMenuOpen(false); setCopilotSettingsOpen(true); setCopilotOnboardingForce(false) }}
+                    ><IconSparkles size={15} /> Change your copilot</button>
+                  )}
                   <button className="btn btn-ghost popover-logout" role="menuitem" onClick={logout}><IconLogout size={15} /> Log out</button>
                 </div>
               )}
             </div>
-            <button className="btn btn-ghost" onClick={logout}><IconLogout size={16} /> Log out</button>
           </div>
         </header>
-        {section === 'dashboard' && <DashboardPage onNavigate={(s) => setSection(s as Section)} />}
-        {section === 'skills' && <SkillsRolesPage onNavigate={navigate} />}
-        {section === 'learning' && <LearningPage onNavigate={(s) => setSection(s as Section)} initialFocus={learningFocus} onFocusConsumed={() => setLearningFocus(null)} />}
-        {section === 'scenarios' && <ScenariosPage onNavigate={(s) => setSection(s as Section)} />}
-        {section === 'assessments' && <AssessmentsPage />}
+        {section === 'dashboard' && <DashboardPage onNavigate={navigate} />}
+        {section === 'skills' && <SkillsRolesPage onNavigate={navigate} backTo={backTo} />}
+        {section === 'learning' && <LearningPage onNavigate={navigate} initialFocus={learningFocus} onFocusConsumed={() => setLearningFocus(null)} backTo={backTo} />}
+        {section === 'scenarios' && <ScenariosPage onNavigate={navigate} initialFocus={learningFocus} onFocusConsumed={() => setLearningFocus(null)} backTo={backTo} />}
+        {section === 'assessments' && <AssessmentsPage onNavigate={navigate} initialSkillId={learningFocus?.skillId ?? undefined} onFocusConsumed={() => setLearningFocus(null)} backTo={backTo} />}
         {section === 'university' && <UniversityPage />}
         <footer className="app-footer">
           <span>SkillBridge · Career Intelligence Platform</span>
@@ -201,6 +244,21 @@ function Shell() {
       </main>
     </div>
     {role === 'Student' && !assessmentActive && <CopilotPanel />}
+    {role === 'Student' && !assessmentActive && !authBanner && studentId > 0 && (
+      <>
+        <CopilotOnboarding
+          studentId={studentId}
+          forceOpen={copilotOnboardingForce}
+          onDone={() => setCopilotOnboardingForce(false)}
+        />
+        <CopilotSettingsModal
+          studentId={studentId}
+          open={copilotSettingsOpen}
+          onClose={() => setCopilotSettingsOpen(false)}
+          onRetakeQuiz={() => { setCopilotSettingsOpen(false); setCopilotOnboardingForce(true) }}
+        />
+      </>
+    )}
     {session && authBanner && (
       <SuccessAnimationOverlay role={role} onDone={clearAuthBanner} />
     )}

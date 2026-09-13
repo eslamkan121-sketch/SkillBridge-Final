@@ -1,0 +1,22 @@
+{
+  "_meta": {
+    "note": "Recorded, sanitized ESCO resource payload (v1.2.1, en) — newly added occupation occ-4. Placeholder metadata, no secrets.",
+    "params": {"uri": "http://data.europa.eu/esco/occupation/4a8e4d8e-c26e-7081-e5e5-f9d5d8fc4344", "language": "en", "selectedVersion": "1.2.1"}
+  },
+  "uri": "http://data.europa.eu/esco/occupation/4a8e4d8e-c26e-7081-e5e5-f9d5d8fc4344",
+  "preferredLabel": {"@language": "en", "@value": "Data engineering manager"},
+  "altLabels": [{"@language": "en", "@value": "Data engineering lead"}],
+  "hiddenLabels": [],
+  "code": "2511.3",
+  "description": [
+    {"@language": "en", "@value": "Leads a team that designs and operates data platforms and pipelines."}
+  ],
+  "_links": {
+    "iscoGroup": {"uri": "http://data.europa.eu/esco/isco/2511", "code": "2511"},
+    "hasEssentialSkill": [
+      {"uri": "http://data.europa.eu/esco/skill/sk-teamlead", "title": "team leadership"},
+      {"uri": "http://data.europa.eu/esco/skill/sk-pipelines", "title": "data pipeline design"}
+    ],
+    "hasOptionalSkill": []
+  }
+}

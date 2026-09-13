@@ -1,12 +1,16 @@
-"""Practice Scenarios: domain-gating, catalog, branching, scoring, confidence-
-upgrade and ownership.
+"""Practice Scenarios: role-family gating, catalog, branching, scoring,
+confidence-upgrade and ownership.
 
 Practice never verifies skills — that invariant is asserted here. The play-
 through suite runs as yara@student.edu: a PRE-EXISTING seeded SOC student
 (backend/app/seed.py STUDENTS line 34, SELF_REPORTED line 63, catalog target
 "Cybersecurity Analyst" assigned at seed line 437). No fixture for this file
 was authored to make the gate pass — yara is untouched seed data, which is
-exactly what the domain-gate tests must rely on."""
+exactly what the domain-gate tests must rely on.
+
+Relevance is role-driven: a target role opens its scenario family (Security,
+Data, AI, ...); out-of-family roles (dentist, clinical, legal) get deterministic
+role-specific blueprints and never another family's scenarios."""
 import json
 
 import pytest
@@ -28,13 +32,13 @@ def soc(client, login):
 
 def _make_student(email, target_role_title, skills):
     """Ad-hoc negative-fixture student: free user + owner + profile. Never a
-    seeded student — these are synthetic cases that must NOT see scenarios.
+    seeded student — these are synthetic cases that must never see another
+    domain's scenarios, and out-of-family targets only receive blueprints.
 
     Pool hygiene: the target role is REUSED if a role with that exact title
     already exists (e.g. the seeded Northstar "Junior AI Engineer"); a brand-new
     role is only created for titles that do not exist (e.g. the dentist), so a
-    negative fixture can never accidentally make scenario skills rare enough to
-    clear the specificity floor.
+    negative fixture can never accidentally perturb the shared role pool.
     """
     u = models.create_user(email, "Student", f"{email} fixture", password="demo1234")
     sid = models.create_student(f"{email} fixture", email, "Test University", user_id=u["id"])["id"]
@@ -98,60 +102,54 @@ def test_soc_student_sees_all_three_scenarios(client, soc):
     assert data["categories"], "an available SOC student must see real category facets"
 
 
-def test_cyber_skills_clear_the_specificity_floor(client, soc):
-    """Path B show-your-work: SIEM and Threat Detection live in the role pool
-    at df<=DOMAIN_DF_CAP, so they clear the derived floor even without a target
-    role. The floor is computed from the live pool, not fitted to fixtures."""
+def test_ai_target_with_soft_skills_sees_ai_not_security(client):
+    """Relevance is role-driven, never skill-driven: a Junior AI Engineer with
+    generic 'Investigation'/'Decision Making' soft skills must see the AI family
+    practice scenarios and never a security scenario — soft skills can never
+    widen access to another domain."""
     from app import scenarios
-    _, sid = soc
-    student = models.get_student(sid)
-    spec = scenarios._scenario_specificity(student, scenarios._scenario(SUSPICIOUS_LOGIN))
-    # spec maps scenario skill NAME -> weight (see _scenario_specificity)
-    assert "Threat Detection" in spec
-    assert spec["Threat Detection"] >= scenarios._specificity_floor()
-    # and logging-oriented skills absent from the pool carry NO domain weight
-    assert spec.get("Log Analysis", 0) == 0.0
-
-
-def test_generic_investigation_profile_is_not_eligible(client):
-    """Regression: 'Investigation'/'Decision Making' ARE scenario skills, but
-    they are absent from the role pool. Naive df would INVERT (give them max
-    weight); the ABSENT_SKILL_WEIGHT guard must keep them at zero so a generic
-    profile can never clear the floor."""
-    from app import scenarios
-    sid, _ = _make_student("generic-inv@student.edu", "Junior AI Engineer",
+    sid, _ = _make_student("generic-ai@student.edu", "Junior AI Engineer",
                            [("Investigation", "Advanced"), ("Decision Making", "Advanced")])
-    h = _as(client, "generic-inv@student.edu")
+    h = _as(client, "generic-ai@student.edu")
     student = models.get_student(sid)
     for scn in scenarios.SCENARIOS:
-        assert not scenarios.scenario_eligible(student, scn)
+        if scn.get("family") == "ai":
+            assert scenarios.scenario_eligible(student, scn), scn["id"]
+        elif scn.get("family") == "security":
+            assert not scenarios.scenario_eligible(student, scn), scn["id"]
     r = client.get(f"/api/students/{sid}/scenarios", headers=h)
     assert r.status_code == 200, r.text
     data = r.json()
-    assert data["scenarios"] == []
-    assert data["availability"] == "none"
-    assert "Junior AI Engineer" in data["availability_reason"]
+    assert data["scenarios"], "an AI target must see AI practice scenarios"
+    assert {sc["family"] for sc in data["scenarios"]} == {"ai"}
+    assert data["availability"] == "ok"
+    r2 = client.post(f"/api/students/{sid}/scenarios/{SUSPICIOUS_LOGIN}/start", headers=h)
+    assert r2.status_code == 403
 
 
-def test_non_cyber_target_and_skills_never_eligible(client):
-    """A dentist-shaped profile (target + skills) must see zero scenarios and
-    be blocked at the start gate — even though its own role now sits in the
-    local pool (df=1), its skills never overlap scenario skills."""
+def test_dentist_sees_only_blueprint_scenarios_and_is_blocked_from_security(client):
+    """Out-of-family roles get deterministic role-specific blueprints and never
+    a security scenario. A dentist with health/imaging skills sees exactly the
+    three bp-general-dentist-* clones; a SIEM scenario is blocked at the start
+    gate; the blueprint itself starts and plays normally."""
     from app import scenarios
     sid, _ = _make_student("dentist@student.edu", "General Dentist",
                            [("Patient Triage", "Intermediate"), ("Diagnostic Imaging", "Intermediate")])
     h = _as(client, "dentist@student.edu")
     student = models.get_student(sid)
     for scn in scenarios.SCENARIOS:
-        assert not scenarios.scenario_eligible(student, scn)
+        assert not scenarios.scenario_eligible(student, scn), scn["id"]
     r = client.get(f"/api/students/{sid}/scenarios", headers=h)
     assert r.status_code == 200, r.text
     data = r.json()
-    assert data["scenarios"] == []
-    assert data["availability"] == "none"
-    assert "General Dentist" in data["availability_reason"]
-    r2 = client.post(f"/api/students/{sid}/scenarios/{SUSPICIOUS_LOGIN}/start", headers=h)
+    ids = [sc["id"] for sc in data["scenarios"]]
+    assert {sc["id"] for sc in data["scenarios"]} == {f"bp-general-dentist-{i}" for i in (1, 2, 3)}, ids
+    assert all(sc["family"] == "generic" for sc in data["scenarios"])
+    assert data["availability"] == "ok"
+    r2 = client.post(f"/api/students/{sid}/scenarios/{SIEM}/start", headers=h)
     assert r2.status_code == 403
+    view = _start(client, h, sid, "bp-general-dentist-1")
+    assert view["status"] == "in_progress"
 
 
 def test_empty_profile_gets_nudge_not_content(client):

@@ -6,7 +6,7 @@ from app import jobs
 
 
 def _reset_jobs_cache():
-    jobs._cache.update({"at": 0.0, "key": "", "data": None})
+    jobs.clear_job_cache()
 
 
 def _iso(days_ago):

@@ -1,0 +1,37 @@
+{
+  "_meta": {
+    "note": "Recorded, sanitized ESCO resource payload (v1.2.0, en). Real occupation-resource shape; placeholder metadata, no secrets.",
+    "endpoint": "GET https://ec.europa.eu/esco/api/resource/occupation",
+    "params": {"uri": "http://data.europa.eu/esco/occupation/174b1a5b-f93b-4d5e-b2b2-c6a2a5c9d001", "language": "en", "selectedVersion": "1.2.0"}
+  },
+  "uri": "http://data.europa.eu/esco/occupation/174b1a5b-f93b-4d5e-b2b2-c6a2a5c9d001",
+  "preferredLabel": {"@language": "en", "@value": "Data engineer"},
+  "altLabels": [
+    {"@language": "en", "@value": "Engineer (data)"},
+    {"@language": "en", "@value": "Data engineering consultant"}
+  ],
+  "hiddenLabels": [{"@language": "en", "@value": "LE data engineer"}],
+  "code": "2511.3",
+  "description": [
+    {"@language": "en", "@value": "Designs, builds and maintains data pipelines that move, store and serve structured and unstructured data."}
+  ],
+  "_links": {
+    "broaderOccupation": {
+      "uri": "http://data.europa.eu/esco/occupation/a1b2c3d4-1111-4a2b-8f3c-5d6e7f8a9b0c"
+    },
+    "iscoGroup": {
+      "uri": "http://data.europa.eu/esco/isco/2511",
+      "code": "2511",
+      "title": "Software and applications developers and analysts"
+    },
+    "hasEssentialSkill": [
+      {"uri": "http://data.europa.eu/esco/skill/sk-pipelines", "title": "data pipeline design"},
+      {"uri": "http://data.europa.eu/esco/skill/sk-sql", "title": "SQL"},
+      {"uri": "http://data.europa.eu/esco/skill/sk-warehousing", "title": "data warehousing"},
+      {"uri": "http://data.europa.eu/esco/skill/sk-scheduling", "title": "job scheduling"}
+    ],
+    "hasOptionalSkill": [
+      {"uri": "http://data.europa.eu/esco/skill/sk-spark", "title": "Apache Spark"}
+    ]
+  }
+}

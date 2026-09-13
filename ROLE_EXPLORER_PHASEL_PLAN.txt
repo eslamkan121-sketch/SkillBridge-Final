@@ -1,0 +1,145 @@
+ROLE EXPLORER UI — PHASE L PLAN
+===============================
+Guide: /Users/aboodmr/Desktop/SKILLBRIDGE_BACKEND_ROLES_JOBS_UI_OPENCODE_GUIDE.txt (Phase L, guide lines 578-603)
+Repo root: /Users/aboodmr/Desktop/SkillBridge-Complete-Upgraded-Private-Handoff/SkillBridge-Final-main
+STATUS: COMPLETE — backend 1080 passed / 5 skipped, tsc + vite build clean, checker green, migration 0007 applied live, browser smoke green at 1440 + 390, docs updated (AGENTS.md + README)
+
+SCOPE (additive delta only)
+---------------------------
+Phase L says: "Build a polished Role Explorer by extending the existing Skills &
+Roles page, saved roles, ESCO search, target-role selection, and role comparison.
+Do not create a disconnected second catalogue."
+
+The existing Skills & Roles page (frontend/src/pages/SkillsRolesPage.tsx, ~2205
+lines) ALREADY ships much of the explorer surface: Recommended/All Roles/Saved/
+Market tabs, client-side search box, source segmented control (Company/Catalog),
+Saved chip, Location/Experience/Category/Skill/Match facets, active-filter chips
++ Clear all, pagination (totalPages/paged, 12/page), save/target/compare,
+role-detail drawer + compare drawer, ESCO "Market Search" tab, Esc-to-close
+modals. So Phase L is implemented as the following honest, additive DELTAS on
+top of that architecture (never a second catalogue):
+
+L1. Recently-viewed tab (BACKEND + FRONTEND)
+    - Backend: additive migration 0007_role_view_events, table
+      role_view_events(student_id FK->students CASCADE, role_id FK->roles
+      CASCADE, viewed_at TEXT, PRIMARY KEY(student_id, role_id)) + index on
+      (student_id, viewed_at DESC). Max 30 rows per student (cap enforcement in
+      models, not the DB). record_role_view(student_id, role_id): validates the
+      role exists (ValueError -> 404), UPSERT bumps viewed_at (a re-view moves
+      the role to the top; never duplicates), then prunes rows older than the
+      30th-newest. list_recent_role_views(student_id): newest-first, JOIN roles
+      for the id/title/family/source/source_version/is_reference/external_id
+      + LEFT JOIN companies for company_name. Returns additive columns only, no
+      stored view text (never re-derived).
+    - Endpoints (student-owner-gated via _own_student; guest 401, cross-student/
+      company/university 403, unknown role 404):
+      POST /api/students/{id}/recent-roles  {"role_id": int} -> {viewed_at}
+      GET  /api/students/{id}/recent-roles  -> {roles: RecentRole[], viewed_at}
+    - seed.py wipe gains: DELETE FROM role_view_events.
+    - Frontend: new "Recently viewed" tab in the tablist + RecentRoleRow list
+      (title, family, provenance, company_name, honest time-ago "Viewed X mins
+      ago", View details / Save toggle / Select as target / Compare). Record a
+      view inside openRoleDetails() whenever a local role (has role id) opens
+      its details (fire-and-forget, refetch recents only when the recents tab
+      is active). None of the ESCO market occupations are recorded (no role id
+      until targeted/imported). Empty state honest ("Roles you open will appear
+      here."). Recents never touch localStorage (documented guard in checker).
+
+L2. Role-family facet
+    - roles.family exists (Phase D 0003, additive column). The All Roles
+      filterbar gains a "Role family" <details> facet: options = distinct
+      families across `all`, missing family rendered as "Unclassified" (never
+      fabricated); filters.family: string[]; activeFilters + Clear all include
+      it; the search haystack includes the family label. roleFamily(r) helper
+      returns r.family?.trim() || 'Unclassified'.
+
+L3. Debounced search + keyboard navigation in the All Roles grid
+    - qDraft state on the input (immediate visual), q state applied after a
+      150 ms debounce (useEffect setTimeout, cleared on unmount). Existing
+      exact-match semantics untouched.
+    - ArrowUp/ArrowDown/Enter/Escape keyboard support on the search input:
+      Arrow keys move a visible highlight ring (srb-hl) across the current
+      paged grid, Enter opens the highlighted role's details, Escape clears the
+      highlight. An sr-only live region announces "Highlighted {title}, {pos}
+      of {n}" on movement (a11y). No focus theft: card buttons keep their own
+      tabIndex (roving tabIndex would trap keyboard users) — the ring is a
+      visual selection with an accessible announcement, documented below.
+      Highlight resets when page/tab/query/filters change the paged list.
+
+L4. Provenance + data-version clarity
+    - RoleLibraryCard meta gains an honest provenance suffix driven by ROLE
+      DATA ONLY: source === 'esco' -> "ESCO import" (plus `· v{source_version}`
+      when that column is present); is_reference=1 -> "Canonical catalogue"
+      (plus `· v{source_version}` when present); else company-authored -> the
+      existing "Company role" text covers it (no version ever guessed).
+    - Catalogue-version meta: additive backend helper
+      models.roles_catalog_version() = newest source_version among is_reference
+      roles (max; None if none carry one — never synthesized); /api/roles adds
+      `role_data_version` only when non-None. The "Role library" header shows
+      "Catalogue data v{...}" when present.
+
+L5. URL/deep-link state (additive, hash-based — compatible with the SPA nav)
+    - #explorer[:t=<tab>&q=<q>&fam=<csv>] is read once on mount and re-applied
+      on hashchange (back/forward); the tab/query/family-filter effects write
+      the canonical hash via history.replaceState (silent, no navigation, no
+      scroll). Unknown keys ignored; malformed hash ignored (never crashes).
+      This adds deep-link state WITHOUT changing App.tsx navigation.
+
+Out-of-slice (documented reasons)
+---------------------------------
+- Virtualization: the All Roles grid is a client-side, DB-backed catalogue
+  paginated 12/page — virtualization would add cost with no benefit at this
+  scale (existing pagination already bounds DOM). Mentioned explicitly.
+- Stale-data auto-refresh: roles are DB-backed reference data under catalogue
+  migrations, not a live provider feed; "stale/offline" states therefore do not
+  apply to the library the way they do to the Phase G/H feed. Honesty handled
+  via the data-version meta (L4) and existing loadError/empty states.
+- Work-type facet on roles: NO honest source exists (only feed jobs carry
+  work_type) — same documented decision as the existing "Work-type filter"
+  note in AGENTS.md; kept out.
+- ESCO occupations with no local role_id cannot appear in recently-viewed
+  until targeted/imported (existing, documented asymmetry).
+- Compare / saved / target / ESCO market behaviours are untouched (already
+  present); this phase only adds the recents tab + family facet + keyboard/
+  debounce/search polish + provenance/deep-link meta.
+
+IMPLEMENTATION ORDER
+--------------------
+1. Backend: database.py _migration_0007_role_view_events + MIGRATIONS [0001..0007];
+   models.py record_role_view/list_recent_role_views/roles_catalog_version +
+   MAX_ROLE_VIEW_EVENTS=30; seed.py wipe; main.py the two endpoints.
+2. Tests: tests/test_role_explorer_phaseL.py (migration fresh/upgrade-preserve/
+   rollback, record+dedupe bump, cap 30 eviction, list newest-first + joins,
+   unknown-role 404 via endpoint, auth matrix, FK-cascade cleanup, endpoint
+   flow, additive compatibility). Migration-count assertions bumped to 0007 in
+   test_migrations_phaseB.py / test_canonical_roles_phaseD.py /
+   test_auth_sessions_phaseC.py / test_esco_import_slice2.py /
+   test_role_canonical_mapping_phaseF.py.
+3. Frontend: types.ts (RoleRecord += family/source_version/canonical_status/
+   role_key optional; RolesResponse += role_data_version?: string; RecentRole +
+   RecentRolesResponse), api.ts (recentRoles/recordRoleView), SkillsRolesPage
+   (L1-L5), index.css (srb-provenance, srb-cat-version, srb-hl, sr-live,
+   recent-* block + 640px responsive).
+4. Contract checker frontend/scripts/check-role-explorer-phaseL.mjs (node,
+   nested-path + regex guards: api helpers hit exactly the two recent-roles
+   paths; tablist includes Recently viewed; family facet; roleFamily Unclassified;
+   onKeyDown ArrowUp/ArrowDown/Enter; recordRoleView inside openRoleDetails;
+   #explorer hash read/write via history.replaceState; recents never touch
+   localStorage) + runtime wrapper test test_runtime_role_explorer_phaseL_frontend.py.
+5. tsc --noEmit + vite build (must be clean).
+6. Dry-run migration 0007 on a copy of the live DB (/tmp/sb-phaseL-dryrun.db);
+   pre-live backup cp backend/skillbridge.db /tmp/sb-live-pre-0007.bak.
+7. Restart live server (PID log /tmp/sb-backend.log) so migration 0007 applies;
+   curl smoke as omar@student.edu: POST/GET recent-roles, 401/403/404 matrix,
+   /api/roles carries role_data_version + family, health unchanged.
+8. Browser smoke phaseL-explorer-verify.js at 1440 + 390 (omar): All Roles
+   search + family facet + arrow-key highlight/Enter -> details opens -> recents
+   tab shows it with time-ago -> provenance/version meta visible -> deep-link
+   #explorer:t=all&q=<...> rehydrates -> console clean, screenshots
+   shots/phaseL-1440.png + phaseL-390.png; cleanup recents rows after.
+9. Docs: AGENTS.md Phase L section (appended after Phase K section) + README
+   user-facing section; todos complete.
+
+Verification bar (same as every phase): backend suite green + tsc/build clean +
+all 19 frontend checkers green + live curl/ownership gates + browser smoke both
+widths with zero console errors.

@@ -1,0 +1,211 @@
+JOB_BOARD_PHASEN_PLAN.txt — Phase N: JOBS BOARD AND MATCH EXPERIENCE
+Guide: /Users/aboodmr/Desktop/SKILLBRIDGE_BACKEND_ROLES_JOBS_UI_OPENCODE_GUIDE.txt (Phase N, guide lines 633-659)
+Supersedes: the part of Phase 2/6 Dashboard feed rendering replaced by this redesign.
+STATUS: COMPLETE — implemented and validated locally on 2026-09-12
+
+IMPLEMENTATION NOTE: The complete Jobs Board now uses bounded client-side
+filtering/pagination over the existing 16-row feed, has a responsive mobile
+filter drawer, tracker-state filters, safe external apply links, a private
+idempotent link-report audit record, and a secret-free provider-health dialog.
+The Prepare action intentionally routes to the real Skills hub rather than
+inventing a job-specific missing skill. Validation: 23 focused backend and
+frontend-contract tests passed; TypeScript/Vite production build passed.
+
+------------------------------------------------------------------------------
+GOAL (Phase N spec)
+------------------------------------------------------------------------------
+Redesign the current job feed around the proven backend contracts without
+removing any provider or obscuring partial failure. Features required: search +
+filters for data ACTUALLY supplied (location/market, provider, work type,
+seniority, freshness, saved/applied state, minimum match); active-filter chips +
+one clear-all; paginated results; a job card with title, company, location,
+provenance, freshness, match summary, saved/application state, expiry/link
+status; expandable match explanation; "Prepare for this job" deep link to
+missing skills, learning and scenarios; report-dead-link action; provider-health
+drawer with honest categories and no secrets; cached/stale/offline banners;
+mobile filter drawer; keyboard-accessible controls. NEVER display unknown fields
+as facts; never auto-open external links or mark a student applied; preserve
+safe URL handling; test every state; browser smoke with MOCKED partial-provider
+failure.
+
+------------------------------------------------------------------------------
+GROUND TRUTH (verified inventory — single source of truth for this plan)
+------------------------------------------------------------------------------
+- Feed consumer: `JobsCard` (DashboardPage.tsx:92-342), mounted twice
+  (both Dashboard branches, :462 + :646). Fetch: api.recentJobs({location,
+  country, market}) only (:141); market from localStorage 'jobs.market' (:100).
+  Today's header badge reads ONLY data.source (live|empty|unavailable|no-cv);
+  backend status (fresh|cached|stale_fallback), cache{hits,misses,avg_fetch_ms},
+  providers_health, last_build_at are dropped by the typed client.
+- Backend: GET /api/jobs/recent (main.py:2703-2728) accepts ONLY limit (clamped
+  1..16), location, country, market. No search/filter/page. recent_jobs()
+  (jobs.py:3142+) has NO search/filter/page; limit folds into the cache key
+  (jobs.py:601); _build_result caps rows at limit. Each surfaced row is the full
+  normalized record (jobs.py:1744-1877 + _apply 2995-2998): provider,
+  provider_job_id, fingerprint, work_type, seniority, published_date,
+  listed_days_ago, is_expired, expires_at, description_excerpt, apply_url,
+  provenance (per-field basis), link_state, link_reason, listing_status, tags,
+  required_skills, location_tier/label, rank_tier, title_evidence, match_pct,
+  match_reason + legacy title/company/url/date/location/country/city/remote/
+  employment_type/workplace_type/salary/required_skills/source/source_url.
+  Feed source/status decision at 3062-3070 + status overwritten on cache paths
+  (recent_jobs 3183/3193/3206).
+- Match breakdown: MatchBreakdown (frontend/src/components/MatchBreakdown.tsx)
+  kind="job" already mounted per row when j.fingerprint (DashboardPage.tsx:
+  309-312) via api.jobMatchBreakdown -> GET /api/students/{id}/jobs/recent/
+  {fingerprint}/breakdown (Phase J, cheap, does NOT recompute recommendations).
+- Tracker (Phase K): api.saveTrackedJob/jobTracker/trackerItem/updateTrackerItem/
+  deleteTrackerItem; TrackedJob carries fingerprint + stage; the page already
+  preloads savedFps from api.jobTracker (DashboardPage.tsx:107-112).
+- Health: jobs.provider_status() (jobs.py:282-330) secret-free, TTL 10s;
+  providers_health (source->canonical code), cache{hits,misses,avg_fetch_ms},
+  providers_available, last_build_at, last_success_provider,
+  last_error_by_provider. Only exposed via GET /api/config/demo-mode under the
+  "jobs" key (main.py:520-536); the FE typed return (api.ts:98) swallows it.
+- Dead links: _VERIFIED_DEAD_JOB_URLS (jobs.py:524-526, curated, one beBee URL);
+  link_state dead/rejected -> listing_status link-unavailable, row still
+  filtered from the feed (3059-3061). NO job_link_reports table/endpoint exists.
+- Deep links: Section = dashboard|skills|learning|scenarios|assessments|
+  university (App.tsx:17); navigate(dest, focus:{skillId,roleTitle}) hub-rooted
+  (App.tsx:93-102); Dashboard Recommended Next Step already derives nextStep
+  from the gap analysis + scenario library and go()s to the right section with a
+  real skillId (dashboard NextStepAction). No jobs Section exists.
+
+------------------------------------------------------------------------------
+DECISIONS (additive, honest, backward-compatible)
+------------------------------------------------------------------------------
+D1. FILTERS/PAGINATION = CLIENT-SIDE. Backend search/filter/page would fork the
+    Phase-G cache key per term (provider storms) and is out of the proven
+    contract. The board requests limit=16 (server clamp, one bounded cache row;
+    additive to the contract) and filters/paginates the SURFACED rows client-
+    side (8/page). Every filter option is derived ONLY from fields actually
+    present in the rows; work_type/seniority values equal to 'unknown'/'not
+    specified'/'' are NOT offered as options and rendered as absent (never shown
+    as facts). freshness buckets computed from real listed_days_ago/published_
+    date/fetched_at. saved/applied filter from the Phase-K tracker stages map.
+    minimum match = threshold on match_pct. Search box = client-side token
+    overlap on title/company/location/provider/skills/tags (a filter, not a
+    fact).
+D2. JOB CARD = NEW SEMANTICS, SAME CONTRACT. Reserved: title, company,
+    location(city·country), provider (provenance badge), freshness (posted Nd
+    ago / published), match summary (badge + j.match_reason), saved/application
+    state (Save toggle + stage badge when tracked), expiry/link status
+    (listing_status/expired/link-unavailable chips + link_state when relevant).
+    description_excerpt shown only when non-empty (real field). Salary never
+    shown (no honest source). External open stays explicit, target=_blank
+    rel=noopener noreferrer, never auto-opened; expired/flagged rows have no
+    click-through link (title text, no URL), matching today's safe behavior.
+D3. EXPANDABLE MATCH EXPLANATION = reuse MatchBreakdown kind="job" (Phase J)
+    per row when j.fingerprint — no new endpoint, no recompute.
+D4. "PREPARE FOR THIS JOB" = grounded the the dashboard's OWN gap machinery.
+    onClick: set applyCopilot job context (existing) then reuse nextStep
+    (analysis + scenario library + target title) -> go(section,
+    {skillId?, roleTitle}) — identical to the Recommended Next Step, so the
+    deep link lands on real missing-skills/learning/scenarios with a real DB
+    skillId when analysis exists, else go('skills') (the journey hub). No
+    per-job skill gap is ever fabricated.
+D5. REPORT-DEAD-LINK = NEW append-only backend (migration 0008_job_link_reports
+    + owner-gated POST /api/students/{id}/jobs/recent/{fingerprint}/report-dead
+    -link + list read). A report is an AUDIT record (fingerprint, url, title,
+    provider, reported_by, reported_at), never a verdict: _VERIFIED_DEAD_JOB_URLS
+    stays curated-only, the link stays safely unopened, and the row shows a
+    "Link reported — we will verify it." note (in-session state + re-derived on
+    mount). Idempotent (one open report per student+fingerprint). No secrets.
+D6. PROVIDER-HEALTH DRAWER = new presentational component; opens from the feed
+    header; fetches api.jobsHealth() (new typed helper over /api/config/
+    demo-mode reading the jobs key) once on first open (fired ref). Groups the
+    canonical health codes into honest categories (Healthy / Empty success /
+    Throttled (rate-limited) / Auth needed / Unreachable / Timed out / Malformed
+    / Disabled / Unconfigured / Unknown), each provider's reason verbatim, plus
+    cache {hits,misses,avg_fetch_ms}, providers_available, last_build_at.
+    Accessible dialog (role=dialog, Escape, close button, backdrop).
+D7. BANNERS = read data.status+source (extend RecentJobsResponse types): cached
+    copy banner, stale_fallback ("refreshing in the background"), unavailable
+    (existing honesty), offline (network-error state already captured), no-cv
+    (existing CTA).
+D8. MOBILE FILTER DRAWER + A11Y: ≥641px inline filter bars; ≤640px all filters
+    move behind a "Filters (n)" trigger opening a filter drawer (reuse the
+    established overlay pattern), Escape/backdrop close + focus return. All
+    controls are real <button>/<label><select> with aria-labels; result-count
+    live region announces filter/pagination changes.
+D9. SECOND CONSUMER SAFETY: SkillsRolesPage role-drawer "Available jobs" keeps
+    reading api.recentJobs fields (fingerprint, listing_status, provider,
+    listed_days_ago, match_pct, title, company, location, url) — untouched
+    (verified in the Phase N checker by positive-guard assertions).
+
+------------------------------------------------------------------------------
+IMPLEMENTATION ORDER
+------------------------------------------------------------------------------
+1. Backend: migration `0008_job_link_reports` (append-only table: id,
+   student_id FK CASCADE, fingerprint, url, title, provider, job_hash,
+   reported_at, UNIQUE(student_id, fingerprint)); models helpers
+   (report_dead_link + list_job_link_reports + has_open_report); main.py routes
+   (owner-gated _own_student, 401/403/404 on unknown fingerprint via
+   jobs.peek_feed_job or tracker lookup — report is allowed from the CURRENT
+   feed row (locate) or from an already-saved tracker row); demo-mode untouched;
+   seed.py wipe clears the table. Tests: test_job_link_reports_phaseN.py
+   (migration fresh/upgrade/rollback, roundtrip, idempotency, 404 unknown fp,
+   401/403 matrix, wipe, FK cascade, listing reports newest-first, strict
+   additive — _VERIFIED_DEAD_JOB_URLS untouched by a report). Migration-count
+   asserts bumped to 0008 across phase tests.
+2. Frontend types (types.ts): RecentJob += link_state/link_reason/description
+   _excerpt/apply_url/provider_job_id/published_date/fetched_at/original_title/
+   provenance (typed additive); RecentJobsResponse += status? + cache?; Provider
+   Report += health?; new JobsHealthPayload/JobsCacheStats/ProviderHealthEntry;
+   new JobLinkReport/JobLinkReportsResponse; api.ts: recentJobs accepts limit;
+   jobsHealth(); reportDeadLink(studentId, fingerprint); extends demoMode type
+   to include jobs?.  (App/AppContext untouched except nothing — demo banner
+   keeps working.)
+3. DashboardPage.tsx JobsCard rewrite:
+   - state: filters {q, provider, workType, seniority, freshness, minMatch,
+     savedState}, page, filterOpen(mobile), healthOpen/healthState,
+     reportedFps (from api), stageByFp map (from api.jobTracker items).
+   - derived: option lists from real row values (non-unknown only), filtered/
+     paged lists, activeFilterChips + clearAll, result-count live region.
+   - header: source/status banner lines + Provider status (X/Y) trigger +
+     old market select.
+   - card: new layout (per D2) + MatchBreakdown (existing) + Prepare button +
+     Report dead link button + Save/stage + safe link only when live.
+   - ProviderHealthDrawer + FilterDrawer components.
+4. index.css: Phase N block (.jobn-*, .jb-drawer, .jb-health, chips,
+   responsive 640px).
+5. Checkers: frontend/scripts/check-job-board-phaseN.mjs + runtime wrapper
+   test (negative guards: no api.) (no auto-open: expired rows render <div>,
+   live rows rel=noopener; no window.open; no auto stage/applied writes; filters
+   only from real fields; unknown opacities never shown; Prepare uses nextStep
+   or go('skills') — never fabricates a skillId; health via api.jobsHealth only;
+   drawer fields only; SkillsRolesPage consumer fields preserved).
+6. CI: tsc --noEmit + vite build + all 21 checkers + full backend suite.
+7. Live: restart uvicorn (PID will change; log /tmp/sb-backend.log), dry-run
+   0008 on a DB copy first (standard gate), curl smoke (report roundtrip
+   as omar, auth 401/403, additivity, health drawer payload).
+8. Browser smoke (mock partial-provider failure): sbverify/phaseN-jobboard-
+   verify.js — omar × 1440 + 390. Live feed already yields honest partial
+   failure (JSearch rate_limited, LinkedIn/Google unauthorized, USAJobs
+   disabled, Jooble timeout). PLUS request-interception to inject
+   {status:'stale_fallback'/'cached'} responses to assert the stale/cached
+   banner renders; filters (provider/work-type/min-match), chips+clear-all,
+   pagination, Prepare navigation, report-dead-link network assertion,
+   health-drawer categories, mobile drawer at 390, console clean, no overflow.
+9. Docs: AGENTS.md Phase N section + README "Jobs board & match experience
+   (Phase N)" + this plan's STATUS -> COMPLETE.
+
+------------------------------------------------------------------------------
+HONESTY INVARIANTS (locked by checker + tests)
+------------------------------------------------------------------------------
+- No salary/market figures anywhere on the board (no honest source).
+- work_type/seniority 'unknown'/'not specified'/'' are absent, not facts.
+- Filters expose ONLY values present in the current rows.
+- status='cached'/'stale_fallback'/'fresh'/'unavailable' + source fully
+  surfaced in banners; nothing is ever presented as live unless it is.
+- Saved state = Phase-K tracker; stages change ONLY via explicit tracker PATCH
+  (each stage change is an audit row) — the board never auto-marks applied.
+- External links: live rows only, target=_blank rel=noopener noreferrer,
+  user-initiated; expired/link-unavailable rows have no URL.
+- A dead-link report is an audit record, never an auto-blocklist write.
+- Compare/match numbers are reused from backend payloads, never recomputed.
+
+OUT OF-SLICE (documented): no new provider; no server-side search/filter/page
+(kept client-side); dead-link verification stays manual/curated; the jobs
+experience stays embedded in the Dashboard (no separate jobs Section in Phase N);
+SkillsRolesPage drawer job rows keep their existing compact layout.

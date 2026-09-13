@@ -1,0 +1,115 @@
+JOB_NORMALIZATION_LINK_QUALITY_PLAN.txt — Phase H (guide lines 436-469)
+======================================================================
+Strengthening the existing multi-provider pipeline. NO provider removed, all
+routes preserved, DB untouched (in-memory pipeline only). Deploy = restart only.
+
+GOAL H1 — One normalized internal job record (additive fields)
+--------------------------------------------------------------
+`normalise_listing(raw, fetched_at)` builds ONE internal record with (all
+ADDITIVE — existing feed fields title/company/url/location/country/date/source/
+is_expired/... keep their exact current meaning):
+- provider + provider_job_id  (provider's own id via _job_field when present;
+  else None — never guessed)
+- fingerprint                (stable sha1; seed = provider|provider_job_id when
+  the provider gives an id, else the canonical apply url; _NORM_TAG-prefixed)
+- original_title/company/location (verbatim provider strings)
+- title/location/company     (display-normalized, never fabricated)
+- work_type                  remote|hybrid|onsite|unknown — provider explicit
+  field first, else location tokens (_workplace_type), else "unknown"
+- employment_type (existing field, kept)
+- seniority                  _seniority_label title-keyword inference
+  ("Entry"/"Junior"/"Mid"/"Senior"; unknown never claimed)
+- description_excerpt        description clipped to 260 chars (additive)
+- apply_url (canonical apply link) + source_url (provider page; both kept)
+- published_date (alias of date), expires_at, fetched_at ISO timestamps
+- listing_status             live | expired | link-unavailable
+                              (+ cached/stale are the Phase G feed-level
+                              statuses, documented not duplicated here)
+- link_state + link_checked  ok|unverified|dead|rejected
+- provenance dict per inferred/normalized field: {value, basis} where basis is
+  provider_field | provider_flag | availability_flag | close_date | posted_age
+  | location_parse | tag_hint | title_keyword | remote_token | unknown
+- is_expired + expires_at + listed_days_ago RETAINED exactly as today, so the
+  Boolean/string expiry handling ("expired"/"not_expired"/True/False/
+  available:false/close/expires dates, MAX_LISTING_AGE_DAYS) is unchanged.
+
+GOAL H2 — Conservative dedup + preserve conflicting info
+--------------------------------------------------------
+`_merge` dedups in priority order (all two-uncertain-jobs-with-matching-titles
+must NOT merge; identity must agree):
+  1. (provider, provider_job_id)  — a repost of the SAME provider vacancy
+     collapses to one record; original titles preserved in observed list.
+  2. canonical apply URL (u:url)  — one vacancy surfaced by two providers with
+     the same apply link collapses (existing behavior preserved).
+  3. title + company + location identity (existing pop_key) — ONLY when neither
+     id nor a shared apply link exists.
+Additive `dedupe_basis` field records which key won.
+Conflict preservation: when merging disagreeing sources, the primary fields keep
+today's best-effort selection (richer/first) while `observed_salary`,
+`observed_employment_type`, `observed_work_type`, `observed_seniority`,
+`observed_location` capture every observed variant. Conflicting information is
+PRESERVED, never resolved by inventing certainty.
+Verified-dead URLs are NO LONGER silently deleted from `_merge`: the record is
+kept with listing_status link-unavailable + link_state dead + provenance
+(history preserved); the SURFACED feed still excludes them (identical end-user
+behavior to today).
+
+GOAL H3 — Safe link-quality handling (offline, deterministic, test-safe)
+-----------------------------------------------------------------------
+`_link_quality(url, known_dead=False)` never performs a network probe:
+- missing/empty url -> rejected (missing_url)
+- scheme not http/https (javascript:, data:, file:, ftp:) -> rejected
+  (unsafe_scheme)
+- unparseable url -> rejected (unparseable)
+- no host -> rejected (no_host)
+- private/loopback/link-local/reserved/multicast literal IP or a blocked
+  internal hostname (localhost, *.local/.internal/.intranet/.lan/.home/.onion)
+  -> rejected (private_network)  [SSRF defense index available offline]
+- URL in _VERIFIED_DEAD_JOB_URLS -> dead (verified_dead)
+- otherwise (valid https + offline default) -> unverified — the honest
+  inconclusive state; we never CLAIM a link is live without evidence.
+A probe hook exists ONLY behind live_check=True and is never used by automated
+tests (no network in the suite; assert probe is never called).
+Feed survival: rejected/dead links never surface (listing_status
+link-unavailable), unverified valid links surface with link_state "unverified"
+(they're provider-live by expiry, and the feed never claims verification).
+
+GOAL H4 — Tests (new backend/tests/test_job_normalization_link_quality_phaseH.py)
+--------------------------------------------------------------------------------
+Provider payload shapes (remotive/remoteok/jsearch/adzuna/usa_jobs/arbeitnow/
+jobicy/getonboard/himalayas + rapidapi shape) normalize without crashing;
+fingerprint stability (same provider id -> same, different -> different);
+dedup via provider id / apply url / identity; near-duplicates with same title
+but different company or location never merge; reposts collapse preserving
+original titles; malformed dates -> no crash; unsafe schemes + private hosts
+rejected with reason; verified-dead kept with provenance + excluded from feed;
+missing title/url skipped, missing company defaults Unknown; conflicts kept in
+observed_* ; expiry bool/string flags; link-quality probe never invoked in
+tests; provider failure yields nothing fabricated.
+
+VERIFICATION GATE
+-----------------
+Focused: new Phase H suite + test_jobs_features/expiry/matching/provider_spec/
+multiprovider/market_divergence. Then FULL backend suite (943 + new == green).
+Deploy gate (needs owner approval): restart :8000 with a live smoke of
+/api/jobs/recent honoring new link_state + listing_status fields.
+
+IMPLEMENTATION STATUS
+---------------------
+Code: DONE. normalise_listing + _merge/prefer rewrite + _link_quality +
+_is_private_hostname + _fingerprint + _probe_listing_link (live_check-only) in
+backend/app/jobs.py. seed = provider|provider_job_id when a provider id exists
+else canonical apply url (same provider id + different url => SAME fingerprint).
+Scheme-less values stay honest `unverified` (inconclusive) rather than unsafe;
+explicit unsafe schemes and private/internal hosts (incl. bracketed IPv6) are
+`rejected`. Best-link selection in prefer: when sources disagree on link state
+the SAFEST surviving URL wins the surfaced record while weaker links live on in
+observed_urls (dead/rejected copy never silently deleted, never drags a live
+vacancy down). observed_titles added for repost history.
+Tests: DONE — test_job_normalization_link_quality_phaseH.py (48 passed).
+Regression: existing job suites 107 passed / 1 skipped; FULL backend suite
+991 passed / 5 skipped (~4:30, was 943+48, zero regressions).
+Deploy: PENDING owner approval (restart-only + live smoke + AGENTS.md section).
+
+OUT OF SCOPE (documented): no frontend change required (additive fields are
+ignored); escoe.py cache unchanged; no DB migration; no new provider.

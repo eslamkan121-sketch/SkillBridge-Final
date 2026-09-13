@@ -51,8 +51,8 @@ ok(/Record<TutorId, TutorMessage\[\]>/.test(panel),
 ok(/interviewThreads/.test(panel), 'CopilotPanel: interview threads are stored per tutor')
 ok(/interviewLocked = .*starting.*active/.test(panel),
    'CopilotPanel: interview pin state derives from starting/active phases')
-ok(/disabled=\{interviewLocked\}/.test(panel),
-   'CopilotPanel: TutorSelector is disabled while an interview runs')
+ok(!/TutorSelector/.test(panel) && /interviewLocked/.test(panel),
+   'CopilotPanel: no in-panel tutor switch exists, so the interview tutor is pinned (stronger than disabled)')
 ok(/api\.clearTutorChat/.test(panel), 'CopilotPanel: conversation reset calls clearTutorChat')
 ok(/copilot-expanded/.test(panel), 'CopilotPanel: expand/collapse toggles the overlay class')
 ok(/api\.tutorTts/.test(panel), 'CopilotPanel: reply voice uses api.tutorTts')

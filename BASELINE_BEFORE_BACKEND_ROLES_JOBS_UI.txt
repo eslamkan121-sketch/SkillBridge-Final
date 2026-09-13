@@ -1,0 +1,362 @@
+================================================================================
+ SkillBridge — BACKEND / ROLES / JOBS / UI UPGRADE
+ PHASE A — FREEZE & AUDIT THE TRUE BASELINE (read-only; no code edited)
+ Date: 2026-09-11
+================================================================================
+
+This report freezes the project as the immutable comparison baseline for the
+upgrade. It was produced with NO application-file edits. Verification ran on a
+fresh macOS virtual environment (.venv-mac) because the bundled .venv/.venv* is
+a Windows-built virtual environment and its binaries are not platform-portable.
+
+--------------------------------------------------------------------------------
+1. EXACT SOURCE BASELINE AND DIRTY-TREE OWNERSHIP
+--------------------------------------------------------------------------------
+Workspace:   ~/Desktop/SkillBridge-Complete-Upgraded-Private-Handoff/SkillBridge-Final-main
+Git branch:  master  (no remotes configured; local-only archive)
+HEAD commit: 6651a04  "handoff fix: aisha regression runs as Legal Assistant;
+             re-verified 91/0 at 1440/820/390"
+Prior commits: 4e0fb96 docs handoff, ca90b8e final role/scenario UI upgrade,
+               7897f89 baseline pristine merged state (Phase-1 old starting point)
+
+Git status: DIRTY at start of Phase A. 27 entries (18 modified + 9 untracked).
+These are the PRE-EXISTING team working-tree changes that Phase A must preserve
+and neither commit nor revert:
+
+  MODIFIED (18)
+    backend/app/copilot.py
+    backend/app/genai.py
+    backend/app/jobs.py            (multi-provider + rerank/cache/cooldown work)
+    backend/app/main.py
+    backend/app/tts.py             (ElevenLabs wiring + VEX voice id)
+    backend/tests/test_jobs_matching.py
+    backend/tests/test_jobs_provider_spec.py
+    backend/tests/test_nim_provider.py
+    backend/tests/test_tutor_conversations.py
+    backend/tests/test_tutor_language.py
+    backend/tests/test_tutor_modes.py
+    frontend/src/AppContext.tsx
+    frontend/src/components/CopilotPanel.tsx
+    frontend/src/components/Icons.tsx
+    frontend/src/components/learning.tsx
+    frontend/src/index.css
+    scripts/setup.sh               (mode-only change, 0 lines)
+    scripts/test-backend.sh        (mode-only change, 0 lines)
+    scripts/verify.sh              (mode-only change, 0 lines)
+
+  UNTRACKED (9)
+    backend/tests/test_jobs_features.py
+    backend/tests/test_runtime_copilot_vex_mode_frontend.py
+    backend/tests/test_tutor_personas_v2.py
+    docs/HANDOFF-2026-09-11.md
+    docs/job-providers.md
+    docs/rtl-chat-audit.md
+    docs/tts-deferral.md
+    frontend/scripts/check-copilot-vex-mode.mjs
+    (plus .venv-mac/ created for this audit - gitignored via .venv-*/ pattern)
+
+Dirty-tree ownership: these changes represent the most recent private team
+session (multi-provider jobs feed + TTS/ElevenLabs config + tutor personas v2).
+They are part of "what existed before" and MUST NOT be reverted.
+
+ONE ENVIRONMENT ADJUSTMENT, DISCLOSED: the working-tree modification to the
+tracked file frontend/package-lock.json was auto-generated npm noise (no new
+declared dependency; package.json is unmodified). During the macOS dependency
+refresh it was restored to HEAD content. Source behavior is unaffected; this is
+the only pre-existing working-tree entry not preserved byte-for-byte.
+
+--------------------------------------------------------------------------------
+2. EXISTING FEATURES THAT MUST REMAIN
+--------------------------------------------------------------------------------
+- Sign-in/signup for Student, Company, University Admin; Google OAuth (Authlib)
+  with clearly-labelled demo provider; email verification + password reset
+  (SMTP or demo-logged token).
+- Frontend served by FastAPI static files from frontend/dist (SPA).
+- Student: CV upload + GenAI skill extraction (self-reported, provenance kept),
+  target-role selection incl. ESCO occupations (select_esco_role imports),
+  skill-gap analysis, career-readiness match, learning paths + roadmap + lessons
+  + resources + diagnostics + personalized paths + practice + mini-checks,
+  AI Tutor (4 personas nova/axel/sage/vex + ElevenLabs TTS voices), practice
+  scenarios (branching engine, save/resume, history, hints), assessments
+  (pre- and final-assessment, integrity events, webcam gate, hard-termination),
+  verified skills profile, saved roles, public profile (/p/:id),
+  live multi-provider job feed with relocation market, career roadmap.
+- Company: role definitions with required skills+levels, candidate list per
+  role, applicant skill coverage for its own roles.
+- University: aggregated cohort + skill-gap stats, MIN_COHORT_SIZE=5 privacy
+  suppression, cohort confirmation, no individual records.
+- Voice/tutor/tts.py routes and behavior present and WORKING EXACTLY AS IS —
+  VOICE FEATURES ARE FROZEN for this upgrade (no additions permitted).
+- Roles & Skills page: searchable/filterable/comparable role library, saved
+  roles (server-backed saved_roles), target selection, role-detail drawer with
+  deep-links to Learning/Assessments/Scenarios, honest unlock nudges.
+- Accessibility basics present: skip link, aria labels, keyboard nav, focus,
+  banners; RTL chat audit doc exists (docs/rtl-chat-audit.md) but full RTL pass
+  is NOT yet applied.
+
+--------------------------------------------------------------------------------
+3. API ROUTE INVENTORY (all existing routes - none may be removed/renamed)
+--------------------------------------------------------------------------------
+All routes live in backend/app/main.py (single app; no routers mounted).
+
+AUTH (/api/auth): signup, login, logout, me, google/config, google/login,
+google/demo, google/callback, google/complete, reset/request, reset/confirm,
+verify, verify/status
+
+CONFIG/LOOKUPS: config/demo-mode, universities, locations, skills (GET,POST),
+companies, roles (GET list), roles/catalog, roles/esco-market, roles/{role_id}
+(GET), roles (POST), roles/{role_id} (PUT, DELETE), company/roles/{role_id}/
+candidates, company/roles/{role_id}/skills
+
+STUDENT CORE: students (GET), students/{student_id} (GET), role-recommendations,
+target-role/esco, students/{student_id} (PUT, DELETE), cv (POST)
+
+STUDENT LEARNING: analysis, activity, learning/generate, learning (GET),
+learning/{skill_id} (GET), learning/{skill_id}/progress,
+learning/{skill_id}/check-links, career-roadmap,
+learning/{skill_id}/diagnostic/generate|submit|latest,
+learning/{skill_id}/personalized-path/generate|(GET)|(progress),
+learning/{skill_id}/final-assessment/status,
+learning/{skill_id}/lessons/{competency}/generate|(GET)|start|practice(GET,POST)|mini-check
+
+STUDENT TUTOR & VOICE (FROZEN): tutor (GET,DELETE,POST), tutor/preference
+(GET,PUT), interview (POST), interview/voice (GET), interview/tts (POST),
+tutor/tts (POST)
+
+STUDENT ASSESSMENT & SCENARIOS: assessments/session (POST,DELETE),
+assessments/integrity-events, assessments/generate, assessments (POST, GET),
+assessments/finalize, skills/{skill_id}/verification,
+scenarios (GET), scenarios/history, scenarios/{scenario_id}/start,
+scenarios/attempts/{attempt_id} (GET), .../decide, .../hint
+
+STUDENT ROLES/JOBS: saved-roles (GET), saved-roles/{role_id} (POST, DELETE),
+jobs/recent (GET, with limit/location/country/market)
+
+PUBLIC/UNIVERSITY: public/verified/{student_id}, university/cohort (GET,POST
+confirm), university/stats
+SPA: GET /{full_path:path} + static /assets
+
+Count: 91 API endpoint handlers (86 @app decorators incl. role/student path
+variants; counted from grep - accurate for contract purposes).
+
+--------------------------------------------------------------------------------
+4. ENVIRONMENT-VARIABLE INVENTORY (VALUES REDACTED - never printed)
+--------------------------------------------------------------------------------
+Names present in the real root .env (values NOT reproduced here, per rule 5):
+
+ADZUNA_APP_ID, ADZUNA_APP_KEY, BACKEND_PORT, ELEVENLABS_API_KEY,
+ELEVENLABS_AXEL_VOICE_ID, ELEVENLABS_MODEL, ELEVENLABS_NOVA_VOICE_ID,
+ELEVENLABS_SAGE_VOICE_ID, ELEVENLABS_VEX_VOICE_ID, GOOGLE_JOBS_HOST,
+GOOGLE_JOBS_PATH, JOOBLE_API_KEY, JSEARCH_API_KEY, LINKEDIN_JOBS_HOST,
+LINKEDIN_JOBS_PATH, NIM_BASE_URL, NIM_DISABLE_THINKING, NIM_MODEL,
+NIM_TIMEOUT_SECONDS, NVIDIA_API_KEY, RAPIDAPI_GOOGLE_JOBS_KEY, RAPIDAPI_KEY,
+RAPIDAPI_LINKEDIN_KEY, USAJOBS_API_KEY, USAJOBS_USER_AGENT
+
+Additional names consumed by code (os.environ.get) beyond the .env file:
+ANTHROPIC_API_KEY, OPENAI_API_KEY, SKILLBRIDGE_APP_URL, SKILLBRIDGE_CLAUDE_MODEL,
+SKILLBRIDGE_DB, SKILLBRIDGE_EMAIL_DISABLED, SKILLBRIDGE_GOOGLE_CLIENT_ID,
+SKILLBRIDGE_GOOGLE_CLIENT_SECRET, SKILLBRIDGE_GOOGLE_DEMO, SKILLBRIDGE_OPENAI_MODEL,
+SKILLBRIDGE_RESET_TTL_HOURS, SKILLBRIDGE_YOUTUBE_API_KEY, SMTP_FROM, SMTP_HOST,
+SMTP_PASS, SMTP_PORT, SMTP_USER, NIM_API_KEY, NVAPI_KEY,
+JOBS_CACHE_TTL_SECONDS, JOBS_COOLDOWN_SECONDS, JOBS_CAREER_FAMILY_*
+
+All values REDACTED. .env is preserved untouched on disk and is git-ignored.
+
+--------------------------------------------------------------------------------
+5. DATABASE / TABLE INVENTORY
+--------------------------------------------------------------------------------
+Engine: SQLite (stdlib sqlite3), file backend/skillbridge.db, overridable via
+SKILLBRIDGE_DB. Per-thread connections; PRAGMA foreign_keys=ON.
+Bootstrap: on startup, if DB file missing -> seed.seed() (schema + reference
+data + demo accounts) else init_db() -> then seed.ensure_catalog_roles().
+Migration style: lightweight additive ALTER via _migrate() column list (NO
+versioning/migration ledger today - Phase B target).
+
+Tables (from live DB, integrity_check=ok, foreign_key_check clean):
+users, sessions, password_resets, google_registrations, universities, cities,
+email_verifications, students, companies, skills, roles, role_skills,
+self_reported_skills, verified_skills, learning_path_items, tutor_messages,
+assessment_attempts, career_roadmaps, learning_diagnostics, personalized_paths,
+learning_lessons, learning_practice_attempts, tutor_preferences,
+active_assessments, scenario_attempts, saved_roles   (26 tables)
+
+Live-DB row counts: students=10, users=14, companies=3, roles=32,
+role_skills=322, skills=209, self_reported_skills=63, verified_skills=5,
+sessions=270, saved_roles=6, scenario_attempts=20, assessment_attempts=8,
+learning_path_items=28, career_roadmaps=16, tutor_messages=34,
+tutor_preferences=1, learning_diagnostics=6, personalized_paths=3,
+learning_lessons=3, universities=55, cities=65.
+
+Foreign keys enabled; sqlite_sequence present for AUTOINCREMENT tables.
+Note: role_skills has a CHECK on required_level; levels are the only allowed
+values.
+
+--------------------------------------------------------------------------------
+6. ROLE AND JOB REQUEST/DATA FLOWS
+--------------------------------------------------------------------------------
+ROLES
+- Source roles: company-owned (roles.company_id), reference catalog
+  (roles.is_reference=1, source='company', owning catalog company
+  "SkillBridge Talent Catalog"), and ESCO occupations imported via
+  select_esco_role (source='esco', external_id=ESCO URI).
+- Catalog endpoint: /api/roles/catalog serves list_catalog_roles().
+- ESCO: backend/app/escoe.py queries the public ESCO search/resource API
+  (https://ec.europa.eu/esco/api/...), scores occupations, and market_occupations
+  functions. Imported role skills are attached via role_skills with
+  required_level default 'Intermediate'. No ESCO version pinning/refresh service
+  yet (Phase E target).
+- Matching: matching.py analyze_student / matching.categorize produce skill gaps;
+  recommendations.py recommend() builds the role pool (local + ESCO) with
+  specificity, confidence, warnings; matching score drives the dashboard
+  readiness and job reranking. Explainable matching (Phase J) does NOT yet exist
+  beyond raw score; there is no per-skill contribution breakdown exposed.
+- Saved roles: saved_roles(student_id,role_id) idempotent, ownership-gated.
+
+JOBS
+- Feed: GET /api/jobs/recent (limit, location, country, market). Requires the
+  student's CV (self-reported skills) before returning a matched feed.
+- Providers (12, in priority order): JSearch, LinkedIn, Google Jobs, Adzuna,
+  USAJobs, Remotive, Jobicy, Arbeitnow, RemoteOK, Jooble, Himalayas,
+  Get on Board. Keyless boards always attempted; keyed ones need env keys;
+  RapidAPI LinkedIn/Google are host-gated (never guessed).
+- Pipeline: fetch_all (parallel, short timeouts, per-provider status) -> merge
+  (normalize + dedupe by URL and by normalized title+company+location) ->
+  rerank (skills/experience/board + career-family penalty) -> cache (TTL
+  JOBS_CACHE_TTL_SECONDS default 900s) -> build_result with source live|empty|
+  unavailable + provider report.
+- Health: provider_status() secret-free; cache hits/misses; per-provider
+  cooldown after 429/403/timeout (JOBS_COOLDOWN_SECONDS).
+- Known gaps for this upgrade: cache key is built from role/skills/country/
+  location/limit/market but multi-user/page/filter isolation and LRU bounds are
+  NOT proven (Phase G); link-quality/dead-link verification is minimal (blocklist
+  + expiry flags) (Phase H); honest per-request health vocabulary is partial
+  (Phase I); saved jobs / application tracker do not exist (Phase K).
+
+--------------------------------------------------------------------------------
+7. ROLE-BY-ROLE FRONTEND MAP
+--------------------------------------------------------------------------------
+App shell (frontend/src/App.tsx): single Shell with `section` state routing
+(dashboard | skills | learning | scenarios | assessments | university). No URL
+deep-links for main sections (Phase L/Q target). Skip-link, sidebar, topbar,
+role chip, Copilot panel (students), notifications placeholder (coming soon).
+React Router is used only for the public profile /p/:id.
+
+STUDENT
+  DashboardPage -> StudentDashboard: career readiness, gap map, learning
+   activity, recent live jobs card (feed health N/12), recommended next step Go,
+   market dropdown.
+  SkillsRolesPage: recommended/all-roles tabs, search/filter/comparison, saved
+   roles filter, target selection, ESCO market recs, role-detail drawer with
+   Start learning / Verify a Skill / Practice this role deep links.
+  LearningPage: gap list, explainer, resources, roadmap, diagnostic, personalized
+   path, lessons, practice, mini-check, AI tutor panel.
+  ScenariosPage: library / player / results / history; 27 scenarios in 9
+   families; per-family gating; transparent hint scoring; save/resume.
+  AssessmentsPage: pre-assessment, sessions, integrity + webcam gate, finalize,
+   verification (verified profile), focus deep-link.
+COMPANY
+  DashboardPage -> CompanyDashboard: own roles + candidates + applicant skill
+   coverage; Skills & Roles page allows role definition, editing, deletion.
+UNIVERSITY
+  UniversityPage: cohort confirmation + aggregated anonymized stats (privacy
+   rule: suppress cells under MIN_COHORT_SIZE=5).
+PUBLIC
+  PublicProfilePage (/p/:id): verified-skill public profile.
+
+--------------------------------------------------------------------------------
+8. EXISTING TESTS AND THEIR RESULTS (Phase A run on fresh macOS venv)
+--------------------------------------------------------------------------------
+Command (from backend/):  ../.venv-mac/bin/python -m pytest -q -p no:cacheprovider
+Result:  810 passed, 5 skipped, 0 failed   (~183-188s, 815 collected)
+Skips (all intentional, present before):
+  - test_jobs_market_divergence: key-gated live check (suite never reads .env)
+  - test_lessons x2: path has no developing items (fixture-state dependent)
+  - test_open_skill_extraction x2: real law/Khaled PDFs not on this machine
+
+Frontend (from frontend/):
+  - npm run typecheck  (tsc --noEmit): PASS, 0 errors
+  - npm run build      (tsc -b && vite build): PASS (only the documented
+    non-blocking >500 kB chunk warning)
+Frontend deps were reinstalled fresh on macOS because the bundled node_modules
+ship Windows .bin shims referencing node.exe (tsc could not launch).
+
+Frontend source-contract checkers (run inside the pytest suite via
+test_runtime_* tests), all green in the 810 run: check-roles-discovery-phase2,
+check-scenarios-family-phase3, check-scenarios-phase4, check-scenarios-phase5,
+check-learning-phase1/-phase2-practice/-phase3-remediation/-phase4-resources/
+-polish, check-tutor-language, check-tutor-profiles, check-step45-copilot,
+check-interview-voice-ux, check-webcam-integrity, check-copilot-vex-mode.
+
+SQLite integrity on a COPY of the live DB: PRAGMA integrity_check = ok;
+PRAGMA foreign_key_check = clean (no violations).
+
+--------------------------------------------------------------------------------
+9. CONFIRMED DEFECTS VS UNVERIFIED SUSPICIONS
+--------------------------------------------------------------------------------
+CONFIRMED (documented by prior sessions, reproducible in code/reports)
+- No session expiry/revocation/last-used metadata; tokens stored raw; no login
+  rate limiting. (docs/HANDOFF-2026-09-11 §5.1? §4; models.create_session)
+- Legacy plaintext passwords still accepted by check_credentials and are only
+  upgraded implicitly (never re-hashed on successful login).
+- _load_env() reads .env with the interpreter default encoding; on Windows
+  cp1252 a non-ASCII byte crashes uvicorn startup (known real bug).
+- skillbridge.tts startup status is logged to a logger with no handler/root
+  WARNING, so the "TTS provider configured" line is never visible.
+- VEX ElevenLabs voice ID invalid on the account (config issue, update pending).
+- LinkedIn/Google Jobs hosts empty in .env -> host_not_configured (config).
+- JSearch monthly quota exhausted (429) -> lives on cooldown.
+- Notifications popover is an explicitly-labelled "coming soon" placeholder.
+- No migration ledger/versioning; _migrate() is an additive column list.
+RECORDED AS UNVERIFIED (must not be treated as fact without proof)
+- Whether the job cache key fully isolates users/roles/markets/filters/bounds
+  (Phase G must prove it; no dedicated tests today).
+- Whether the match score can be decomposed exactly to per-skill contributions
+  (Phase J must stop and document rather than change silently).
+- Full WCAG 2.2 AA / RTL / 320px mobile conformance (not yet tested end-to-end).
+- Dead-link status for arbitrary unknown listings (only blocklisted/expiry now).
+- Cross-company draft-role privacy for a future role-mapping feature (n/a today).
+
+--------------------------------------------------------------------------------
+10. FILES/SUBSYSTEMS LIKELY AFFECTED BY EACH LATER PHASE
+--------------------------------------------------------------------------------
+Phase B  database.py (SCHEMA/_migrate/init_db), main.py startup, seed.py,
+         new tests; fresh+existing DB migration tests.
+Phase C  auth.py, models.py (check_credentials/create_session/get_session_user),
+         main.py auth endpoints, database.py (sessions),
+         frontend AppContext/api (login flow unchanged).
+Phase D  database.py (roles/role_skills + new canonical columns),
+         models.py (role catalog), recommendations.py, escoe.py, matching.py,
+         seed.py, SkillsRolesPage/types.
+Phase E  escoe.py (versioned adapter), config env names, dry-run/apply CLI or
+         admin route, new offline fixture tests.
+Phase F  models.py (role mapping), main.py (company role mapping endpoints),
+         SkillsRolesPage (confirmation UI), types/api.
+Phase G  jobs.py (cache key + LRU + races), test_jobs_*.py.
+Phase H  jobs.py (normalized record, fingerprints, link safety), tests.
+Phase I  jobs.py (health vocabulary + per-request scoping), main.py demo-mode.
+Phase J  matching.py/recommendations.py (decomposed explanation), Dashboard/
+         SkillsRolesPage (breakdown UI).
+Phase K  database.py+models.py (saved jobs + application tracker),
+         main.py routes, new frontend page/UI section, types/api.
+Phase L  SkillsRolesPage (Role Explorer), types/api, index.css.
+Phase M  SkillsRolesPage (role details/comparison/transitions), related-role data.
+Phase N  job feed UI (JobsCard), provider-health drawer, LinkQuality state.
+Phase O  DashboardPage (role-specific layouts), university aggregations.
+Phase P  scenario_catalog.py/scenarios.py (new templates), SCENARIO_ROLE_COVERAGE.
+Phase Q  App.tsx journey wiring, breadcrumbs, continue-last-activity.
+Phase R  index.css, components (dialogs/drawers/a11y), RTL.
+Phase S  observability + performance bounds across backend/frontend.
+Phase T-U-V  review/reports/archive (no application edits except fixes).
+
+--------------------------------------------------------------------------------
+ACCEPTANCE GATE (Phase A)
+--------------------------------------------------------------------------------
+[ x ] No production behavior changed (no application files edited).
+[ x ] No secret value appeared in output (env names only; values never read out).
+[ x ] Voice functionality remains explicitly frozen (tts.py untouched).
+[ x ] Baseline report exists separately (this file).
+
+Notes for the next agent: re-verify the 5-skip/810-pass state only after each
+phase deliberately adds tests; treat the dirty tree as the true starting point;
+do not commit without explicit approval; keep the original ZIP untouched.
+================================================================================

@@ -4,7 +4,13 @@ import type {
   Session, TutorMessage, InterviewReply, UniversityStatsResponse, UniversityOption, RecentJob, RecentJobsResponse, LocationOption,
   PersonalizedPath, PersonalizedPathItem, PersonalizedStage, PersonalizedPathResponse, FinalAssessmentStatus, PracticeAttempt, PracticeAttemptsResponse,
   EscoMarketResponse, RoleRecommendationsResponse,
-  ScenarioLibrary, ScenarioPlayer, ScenarioResult, ScenarioHint, SavedRolesResponse,
+  ScenarioLibrary, ScenarioPlayer, ScenarioResult, ScenarioHint, ScenarioHistory, SavedRolesResponse,
+  RoleMappingSuggestion, RoleMappingEvent,
+  TargetRoleMatchBreakdown, RoleMatchBreakdown, JobMatchBreakdown,
+  SaveJobRequest, TrackedJob, TrackerResponse,
+  RecentRole, RecentRolesResponse,
+  RoleProvenance, JobsHealthPayload, JobLinkReport,
+  CopilotConfigResponse, CopilotOnboardingStateResponse, CopilotOnboardingSubmit, CopilotOnboardingResponse,
 } from './types'
 import type { AssessmentIntegrityEvent } from './webcamIntegrity'
 
@@ -105,6 +111,15 @@ export const api = {
   companies: () => req<Company[]>('/api/companies'),
   candidates: (roleId: number) => req<Candidate[]>(`/api/company/roles/${roleId}/candidates`),
   roleSkillCoverage: (roleId: number) => req<RoleSkillCoverage>(`/api/company/roles/${roleId}/skills`),
+  canonicalMatches: (roleId: number) =>
+    req<RoleMappingSuggestion>(`/api/company/roles/${roleId}/canonical-matches`),
+  setCanonicalMapping: (roleId: number, canonicalRoleId: number | null) =>
+    req<{ role_id: number; canonical_role_id: number | null; mapping_updated_at?: string | null }>(
+      `/api/company/roles/${roleId}/canonical-mapping`,
+      { method: 'POST', body: JSON.stringify({ canonical_role_id: canonicalRoleId }) },
+    ),
+  mappingHistory: (roleId: number) =>
+    req<RoleMappingEvent[]>(`/api/company/roles/${roleId}/mapping-history`),
 
   // ---- students
   student: (id: number) => req<Student>(`/api/students/${id}`),
@@ -135,6 +150,25 @@ export const api = {
   },
 
   analysis: (studentId: number) => req<Analysis>(`/api/students/${studentId}/analysis`),
+
+  // ---- Phase J: explainable match breakdowns (read-only)
+  targetRoleMatchBreakdown: (studentId: number) =>
+    req<TargetRoleMatchBreakdown>(`/api/students/${studentId}/target-role-match/breakdown`),
+  roleMatchBreakdown: (studentId: number, roleId?: number | null, externalId?: string | null) => {
+    const qs = new URLSearchParams()
+    if (roleId != null) qs.set('role_id', String(roleId))
+    else if (externalId) qs.set('external_id', externalId)
+    return req<RoleMatchBreakdown>(`/api/students/${studentId}/role-match/breakdown?${qs.toString()}`)
+  },
+  jobMatchBreakdown: (studentId: number, fingerprint: string, opts?: { location?: string; country?: string; market?: string }) => {
+    const qs = new URLSearchParams()
+    if (opts?.location) qs.set('location', opts.location)
+    if (opts?.country) qs.set('country', opts.country)
+    if (opts?.market) qs.set('market', opts.market)
+    const suffix = qs.toString() ? `?${qs.toString()}` : ''
+    return req<JobMatchBreakdown>(
+      `/api/students/${studentId}/jobs/recent/${encodeURIComponent(fingerprint)}/breakdown${suffix}`)
+  },
 
   learning: (studentId: number) => req<LearningItem[]>(`/api/students/${studentId}/learning`),
   generateLearning: (studentId: number, skillId: number) =>
@@ -185,6 +219,14 @@ export const api = {
   tutorPreference: (studentId: number) => req<{ tutor_id: string; mode?: string; language?: string }>(`/api/students/${studentId}/tutor/preference`),
   setTutorPreference: (studentId: number, patch: { tutor_id?: string; mode?: string; language?: string } = {}) =>
     req<{ tutor_id: string; mode: string; language: string }>(`/api/students/${studentId}/tutor/preference`, { method: 'PUT', body: JSON.stringify(patch) }),
+  copilotConfig: (studentId: number) =>
+    req<CopilotConfigResponse>(`/api/students/${studentId}/copilot`),
+  setCopilot: (studentId: number, choice: string) =>
+    req<CopilotConfigResponse>(`/api/students/${studentId}/copilot`, { method: 'PUT', body: JSON.stringify({ choice }) }),
+  copilotOnboardingState: (studentId: number) =>
+    req<CopilotOnboardingStateResponse>(`/api/students/${studentId}/copilot/onboarding-state`),
+  submitCopilotOnboarding: (studentId: number, body: CopilotOnboardingSubmit) =>
+    req<CopilotOnboardingResponse>(`/api/students/${studentId}/copilot/onboarding`, { method: 'POST', body: JSON.stringify(body) }),
   startAssessmentSession: (studentId: number, skillId: number, externalToken?: string | null, webcamGate?: { passed: boolean; checked_at: string; meta?: Record<string, string | number | boolean> }) =>
     req<{ active: boolean; skill_id: number; webcam_gate?: { required: boolean; passed: boolean } }>(`/api/students/${studentId}/assessments/session`, { method: 'POST', body: JSON.stringify({ skill_id: skillId, external_token: externalToken || undefined, webcam_gate: webcamGate }) }),
   endAssessmentSession: (studentId: number) =>
@@ -213,14 +255,21 @@ export const api = {
   universityConfirm: () => req<CohortResponse>('/api/university/cohort/confirm', { method: 'POST', body: JSON.stringify({ confirm: true }) }),
 
   // ---- recent jobs
-  recentJobs: (opts?: { location?: string; country?: string; market?: string }) => {
+  recentJobs: (opts?: { location?: string; country?: string; market?: string; limit?: number }) => {
     const qs = new URLSearchParams()
     if (opts?.location) qs.set('location', opts.location)
     if (opts?.country) qs.set('country', opts.country)
     if (opts?.market) qs.set('market', opts.market)
+    if (opts?.limit) qs.set('limit', String(opts.limit))
     const suffix = qs.toString() ? `?${qs.toString()}` : ''
     return req<RecentJobsResponse>(`/api/jobs/recent${suffix}`)
   },
+  jobsHealth: () => req<JobsHealthPayload>('/api/config/demo-mode'),
+  jobLinkReports: (studentId: number) => req<{ reports: JobLinkReport[] }>(`/api/students/${studentId}/jobs/link-reports`),
+  reportDeadJobLink: (studentId: number, fingerprint: string, payload: { location?: string; country?: string; market?: string } = {}) =>
+    req<{ report_id: number; created: boolean; fingerprint: string }>(
+      `/api/students/${studentId}/jobs/recent/${encodeURIComponent(fingerprint)}/report-dead-link`,
+      { method: 'POST', body: JSON.stringify(payload) }),
 
   // ---- full career roadmap
   careerRoadmap: (studentId: number) => req<CareerRoadmap>(`/api/students/${studentId}/career-roadmap`),
@@ -235,6 +284,7 @@ export const api = {
     req<ScenarioPlayer | ScenarioResult>(`/api/students/${studentId}/scenarios/attempts/${attemptId}/decide`, { method: 'POST', body: JSON.stringify(payload) }),
   scenarioHint: (studentId: number, attemptId: number, question?: string) =>
     req<ScenarioHint>(`/api/students/${studentId}/scenarios/attempts/${attemptId}/hint`, { method: 'POST', body: JSON.stringify(question ? { question } : {}) }),
+  scenarioHistory: (studentId: number) => req<ScenarioHistory>(`/api/students/${studentId}/scenarios/history`),
 
   // ---- saved roles
   savedRoles: (studentId: number) => req<SavedRolesResponse>(`/api/students/${studentId}/saved-roles`),
@@ -242,4 +292,23 @@ export const api = {
     req<SavedRolesResponse>(`/api/students/${studentId}/saved-roles/${roleId}`, { method: 'POST', body: JSON.stringify({}) }),
   unsaveRole: (studentId: number, roleId: number) =>
     req<SavedRolesResponse>(`/api/students/${studentId}/saved-roles/${roleId}`, { method: 'DELETE' }),
+
+  // ---- recently-viewed roles (Phase L role explorer)
+  recentRoles: (studentId: number) => req<RecentRolesResponse>(`/api/students/${studentId}/recent-roles`),
+  recordRoleView: (studentId: number, roleId: number) =>
+    req<{ viewed_at: string }>(`/api/students/${studentId}/recent-roles`, { method: 'POST', body: JSON.stringify({ role_id: roleId }) }),
+
+  // ---- role provenance + related-role graph (Phase M)
+  roleProvenance: (roleId: number) => req<RoleProvenance>(`/api/roles/${roleId}/provenance`),
+
+  // ---- saved jobs + application tracker (Phase K)
+  saveTrackedJob: (studentId: number, payload: SaveJobRequest) =>
+    req<{ tracker_id: number; created: boolean; item: TrackedJob }>(`/api/students/${studentId}/jobs/saved`, { method: 'POST', body: JSON.stringify(payload) }),
+  jobTracker: (studentId: number) => req<TrackerResponse>(`/api/students/${studentId}/jobs/tracker`),
+  trackerItem: (studentId: number, trackerId: number) =>
+    req<TrackedJob>(`/api/students/${studentId}/jobs/tracker/${trackerId}`),
+  updateTrackerItem: (studentId: number, trackerId: number, patch: Partial<Pick<TrackedJob, 'stage' | 'note' | 'interview_date' | 'application_deadline'>>) =>
+    req<TrackedJob>(`/api/students/${studentId}/jobs/tracker/${trackerId}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  deleteTrackerItem: (studentId: number, trackerId: number) =>
+    req<{ deleted: boolean }>(`/api/students/${studentId}/jobs/tracker/${trackerId}`, { method: 'DELETE' }),
 }

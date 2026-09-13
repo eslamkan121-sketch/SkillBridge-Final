@@ -17,9 +17,15 @@ from app import jobs
 
 
 def _reset_feed():
-    jobs._cache.update({"at": 0.0, "key": "", "data": None})
+    jobs.clear_job_cache()
+    jobs._PROVIDER_COOLDOWN.clear()
     for p in jobs.PROVIDERS:
         jobs._provider_status[p] = {"status": "skipped", "count": 0, "reason": "", "error": ""}
+    jobs._stats.update({
+        "cache_hits": 0, "cache_misses": 0,
+        "last_success_provider": "", "last_error_by_provider": {},
+        "fetch_times": [],
+    })
 
 
 def _provider(data, source):
@@ -424,7 +430,7 @@ def test_expired_listings_are_dropped_before_ranking(monkeypatch, sync_build):
 def test_target_role_leads_fetch_keywords_and_skills_follow(monkeypatch, sync_build):
     captured = {}
 
-    def fake_fetch(limit_each, keywords=(), country="", adzuna_country=""):
+    def fake_fetch(limit_each, keywords=(), country="", adzuna_country="", report=None):
         captured["keywords"] = list(keywords)
         return []
 
@@ -571,7 +577,7 @@ def test_all_providers_down_is_empty_unavailable_not_fallback(monkeypatch, sync_
     data = sync_build()
     assert data["source"] == "unavailable"
     assert data["jobs"] == []
-    assert len([p for p in data["providers"] if p["status"] == "failed"]) == 4
+    assert len([p for p in data["providers"] if p["status"] == "failed"]) == 6
 
 
 def test_secrets_never_reach_response_or_status(monkeypatch, sync_build):
@@ -605,8 +611,9 @@ def test_secrets_never_reach_response_or_status(monkeypatch, sync_build):
     for s in secrets:
         assert s not in serialized
     # 3) direct redaction of a message embedding an Adzuna-style query string
+    #    (URL is masked outright, so no host or secret reaches the payload)
     red = jobs._redact(f"503 for url 'https://api.adzuna.com/v1/api/jobs/gb/search/1?app_id={secrets[1]}&app_key={secrets[2]}'")
-    assert secrets[1] not in red and secrets[2] not in red and "***" in red
+    assert secrets[1] not in red and secrets[2] not in red and "<url>" in red
 
 
 # ======================================================================

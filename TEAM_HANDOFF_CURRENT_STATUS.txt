@@ -1,0 +1,21 @@
+SkillBridge Current Team Handoff
+Updated: 12 September 2026
+Current boundary: Phases A-N complete. Phase O has not started.
+
+Authoritative Markdown report: TEAM_HANDOFF_CURRENT_STATUS.md
+
+Completed: migration/auth foundation; canonical roles and ESCO workflow;
+company role mapping; normalized provider-aware job feed; provider health;
+match explanations; private job tracker; role explorer/details/comparison;
+and Phase N Jobs Board with filtering, pagination, mobile filter drawer,
+safe apply links, private link reporting, and provider health UI.
+
+Latest Phase N validation: 23 focused tests passed, frontend contract checker
+passed, and TypeScript/Vite production build passed.
+
+Remaining phases: O role-specific dashboards; P scenarios; Q unified journey;
+R accessibility/RTL/responsive polish; S performance/observability; T review;
+U full verification; V final private handoff.
+
+GitHub is source-only. Keep .env, database, uploads, virtual environments,
+dependencies, and generated files out of it. Transfer .env privately.

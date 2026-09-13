@@ -1,0 +1,347 @@
+==============================================================================
+CANONICAL_ROLE_MODEL_PLAN.txt
+SkillBridge private team handoff — Phase D (Prompt D: design only; no code
+edited). Companion to BASELINE_BEFORE_BACKEND_ROLES_JOBS_UI.txt and
+AUTH_SESSION_MIGRATION_PLAN.txt.
+PRIVATE — TEAM ONLY. No live credentials, tokens, hashes, salts, or .env
+values are reproduced anywhere in this file.
+==============================================================================
+
+1. SCOPE OF THIS DOCUMENT
+-------------------------
+This is the D1 design for a backward-compatible canonical role and skill data
+model built on the EXISTING roles/role_skills tables and the existing ESCO
+support. No file was modified during D1. Prompt D2 (implementation) begins only
+after the owner approves this plan or a reviewed subset slice. Phase E (the
+versioned ESCO import/refresh service) is deliberately OUT of this document's
+scope; it will build on the model defined here.
+
+2. EXISTING BEHAVIOR (traced from source; unchanged by this document)
+--------------------------------------------------------------------
+Storage (backend/app/database.py):
+  - roles(154-162): id, company_id FK->companies, title, description,
+    is_reference (0/1), source ('company' default), external_id.
+    There is NO status, family, hierarchy, provenance, version, or timestamp
+    concept today.
+  - role_skills(164-171): role_id FK, skill_id FK, required_level
+    CHECK(Beginner/Intermediate/Advanced), skill_kind 'essential'/'optional',
+    UNIQUE(role_id, skill_id). No per-skill provenance column.
+  - students.target_role_id -> roles(id) ON DELETE SET NULL.
+  - Real skillbridge.db: 23 catalog reference roles (source='catalog',
+    is_reference=1, company = "SkillBridge Talent Catalog" id 3), 4 company
+    roles (source='company'), 5 ESCO roles (source='esco', external_id =
+    ESCO occupation URI). skills: 209 rows.
+
+Source semantics in use (must be preserved):
+  - source == 'company'  -> locally authored opening (list_roles rosters the
+    company feed, is_reference=0).
+  - source == 'catalog'  -> curated reference baseline (list_catalog_roles,
+    is_reference=1, backfilled by ensure_catalog_roles seed).
+  - source == 'esco'     -> imported real occupation; excluded from company
+    rosters list_roles/list_feed_roles (WHERE source != 'esco'); shown only
+    as recommendations / target-role candidates.
+  - Tests assert source values 'company' | 'catalog' | 'esco' directly.
+
+Role lifecycle today (backend/app/models.py):
+  - create_role(240), update_role(253), delete_role(266),
+    import_esco_role(282, idempotent on external_id), role_from_id(376),
+    role_skills(189), create_student(385), update_student(392, allowed fields
+    include target_role_id).
+
+Serialization:
+  - list_roles/list_catalog_roles/get_role/list_feed_roles build rows via
+    SELECT r.* LEFT JOIN companies then attach required_skills. Any column
+    ADDED to roles therefore appears (NULL) in existing payloads — additive
+    only, never required, and harmless to the frontend RoleRecord which ignores
+    unknown keys.
+
+ESCO client (backend/app/escoe.py):
+  - Public ESCO REST v1 (europa.eu/esco/api), no key. Search returns per
+    occupation: uri, title, code (ISCO-08, _parse_code normalises "2512.1" ->
+    "2512"), description; resource/occupation enrich adds essential/optional
+    skill titles. Cached in-memory, TTL 30 min. Occupancy of alternative
+    labels, broader-term hierarchy, multi-language labels, and dataset version
+    is NOT captured today.
+
+Matching pipeline (backend/app/recommendations.py, escoe.py, matching.py):
+  - Candidates = company roles + catalog roles (is_reference) + ESCO
+    occupations; ranked by inverse-frequency weights + verified-skill boost;
+    provenance today is only the role's `source` string. matching.py consumes
+    role.required_skills only.
+  - Scenario eligibility (scenarios.py:718) derives role family at RUNTIME
+    from the preferred title via role_intent.family_of + a curated blueprint
+    map; it does NOT read any role table column. (A stored family column must
+    not silently become the scenario gate.)
+
+3. WHAT THE CANONICAL MODEL MUST SUPPORT (guide Prompt D)
+---------------------------------------------------------
+Where source data exists: stable local role ID; canonical external URI /
+identifier and source; source dataset version; preferred title; alternative
+and hidden titles; role family and hierarchy/parent; description and scope;
+essential and optional skills separated; skill source/provenance; ISCO or other
+mappings from the source; language-tagged labels; active/deprecated/superseded
+status; fetched/imported/updated timestamps; and locally authored company roles
+that are never falsely labelled ESCO.
+
+Hard constraints: migrate existing role links without changing IDs; preserve
+student target roles, company roles, saved roles, scenarios, learning plans,
+assessment history, and job matching; do NOT fabricate salary, education,
+demand, hierarchy, or skill relationships; normalize titles for SEARCH while
+preserving original display titles; keep provenance visible throughout the
+matching pipeline; reuse the existing privacy and ownership model.
+
+4. DESIGN PRINCIPLES
+--------------------
+  - One canonical catalogue = the existing `roles` table plus additive
+    metadata; NO competing role database.
+  - All storage changes are one new additive migration (0003) under the Phase B
+    framework. No existing column/table/route/env name is removed, renamed, or
+    resemantized. Existing roles keep their integer ids; all new data links by
+    FK from roles.id.
+  - Nothing is fabricated. Backfill only what is provably derivable (title
+    normalization, family derived from the same classifier the app already
+    uses, source provenance copied from the row's own source). Unknown versions,
+    URIs, ISCO codes, aliases, and hierarchy edges stay NULL/absent until a
+    real source supplies them (future imports / Phase E).
+  - API responses stay backward compatible; any new fields are additive.
+  - Status filtering is behavior-preserving: existing rows are 'active', so no
+    candidate pool changes.
+  - Frontend (RoleRecord / types.ts) needs NO forced changes; unknown additive
+    fields are ignored.
+
+5. SCHEMA CHANGES — migration 0003_canonical_roles
+--------------------------------------------------
+A single additive, idempotent, rollback-safe migration (0003) appended to the
+Phase B MIGRATIONS list.
+
+  a) ADDITIVE COLUMNS on `roles` (all nullable/text unless noted):
+       role_key          TEXT            stable, permanent local key (slug) used
+                                         for canonical identity + dedupe across
+                                         sources; generated at backfill/import.
+       source_version    TEXT            pinned dataset version of the source
+                                         (e.g. an ESCO release). NULL for
+                                         company-authored rows; existing ESCO
+                                         rows stay NULL ("version unknown") so
+                                         we never claim a version we cannot
+                                         prove. Future imports record a real one.
+       canonical_status  TEXT NOT NULL
+                         DEFAULT 'active'
+                         CHECK(canonical_status IN
+                               ('active','deprecated','superseded'))
+                                         lifecycle. Existing rows get 'active'
+                                         (honest: nothing marks them otherwise).
+       superseded_by_role_id INTEGER
+                         REFERENCES roles(id)
+                                         set ONLY when a real source names a
+                                         replacement; NULL otherwise.
+       is_local_authoring INTEGER NOT NULL DEFAULT 0
+                                         explicit "owned by a company user (or
+                                         the local seed)" flag; 1 for
+                                         source='company' (and the local catalog
+                                         rows), 0 for source='esco'. Never
+                                         coexists with an ESCO source label.
+       normalized_title  TEXT            lowercase, whitespace-collapsed search
+                                         form of the display `title`, computed
+                                         on write/backfill via
+                                         role_intent.normalize_title. Used ONLY
+                                         for search matching (list_roles search);
+                                         display continues to use `title`.
+       family            TEXT            canonical family label derived from
+                                         role_intent.family_of(normalized_title);
+                                         NULL when unresolvable. Metadata only —
+                                         scenario gating keeps using the runtime
+                                         preferred-title classifier (see 6).
+       parent_role_id    INTEGER
+                         REFERENCES roles(id)
+                                         hierarchy/parent edge, filled ONLY from
+                                         a real source (ESCO broader term) at
+                                         import time; never fabricated.
+       fetched_at        TEXT            when the external record was fetched.
+       imported_at       TEXT            when the row was first imported.
+       updated_at        TEXT            last local metadata update.
+
+  b) NEW TABLE role_aliases (alternative / hidden titles, language-tagged):
+       id          INTEGER PK AUTOINCREMENT
+       role_id     INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE
+       alias       TEXT NOT NULL
+       alias_type  TEXT NOT NULL DEFAULT 'alternative'
+                   CHECK(alias_type IN ('alternative','hidden'))
+       language    TEXT NOT NULL DEFAULT 'en'
+       created_at  TEXT NOT NULL
+       UNIQUE(role_id, alias, alias_type, language)
+     Empty at backfill (no fabricated aliases); populated by import refreshes
+     that actually receive altLabels, or via an explicit owner-approved write.
+
+  c) NEW TABLE role_isco_codes (ISCO-08 / source mappings):
+       id          INTEGER PK AUTOINCREMENT
+       role_id     INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE
+       isco_code   TEXT NOT NULL
+       source      TEXT NOT NULL DEFAULT 'esco'
+       source_ref  TEXT               e.g. the ESCO occupation URI
+       created_at  TEXT NOT NULL
+       UNIQUE(role_id, isco_code, source)
+     Empty at backfill (today's import does not persist ESCO codes). The import
+     path is extended so FUTURE imports/refreshes record the code the source
+     actually returns (ESCO _parse_code "2512").
+
+  d) NEW TABLE role_skill_sources (per-skill provenance):
+       role_id     INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE
+       skill_id    INTEGER NOT NULL REFERENCES skills(id) ON DELETE CASCADE
+       source      TEXT NOT NULL      'company' | 'catalog' | 'esco'
+       source_uri  TEXT               ESCO skill URI when known; NULL if absent
+       attested_at TEXT NOT NULL
+       PRIMARY KEY (role_id, skill_id)
+     Backfilled honestly: one row per existing role_skills row with the role's
+     own source ('company'/'catalog'/'esco') and source_uri NULL. This records
+     where each required skill's attestation came from without inventing a URI.
+
+  e) wipe list (seed.py) grows by DROP/clears of role_aliases,
+     role_isco_codes, role_skill_sources (consistent with the phase pattern).
+
+6. DESIGN DECISIONS BY REQUIREMENT
+----------------------------------
+6.1 Stable local role ID + canonical identity + source.
+    - roles.id stays the durable local ID (all FKs unchanged). `role_key` is a
+      collision-safe human-stable key for cross-source dedupe and canonical
+      identity; `external_id` already holds the ESCO occupancy URI; `source`
+      already discriminates company/catalog/esco. Backfill role_key from
+      external_id fragment (esco) or normalized-title slug (local); it is
+      computed, not fabricated.
+
+6.2 Source dataset version.
+    - `source_version` NULL until a real import pins one (Phase E). Version
+      never guessed for the 5 legacy ESCO rows.
+
+6.3 Preferred / alternative / hidden titles + language-tagged labels.
+    - roles.title = preferred display title (unchanged).
+    - role_aliases stores alternative + hidden titles per language. Empty at
+      backfill; populated from real source labels only.
+
+6.4 Role family and hierarchy/parent.
+    - `family` derived from the SAME role_intent.family_of classifier the app
+      already uses, for catalogue grouping/browse. Scenario eligibility
+      (scenarios.py:718) continues to classify at runtime from the preferred
+      title so scenario behaviour does not drift with this metadata.
+    - `parent_role_id` / superseded_by_role_id only from a real source, never
+      invented.
+
+6.5 Description and scope.
+    - existing roles.description is the canonical description; nothing new
+      needed (ESCO descriptions flow into it at import).
+
+6.6 Essential/optional skills and their provenance.
+    - role_skills.skill_kind already separates essential/optional (315
+      essential / 7 optional today). role_skill_sources adds the provenance.
+      role payload gains an additive `skill_sources` map.
+    - matching.py (gap analysis / match score) is unchanged: it reads
+      required_skills only; provenance is visible to any caller that asks.
+
+6.7 ISCO mappings from the source.
+    - role_isco_codes table; import path extended to persist the code ESCO
+      returns. Known-none for the legacy rows.
+
+6.8 Status lifecycle.
+    - canonical_status CHECK(active|deprecated|superseded), default active.
+      When deprecated/superseded: excluded from list_feed_roles and from
+      recommendation candidate pools; still resolvable by id so a student's
+      existing target_role/link stays intact (FK ON DELETE SET NULL untouched).
+
+6.9 Local company roles never mislabeled ESCO.
+    - is_local_authoring=1 + source='company'/NULL + no source_version/canonical
+      URI/isco data on locally authored rows. Serialization never emits an ESCO
+      label for them (provenance endpoint mirrors the role's source).
+
+6.10 Timestamps.
+    - fetched_at/imported_at/updated_at nullable; set at real events only.
+
+6.11 Search normalization, display preserved.
+    - normalized_title is derived from the display title at write/backfill;
+      search on list_roles/list_catalog_roles accepts an optional search
+      parameter matched against normalized_title (additive). Original title
+      is never rewritten.
+
+6.12 Provenance visible in the matching pipeline.
+    - recommendation payloads already carry `source`; they gain additive
+      `source_version` (when present) and non-active roles are excluded from
+      the candidate pool. New GET /api/roles/{id}/provenance (authenticated,
+      same authorization as the role) returns aliases, isco codes, skill
+      provenance, and the canonical fields.
+
+7. COMPATIBILITY AND FRONTEND
+-----------------------------
+  - All role endpoints keep their existing shapes; the only additions are
+    fields the RoleRecord ignores and one new read-only provenance endpoint.
+  - student target roles, saved_roles, scenarios, learning plans, assessments,
+    and job matching are untouched (no FK changes, no id rewrites).
+  - seed ensure_catalog_roles (title-based dedupe) and create_role/update_role
+    callers keep working; those write functions gain optional additive kwargs
+    (parent_role_id, source_version, aliases, isco_codes) defaulting to today's
+    behaviour.
+
+8. ROLLBACK STRATEGY
+--------------------
+  - Migration 0003 is subtractive-only in reverse: drop role_skill_sources,
+    role_isco_codes, role_aliases, then drop the added roles columns. roles.id
+    and all existing links are untouched by the drop, so pre-D code paths work
+    with zero data loss. New metadata added under D disappears (harmless).
+  - No DELETE/ALTER of pre-existing data in any direction.
+
+9. TEST PLAN (D2)
+-----------------
+New backend/tests/test_canonical_roles_phaseD.py:
+  - fresh DB: 0003 applies; new columns + 3 tables exist;
+  - existing DB: migrate a copy of a seeded/existing DB; integrity check;
+    role counts, skills, students, saved_roles, scenario_attempts preserved;
+    normalized_title/family/role_key/is_local_authoring/role_skill_sources
+    backfilled correctly; legacy ESCO rows keep version/canonical_uri NULL;
+  - idempotent rerun of the full migration list (Phase B pattern);
+  - rollback 0003: new tables/columns gone, roles rows intact;
+  - aliases: add/read/remove alternative + hidden, language-tagged
+    (multilingual, e.g. 'en' + 'ar'), duplicate-rejected (UNIQUE), empty at
+    backfill (nothing fabricated);
+  - duplicate external IDs: same ESCO URI imported twice stays idempotent
+    (single role, existing FK rows intact);
+  - deprecated roles: status='deprecated' excluded from recommendations and
+    list_feed_roles; still resolvable via get_role and as an existing
+    target_role_id;
+  - local roles: create_role -> source='company', is_local_authoring=1,
+    canonical fields NULL, provenance reports company, never ESCO;
+  - multilingual labels: per-language alias rows persisted and read back;
+  - search normalization: list_roles(search=...) matches normalized forms
+    ("Data-Engineer " vs "data engineer"), display title byte-unchanged;
+  - existing foreign keys: students.target_role_id, saved_roles,
+    role_skills all still link after migration; ON DELETE SET NULL behaviour
+    intact; scenario attempts/learning plans unaffected;
+  - provenance in pipeline: recommendation payload includes additive
+    source/version/status; matching still green.
+Full backend suite rerun + dry-run of 0003 against a copy of the real
+skillbridge.db (mirroring the C2 smoke) + existing login browser smoke.
+
+10. FAILURE MODES
+-----------------
+  - Payload drift: any new role column would surface (NULL) in SELECT * role
+    dicts; D2 serializes canonical fields deliberately so the API shape stays
+    clean and tests that compare key sets are unaffected.
+  - Backfill must run after migrations at startup, idempotently, only filling
+    NULL metric fields (never overwriting a real value).
+  - Status gating added to the recommendation candidate pool could shift scores
+    if a deprecated role were present; existing rows are all 'active', and the
+    gate is verified by the deprecated-role test.
+  - No network dependency: ESCO captures are optional; missing ESCO never
+    blocks schema/test paths (offline fixtures only).
+
+11. APPROVAL SLICES (owner picks slice(s) before D2)
+----------------------------------------------------
+  Slice 1 (recommended first, self-contained):
+    migration 0003 (columns + role_aliases + role_isco_codes +
+    role_skill_sources); startup backfill; normalized search on
+    list_roles/catalog; create_role/update_role/import_esco_role canonical
+    fields (optional kwargs, default no-op); status gating in feed +
+    recommendations; GET /api/roles/{id}/provenance; wipe-list update; the
+    Phase D test file; full suite; real-DB dry-run + login smoke.
+  Slice 2 (deferred, separate approval):
+    alias/ISCO write endpoints; multi-language CMS for labels; hierarchy
+    maintenance endpoints; aligned family field consumption by the scenario
+    gate (behaviour-visible change requiring its own test contract).
+
+END OF CANONICAL_ROLE_MODEL_PLAN.txt

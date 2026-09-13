@@ -4,7 +4,7 @@ import { useApp } from '../AppContext'
 import { api } from '../lib/api'
 import { humanizeTopicLabel } from '../lib/topicLabels'
 import type { ActivitySummary, Analysis, CareerRoadmap, DiagnosticQuestion, DiagnosticResult, 
-GeneratedDiagnostic, FinalAssessmentStatus, LearningItem, LearningResource, Lesson, LessonPractice, PersonalizedPath, PersonalizedPathItem, PersonalizedPathResponse, PracticeAttempt, SkillGap, 
+GeneratedDiagnostic, FinalAssessmentStatus, LearningItem, LearningResource, Lesson, LessonPractice, PersonalizedPath, PersonalizedPathItem, PersonalizedPathResponse, PracticeAttempt, ScenarioLibrary, ScenarioCard, SkillGap, 
 TopicResult } from '../lib/types'
 import {
   CareerProgress,
@@ -21,7 +21,7 @@ import {
   topicProgressFor,
   type LearningTab,
 } from '../components/learning'
-import { IconArrowRight, IconAssessment, IconBolt, IconBook, IconChat, IconCheck, IconChevron, IconClock, IconExternal, IconLock, IconRoadmap, IconShield, IconTarget } from '../components/Icons'
+import { IconArrowRight, IconAssessment, IconBack, IconBolt, IconBook, IconChat, IconCheck, IconChevron, IconClock, IconExternal, IconLock, IconRoadmap, IconShield, IconTarget } from '../components/Icons'
 
 function SafeMarkdown({ children }: { children: React.ReactNode }) {
   return <Markdown>{String(children ?? '')}</Markdown>
@@ -65,10 +65,11 @@ function categoryToneFor(category: string) {
   return 'slate'
 }
 
-export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed }: {
-  onNavigate?: (section: string) => void
+export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed, backTo }: {
+  onNavigate?: (section: string, focus?: { skillId: number; roleTitle: string }) => void
   initialFocus?: { skillId: number; roleTitle: string } | null
   onFocusConsumed?: () => void
+  backTo?: { key: string; label: string } | null
 }) {
   const { me, applyCopilot } = useApp()
   const studentId = me?.student?.id ?? 0
@@ -84,9 +85,17 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
   const [showTop, setShowTop] = useState(false)
   const [loadError, setLoadError] = useState('')
   const [activity, setActivity] = useState<ActivitySummary | null>(null)
+  const [scenarioLib, setScenarioLib] = useState<ScenarioLibrary | null>(null)
   // Deep link from Skills & Roles ("Learn this skill"): focus a specific skill
   // while keeping the role that prompted it in view as dismissible context.
   const [focusInfo, setFocusInfo] = useState<{ skillId: number; roleTitle: string } | null>(null)
+
+  useEffect(() => {
+    if (!studentId) return
+    api.scenarios(studentId)
+      .then(setScenarioLib)
+      .catch(() => { /* practice scenarios are optional context on the learning page */ })
+  }, [studentId])
 
   useEffect(() => {
     if (!initialFocus) return
@@ -227,6 +236,16 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
 
   const selectedGap = allGaps.find((gap) => gap.skill_id === selectedSkillId) || filteredSkills[0] || openGaps[0] || allGaps[0]
 
+  // Phase 5: for the currently focused skill, surface the role-specific
+  // practice scenarios written for it (matched by skill name on the cards).
+  const scenariosForSkill = useMemo(() => {
+    if (!scenarioLib || !selectedGap) return [] as ScenarioCard[]
+    const want = (selectedGap.skill_name || '').toLowerCase().trim()
+    if (!want) return []
+    return (scenarioLib.scenarios as ScenarioCard[]).filter((card) =>
+      (card.skills || []).some((s) => s.toLowerCase() === want))
+  }, [scenarioLib, selectedGap])
+
   const focusedName = focusInfo
     ? (allGaps.find((g) => g.skill_id === focusInfo.skillId)?.skill_name ?? 'this skill')
     : ''
@@ -322,7 +341,7 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
     if (first) startLearning(first.skill_id)
   }
   const quickPractice = () => {
-    onNavigate?.('scenarios')
+    onNavigate?.('scenarios', { skillId: selectedGap?.skill_id ?? 0, roleTitle: analysis?.role_title || me?.student?.target_role?.title || '' })
   }
   const goAssessments = () => onNavigate?.('assessments')
   const viewAllModules = () => {
@@ -340,6 +359,13 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
 
   return (
     <div className="learning-page">
+      {backTo && (
+        <nav className="crumbs" aria-label="Breadcrumbs">
+          <button type="button" className="crumb-back" onClick={() => onNavigate?.(backTo.key)}>
+            <IconBack size={14} /> Back to {backTo.label}
+          </button>
+        </nav>
+      )}
       {focusInfo && (
         <div className="lrn-focus" role="status">
           <IconTarget size={15} />
@@ -521,11 +547,37 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
                 })}
               </ol>
               {moreModulesCount > 0 && (
-                <button className="btn btn-ghost view-all-modules" onClick={viewAllModules}>
+                <button className="btn btn-ghost view-all-modules" onClick={viewAllModules} aria-label={`View all ${moreModulesCount} more modules`}>
                   +{moreModulesCount} more module{moreModulesCount === 1 ? '' : 's'} <IconArrowRight size={14} />
                 </button>
               )}
             </>
+          )}
+
+          {scenariosForSkill.length > 0 && (
+            <section className="panel lrn-scn-panel" aria-label="Practice scenarios for this skill">
+              <div className="panel-head" style={{ marginBottom: 12 }}>
+                <div className="panel-title-row">
+                  <span className="panel-title-icon"><IconBolt size={15} /></span>
+                  <h3 className="panel-title">Practice scenarios for {scenariosForSkill[0]!.skills[0] || selectedGap?.skill_name}</h3>
+                </div>
+                <p className="panel-subtitle">Role-specific practice written for your target career. Your learning path stays untouched while you practice.</p>
+              </div>
+              <div className="lrn-scn-list">
+                {scenariosForSkill.slice(0, 3).map((scn) => (
+                  <div className="lrn-scn-row" key={scn.id}>
+                    <span className="lrn-scn-name">{scn.category_icon} {scn.title}</span>
+                    <span className="lrn-scn-meta">
+                      <span className="chip">{scn.difficulty_label}</span>
+                      <span className="lrn-scn-status">{scn.status === 'completed' ? 'Completed' : scn.status === 'in_progress' ? 'In progress' : 'Not started'}</span>
+                    </span>
+                    <button className="btn btn-sm" onClick={() => onNavigate?.('scenarios', { skillId: selectedGap?.skill_id ?? 0, roleTitle: targetTitle })}>
+                      Practice <IconArrowRight size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
           )}
         </main>
 
@@ -847,7 +899,22 @@ function DiagnosticPanel({ studentId, skillId, skillName, startSignal = 0, onCom
     }
   }
 
-  if (phase === 'loading') return null
+  if (phase === 'loading') {
+    return (
+      <section className="diagnostic-panel diag-loading" role="status" aria-label="Loading diagnostic">
+        <div className="diagnostic-head">
+          <div>
+            <span className="diag-skel-line skeleton" style={{ width: 90, height: 12 }} />
+            <span className="diag-skel-line skeleton" style={{ width: 220, height: 20, marginTop: 8 }} />
+          </div>
+          <span className="skeleton" style={{ width: 130, height: 34, borderRadius: 10 }} />
+        </div>
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div className="diag-skel-task skeleton" key={i} />
+        ))}
+      </section>
+    )
+  }
 
   const questions = current?.questions ?? diag?.questions ?? []
 
@@ -1063,7 +1130,29 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
   const tabs = ['learn', 'example', 'practice', 'discuss', 'mini_check'] as const
   const tabLabels: Record<string, string> = { learn: 'Learn', example: 'Example', practice: 'Practice', discuss: 'Discuss with AI', mini_check: 'Mini Check' }
 
-  if (loading) return <div className="lesson-loading">Generating lesson...</div>
+  if (loading) {
+    return (
+      <div className="lesson-view lesson-loading-skel" role="status" aria-label="Generating lesson">
+        <div className="lesson-header">
+          <span className="skeleton" style={{ display: 'block', width: 110, height: 14, marginBottom: 10 }} />
+          <div className="lesson-title-row">
+            <span className="skeleton" style={{ display: 'block', width: '70%', maxWidth: 420, height: 20 }} />
+          </div>
+        </div>
+        <div className="lesson-nav">
+          {['Learn', 'Example', 'Practice', 'Discuss', 'Mini Check'].map((t) => (
+            <span key={t} className="skeleton" style={{ width: 74, height: 34, marginRight: 10, borderRadius: 6 }} />
+          ))}
+        </div>
+        <div className="lesson-content">
+          <span className="skeleton" style={{ display: 'block', width: '45%', maxWidth: 280, height: 18, marginBottom: 14 }} />
+          {Array.from({ length: 4 }).map((_, i) => (
+            <span key={i} className="skeleton" style={{ display: 'block', width: '100%', height: 13, marginBottom: 9 }} />
+          ))}
+        </div>
+      </div>
+    )
+  }
   if (error) return <div className="error learning-error">{error}<button className="btn-link" onClick={onClose}>Back to path</button></div>
   if (!lesson) return null
 

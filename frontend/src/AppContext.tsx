@@ -140,7 +140,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!isStudent) return
     const sid = session?.student?.id
     if (sid) {
-      api.setTutorPreference(sid, { tutor_id: id, mode: natural })
+      // 'interview' is a live session mode, never a standing preference: a
+      // tutor-select must not persist it (that used to turn every fresh Vex
+      // chat into an interview). Persist the persona with a chat-capable mode.
+      api.setTutorPreference(sid, { tutor_id: id, mode: natural === 'interview' ? 'chat' : natural })
         .catch((e) => { console.error('[copilot] tutor preference save failed:', e) })
     }
   }, [isStudent, session?.student?.id])
@@ -148,8 +151,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const setMode = useCallback((m: TutorMode) => {
     setModeState(m)
     if (!isStudent) return
+    // 'interview' is a live session mode (the Mock Interview runs on the
+    // dedicated /interview session), never a standing preference: persisting it
+    // would make every later chat an interview after a refresh. The stored
+    // preference keeps the student's regular working mode instead.
     const sid = session?.student?.id
-    if (sid) {
+    if (sid && m !== 'interview') {
       api.setTutorPreference(sid, { mode: m })
         .catch((e) => { console.error('[copilot] tutor mode save failed:', e) })
     }

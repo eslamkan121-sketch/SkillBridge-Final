@@ -26,7 +26,7 @@ def docker_skill(db):
 def _deterministic(monkeypatch):
     monkeypatch.setattr(genai, "genai_enabled", lambda: False)
     monkeypatch.setattr(jobs_mod, "_fetch_all", lambda *a, **k: [])
-    jobs_mod._cache.update({"at": 0.0, "key": "", "data": None})
+    jobs_mod.clear_job_cache()
 
 
 def _set_pref(client, student_id, headers, body):
@@ -172,8 +172,10 @@ def test_history_and_new_chat_block_non_owners(client, student_id, auth_headers)
 
 def test_interview_messages_persist_under_the_running_tutor(client, student_id, auth_headers):
     h = auth_headers("aisha@student.edu")
-    _set_pref(client, student_id, h, {"tutor_id": "vex", "mode": "interview"})
-    r = _tutor(client, student_id, h, {"turn": 1})
+    # Interview is opt-in per request: the stored preference keeps the tutor, and
+    # the message must carry an explicit "interview" mode to enter that engine.
+    _set_pref(client, student_id, h, {"tutor_id": "vex"})
+    r = _tutor(client, student_id, h, {"turn": 1, "mode": "interview"})
     assert r.status_code == 200 and r.json()["mode"] == "interview"
     vex = _history(client, student_id, h, "vex")
     assert len(vex) == 2
@@ -244,6 +246,7 @@ def test_interview_voice_status_hides_secret_voice_ids(client, student_id, auth_
         "available": True,
         "api_key_loaded": True,
         "tutor_voices_loaded": {"nova": True, "axel": True, "sage": True, "vex": True},
+        "tts_configured": True,
     }
     assert "voice-nova" not in r.text and "loaded-test-key" not in r.text
 
@@ -257,6 +260,7 @@ def test_tts_missing_config_status_is_safe(monkeypatch):
         "available": False,
         "api_key_loaded": False,
         "tutor_voices_loaded": {"nova": False, "axel": True, "sage": False, "vex": True},
+        "tts_configured": False,
     }
 
 

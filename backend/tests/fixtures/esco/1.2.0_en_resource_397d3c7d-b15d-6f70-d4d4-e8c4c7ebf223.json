@@ -1,0 +1,25 @@
+{
+  "_meta": {
+    "note": "Recorded, sanitized ESCO resource payload (v1.2.0, en). Placeholder occupation metadata, no secrets.",
+    "params": {"uri": "http://data.europa.eu/esco/occupation/397d3c7d-b15d-6f70-d4d4-e8c4c7ebf223", "language": "en", "selectedVersion": "1.2.0"}
+  },
+  "uri": "http://data.europa.eu/esco/occupation/397d3c7d-b15d-6f70-d4d4-e8c4c7ebf223",
+  "preferredLabel": {"@language": "en", "@value": "Data scientist"},
+  "altLabels": [{"@language": "en", "@value": "Data science analyst"}],
+  "code": "2512.0",
+  "description": [
+    {"@language": "en", "@value": "Applies statistical and machine-learning methods to data in order to produce insight and predictive models."}
+  ],
+  "_links": {
+    "iscoGroup": {"uri": "http://data.europa.eu/esco/isco/2512", "code": "2512"},
+    "hasEssentialSkill": [
+      {"uri": "http://data.europa.eu/esco/skill/sk-stats", "title": "statistical analysis"},
+      {"uri": "http://data.europa.eu/esco/skill/sk-ml", "title": "machine learning"},
+      {"uri": "http://data.europa.eu/esco/skill/sk-python", "title": "Python"},
+      {"uri": "http://data.europa.eu/esco/skill/sk-dataviz", "title": "data visualisation"}
+    ],
+    "hasOptionalSkill": [
+      {"uri": "http://data.europa.eu/esco/skill/sk-abtest", "title": "A/B testing"}
+    ]
+  }
+}

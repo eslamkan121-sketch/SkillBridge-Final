@@ -1,9 +1,24 @@
 """SkillBridge Practice Scenarios.
 
 Branching, evidence-driven career scenarios that let students apply what they
-learned in realistic professional situations. The catalog lives here as data so
-future target roles (Software Developer, Data Analyst, Cloud Engineer, ...) can
-add role-specific scenarios without touching the engine.
+learned in realistic professional situations. The scenario engine lives here;
+the multi-family catalog (data, software, AI, cloud/DevOps, marketing, finance,
+design, project & operations management + the original security scenarios) lives
+in ``scenario_catalog.py`` so future families can be added without touching the
+engine.
+
+Availability (supersedes the Phase-2 domain gate):
+- A scenario is shown/startable when it is genuinely relevant to the student's
+  target role:
+    * the student's target role resolves to the scenario's family
+      (``family_for_role``), OR
+    * ``role_intent.classify_title(target, scenario.role_title)`` is EXACT /
+      CLOSE / FAMILY (the same classifier the live-jobs feed obeys).
+- Target roles that resolve to NO family get a deterministic set of role-specific
+  blueprint scenarios cloned from the role's own required skills (never a
+  security scenario) — see ``_blueprints_for`` / ``scenario_catalog``.
+- Every scenario carries a ``version``; it is persisted with each attempt so the
+  results stay honest if a catalog revision later changes the scenario.
 
 Non-scope guarantees (mirror practice.py / diagnostics.py conventions):
 - Scenario performance improves a student's self-reported confidence only; it
@@ -11,8 +26,19 @@ Non-scope guarantees (mirror practice.py / diagnostics.py conventions):
 - Scores are learned for an outcome; mistakes get feedback and the scenario is
   allowed to continue whenever the story makes sense.
 """
-from . import matching, models, recommendations, role_intent
-import math
+from . import matching, models, role_intent, scenario_catalog
+import re
+
+# Token helpers for the family term fallback (see _family_by_terms). Generic job
+# tails never decide a family, so "Architectural Designer" does not fall into
+# the design family just because its title contains "designer".
+_TITLE_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_GENERIC_TITLE_TAILS = frozenset({
+    "analyst", "architect", "assistant", "associate", "consultant", "coordinator",
+    "designer", "developer", "director", "engineer", "executive", "head", "intern",
+    "lead", "manager", "officer", "operator", "owner", "recruiter", "representative",
+    "specialist", "strategist", "supervisor", "technician", "writer",
+})
 
 # ---------------------------------------------------------------- thresholds
 
@@ -23,28 +49,19 @@ HINT_PENALTY_CAP = 9
 # -------------------------------------------------- domain-gating (availability)
 #
 # A scenario is only shown/startable when it is genuinely relevant to the
-# student (see docs/scenario-domain-gating-design.md §3.1):
-#   Path A — target-role intent: role_intent.classify_title(a_target, scn role)
-#            != "UNRELATED", reusing the same classifier the live-jobs feed obeys.
-#   Path B — specificity-weighted skill evidence, reusing recommendations.py's
-#            IDF over the local role pool so a generic transferable skill
-#            ("Investigation", "Decision Making", "Communication") can never
-#            alone grant a scenario the way a rare, role-defining skill can.
-#
-# DOMAIN_DF_CAP is NOT a fitted literal: a matched skill clears Path B only if
-# it appears in at most this many of the local role candidates. In the current
-# 26-role pool the least-common genuinely-cyber scenario skills present are
-# SIEM (df=1 -> log1p(26/2)=2.64) and Threat Detection (df=2 -> log1p(26/3)=2.27);
-# skills absent from the pool ("Investigation", "Decision Making",
-# "Email Security", "Threat Analysis", "Log Analysis", "Event Correlation")
-# carry ABSENT_SKILL_WEIGHT (no pool grounding -> no domain evidence). The
-# generic transferables that DO appear sit far below the cap: Python df=15
-# -> 0.97, Communication df=13 -> 1.05, SQL df=11 -> 1.15, Excel df=6 -> 1.55,
-# Critical Thinking df=5 -> 1.67. The floor is therefore derived from the
-# least-common genuinely-cyber skill in the real pool, not reverse-engineered
-# from fixtures.
-DOMAIN_DF_CAP = 2          # max roles a match may appear in to be role-defining
-ABSENT_SKILL_WEIGHT = 0.0  # a skill with no role-pool grounding gives no evidence
+# student's target role (guide §"Target roles must not see security scenarios"):
+#   family match  — family_for_role(target) resolves to the scenario's family
+#                   (curated title map → catalog family vocabularies → the
+#                   role_intent family translated onto catalog families).
+#   intent match  — role_intent.classify_title(target, scenario.role_title) is
+#                   EXACT / CLOSE / FAMILY (same classifier the live-jobs feed
+#                   obeys), so e.g. yara's "Cybersecurity Analyst" stays
+#                   eligible even if her family resolver were ever ambiguous.
+# Roles with NO family get role-specific blueprint practice cloned from the
+# role's own required skills (see _blueprints_for / scenario_catalog), so a
+# "Dentist (General Practice)" profile sees dental practice, never a SIEM.
+# The old Path B (inverse-document-frequency specificity floor) was removed:
+# a Product Analyst must never see a SIEM scenario because their CV lists SQL."""
 
 
 # ------------------------------------------------------------------- design
@@ -55,13 +72,11 @@ DIFFICULTIES = {
     "advanced": {"label": "Advanced", "icon": "🔴"},
 }
 
-CATEGORIES = [
-    {"key": "security_fundamentals", "label": "Security Fundamentals", "icon": "🔐"},
-    {"key": "networking", "label": "Networking", "icon": "🌐"},
-    {"key": "threat_detection", "label": "Threat Detection", "icon": "🚨"},
-    {"key": "siem_analysis", "label": "SIEM & Log Analysis", "icon": "📊"},
-    {"key": "incident_response", "label": "Incident Response", "icon": "🛡"},
-]
+# Full union of facet categories across every scenario family (owned by the
+# scenario catalog so a new family can ship its own facets without touching
+# this module; PHASES stay static — a family scenario reuses the same narrative
+# phase vocabulary).
+CATEGORIES = scenario_catalog.CATEGORIES
 
 PHASES = [
     {"key": "detection", "label": "Detection", "icon": "🔔"},
@@ -97,12 +112,16 @@ OUTCOME_GOOD = "good"
 # Choice decisions: {"id", "label", "icon", "next", "points", "component", "verdict", "feedback", "consequence"}
 # Multi steps: {"multi": True, "component", "options": [{"id","label","good","points"}], "after"}
 
-SCENARIOS = [
+# The original three cybersecurity scenarios remain the Security family.
+_CORE_SCENARIOS = [
     {
         "id": "suspicious-login-001",
         "title": "Suspicious Login Investigation",
         "description": "A security alert shows multiple failed login attempts followed by a successful login from an unfamiliar location. Determine whether the account is compromised.",
         "role_title": "Cybersecurity Analyst",
+        "family": "security",
+        "role_families": ["security"],
+        "version": scenario_catalog.SCENARIO_VERSION,
         "difficulty": "intermediate",
         "estimated_minutes": 15,
         "category": "threat_detection",
@@ -301,6 +320,9 @@ SCENARIOS = [
         "title": "Phishing Email Investigation",
         "description": "An employee reports a suspicious email that may contain a malicious link. Analyze the evidence and decide how to respond.",
         "role_title": "Cybersecurity Analyst",
+        "family": "security",
+        "role_families": ["security"],
+        "version": scenario_catalog.SCENARIO_VERSION,
         "difficulty": "beginner",
         "estimated_minutes": 10,
         "category": "threat_detection",
@@ -459,6 +481,9 @@ SCENARIOS = [
         "title": "SIEM Alert Investigation",
         "description": "Multiple alerts appear in the SIEM. Determine which events represent a real security threat and respond appropriately.",
         "role_title": "Cybersecurity Analyst",
+        "family": "security",
+        "role_families": ["security"],
+        "version": scenario_catalog.SCENARIO_VERSION,
         "difficulty": "intermediate",
         "estimated_minutes": 15,
         "category": "siem_analysis",
@@ -620,13 +645,119 @@ SCENARIOS = [
 ]
 
 
-# ------------------------------------------------------------------ catalog
+# Full catalog = the original Security family + every authored family scenario
+# + per-student role-blueprint clones (added lazily, see _blueprints_for).
+SCENARIOS = _CORE_SCENARIOS + list(scenario_catalog.FAMILY_SCENARIOS)
+
+# Package-level registry of deterministic role-blueprint clones so a scenario
+# id that was buildable for a student stays resolvable later — start-by-URL and
+# resume-after-a-target-change both need _scenario() to find it again.
+_BLUEPRINT_REGISTRY = {}
+_BLUEPRINT_KEYS = set()
+
+
+def _role_intent_family_alias(domain):
+    """Translate a role_intent domain family onto the catalog's families.
+
+    role_intent deliberately merges AI and Cloud/DevOps into ``software``; we
+    only translate families the scenario catalog actually ships, leaving the
+    rest (clinical, legal, architecture, healthcare, ...) unmapped so those
+    titles fall through to role-specific blueprint practice.
+    """
+    aliases = {
+        "security": "security",
+        "data": "data",
+        "software": "software",
+        "design": "design",
+        "marketing": "marketing",
+        "finance": "finance",
+        "product": "data",        # product analytics practice is the data family
+        "project": "project_ops",
+        "operations": "project_ops",
+    }
+    return aliases.get(domain or "")
+
+
+def _family_by_terms(title):
+    """Family from the catalog's term vocabularies (weakest signal, used to
+    rescue specialized titles the curated map does not cover). Token-based with
+    generic job tails ("analyst", "designer", "engineer", ...) excluded, so an
+    "Architectural Designer" is never swept into the design family by the
+    "design/designer" tail; a title must actually carry a domain token."""
+    tokens = _TITLE_TOKEN_RE.findall((title or "").lower())
+    domain = [t for t in tokens if t not in _GENERIC_TITLE_TAILS]
+    if not domain:
+        return None
+    best, best_score = None, 0
+    for fam, terms in scenario_catalog.FAMILY_TERMS.items():
+        score = sum(1 for t in domain if t in terms)
+        if score > best_score:
+            best, best_score = fam, score
+    return best if best_score else None
+
+
+def family_for_role(title):
+    """Canonical scenario-catalog family for a target-role title, or ``None``
+    when the role has no scenario family (→ deterministic blueprint practice).
+
+    Resolution order:
+      1. Curated exact-title map (scenario_catalog.ROLE_FAMILY_BLUEPRINT) which
+         covers every seeded catalog title and its close variants.
+      2. The catalog family term vocabularies.
+      3. role_intent.family_of() translated through _role_intent_family_alias.
+    """
+    title = (title or "").strip()
+    if not title:
+        return None
+    fam = scenario_catalog.family_for_title(title)
+    if fam:
+        return fam
+    fam = _family_by_terms(title)
+    if fam:
+        return fam
+    return _role_intent_family_alias(role_intent.family_of(title))
+
+
+def _blueprints_for(student):
+    """Deterministic generic-family practice cloned from the target role's own
+    required skills — only for roles with no resolved family (a dentist gets
+    dental practice, never a SIEM scenario). Registered in the package-level
+    registry so `_scenario` resolves them across requests."""
+    role = (student or {}).get("target_role") or {}
+    title = (role.get("title") or "").strip()
+    if not title or family_for_role(title):
+        return []
+    slug = scenario_catalog._slugify(title)
+    if slug in _BLUEPRINT_KEYS:
+        return [s for s in _BLUEPRINT_REGISTRY.values() if s["role_title"] == title]
+    skills = [
+        (s.get("name") or "").strip()
+        for s in (role.get("required_skills") or [])
+        if (s.get("name") or "").strip()
+    ]
+    if not skills:
+        return []
+    clones = scenario_catalog.build_blueprint_scenarios(title, skills)
+    for s in clones:
+        _BLUEPRINT_REGISTRY[s["id"]] = s
+    _BLUEPRINT_KEYS.add(slug)
+    return clones
+
+
+def lookup_scenario(student, scenario_id):
+    """Resolve a scenario the student may start: any catalog scenario or their
+    own role-blueprint clone. Returns ``None`` when unknown."""
+    scn = _scenario(scenario_id)
+    if scn:
+        return scn
+    return next((s for s in _blueprints_for(student) if s["id"] == scenario_id), None)
+
 
 def _scenario(scenario_id):
     for scn in SCENARIOS:
         if scn["id"] == scenario_id:
             return scn
-    return None
+    return _BLUEPRINT_REGISTRY.get(scenario_id) or None
 
 
 def _step(scenario, step_id):
@@ -684,6 +815,7 @@ def public_scenario_card(scenario, progress):
     """progress: {status, best_score, attempts_count, last_outcome}"""
     diff = DIFFICULTIES.get(scenario.get("difficulty"), DIFFICULTIES["beginner"])
     cat = next((c for c in CATEGORIES if c["key"] == scenario.get("category")), CATEGORIES[0])
+    fam = scenario.get("family")
     return {
         "id": scenario["id"],
         "title": scenario["title"],
@@ -697,6 +829,10 @@ def public_scenario_card(scenario, progress):
         "category": cat["key"],
         "category_label": cat["label"],
         "category_icon": cat["icon"],
+        "family": fam,
+        "family_label": scenario_catalog.FAMILY_LABEL_OF.get(fam),
+        "family_icon": scenario_catalog.FAMILY_ICON_OF.get(fam),
+        "version": scenario.get("version") or scenario_catalog.SCENARIO_VERSION,
         "skills": list(scenario.get("skills") or []),
         "steps_count": _steps_total(scenario),
         "status": progress["status"],
@@ -705,6 +841,12 @@ def public_scenario_card(scenario, progress):
         "last_outcome_title": progress.get("last_outcome_title"),
         "last_outcome_tone": progress.get("last_outcome_tone"),
     }
+
+
+def _component_label_map(scenario):
+    """Family-honest labels for the engine's component keys (e.g. the data
+    family renames ``threat_analysis`` to "Analysis"); defaults for unknown."""
+    return scenario_catalog.family_component_labels(scenario.get("family") or "")
 
 
 def _skill_overlap(student, scenario_skills):
@@ -721,67 +863,32 @@ def _skill_overlap(student, scenario_skills):
 
 # ------------------------------------------------------------ domain-gating
 
-def _specificity_floor():
-    """Path B floor, derived from the live role pool (not a fitted literal).
-
-    Falls exactly on the specificity of a skill that appears in
-    ``DOMAIN_DF_CAP`` of the local role candidates — i.e. the least-common
-    genuinely-cyber skill in the current pool (Threat Detection, df=2). Generic
-    transferables in the pool sit strictly below it (see module header).
-    """
-    corpus = max(len(models.list_roles()) + len(models.list_catalog_roles()), 1)
-    return math.log1p(corpus / (1.0 + DOMAIN_DF_CAP))
-
-
-def _scenario_specificity(student, scenario):
-    """``{skill_name: weight}`` for the scenario's skills against this student's
-    trusted profile, weighted by IDF over the live role pool.
-
-    Reuses ``recommendations.role_pool_specificity()`` so the same "rare skill =
-    role-defining" signal `recommend()` trusts governs scenario availability.
-    Skills absent from the pool carry ``ABSENT_SKILL_WEIGHT`` (zero); a profile
-    skill that is NOT in the pool is seen only when a genuinely-cyber pooled
-    skill also matches.
-    """
-    weights = recommendations.role_pool_specificity()
-    profile_keys = {
-        recommendations._key(s.get("name"))
-        for s in (student.get("self_reported_skills") or [])
-        if s.get("name")
-    }
-    profile_keys.update(
-        recommendations._key(s.get("name"))
-        for s in (student.get("verified_skills") or [])
-        if s.get("name")
-    )
-    out = {}
-    for sk in scenario.get("skills") or []:
-        k = recommendations._key(sk)
-        if not k or k not in profile_keys:
-            continue
-        out[sk] = weights.get(k, ABSENT_SKILL_WEIGHT)
-    return out
-
-
 def scenario_eligible(student, scenario):
-    """Domain-gate a single scenario for a student.
+    """Relevance-gate a single scenario for a student (guide §"Target roles
+    must not see security scenarios").
 
-    Path A: the target-role title resolves within the scenario's own
-    role_title via role_intent (EXACT/CLOSE/FAMILY) — reuses the same
-    classifier the live-jobs feed obeys.
-    Path B: at least one matched scenario skill carries enough specificity
-    weight to be role-defining (idf over the live role pool), never a generic
-    transferable. Skills absent from the pool never clear the floor.
+    A scenario is shown/startable when the student has a target role AND either
+    the role resolves to the scenario's family or the existing title classifier
+    sees EXACT / CLOSE / FAMILY overlap. Role-blueprint clones (family
+    ``generic``) are always eligible for the role they were built from.
     """
     if not student:
         return False
     target = (student.get("target_role") or {}).get("title") or ""
-    if target and role_intent.classify_title(target, scenario.get("role_title") or "") != "UNRELATED":
-        return True
-    matched = _scenario_specificity(student, scenario)
-    if not matched:
+    target = target.strip()
+    if not target:
         return False
-    return max(matched.values()) >= _specificity_floor()
+    if scenario.get("family") == "generic":
+        return scenario.get("role_title") == target
+    fam = family_for_role(target)
+    if fam is not None:
+        # Strict per-family isolation: a resolved family opens ONLY that
+        # family's scenarios (an AI Engineer never sees DevOps content).
+        return scenario.get("family") == fam
+    # No resolved family (dentist, clinical, legal, ...): only the trained
+    # title classifier may still see overlap, and those roles also get their
+    # own blueprints. Never another domain by accident.
+    return role_intent.classify_title(target, scenario.get("role_title") or "") != "UNRELATED"
 
 
 def has_attempt(student_id, scenario_id):
@@ -797,9 +904,9 @@ def has_attempt(student_id, scenario_id):
 def availability_reason(student):
     """Role/profile-driven reason for an empty library (never 'no content')."""
     target = (student.get("target_role") or {}).get("title") or ""
-    if target:
-        return f"No practice scenarios are available for {target} yet — check back as more roles are added."
-    return "Add skills to your profile (upload a CV) and choose a target role to see practice scenarios matched to you."
+    if not target:
+        return "Add skills to your profile (upload a CV) and choose a target role to see practice scenarios matched to you."
+    return f"No practice scenarios are available for {target} yet — role-specific practice is being prepared."
 
 
 def _gap_names(student):
@@ -819,8 +926,11 @@ def list_scenarios(student):
     student_id = student["id"]
     attempts = models.list_scenario_attempts(student_id, limit=200)
 
+    # effective catalog = every authored scenario + this student's role-blueprint clones
+    catalog = SCENARIOS + _blueprints_for(student)
+
     by_scenario = {}
-    for scn in SCENARIOS:
+    for scn in catalog:
         by_scenario[scn["id"]] = {"status": "not_started", "best_score": None, "attempts_count": 0, "last_outcome_title": None, "last_outcome_tone": None}
 
     completed = []
@@ -864,18 +974,9 @@ def list_scenarios(student):
     }
 
     gaps = _gap_names(student)
-    eligible = [scn for scn in SCENARIOS if scenario_eligible(student, scn)]
-    ranked = []
-    for scn in eligible:
-        sks = [s.lower().strip() for s in (scn.get("skills") or [])]
-        # recommend what is unstarted or in progress and most useful for the role
-        overlap_gap = sum(1 for g in gaps if g in sks)
-        overlap_profile = _skill_overlap(student, scn.get("skills") or [])
-        completed_this = any(a["scenario_id"] == scn["id"] and a["status"] == "completed" for a in attempts)
-        score = overlap_gap * 3 + overlap_profile * 1 + (0 if completed_this else 2)
-        ranked.append((score, scn))
-    ranked.sort(key=lambda t: (-t[0], t[1]["title"].lower()))
-    recommended = [scn["id"] for _, scn in ranked]
+    eligible = [scn for scn in catalog if scenario_eligible(student, scn)]
+    ranked = _rank_scenarios(student, eligible, gaps, attempts)
+    recommended = [scn["id"] for scn in ranked]
 
     # Categories are derived from what is actually available so the library
     # never offers an empty facet (PHASES stay static — see design §3.3).
@@ -885,7 +986,7 @@ def list_scenarios(student):
     availability = "ok" if eligible else "none"
 
     return {
-        "scenarios": [public_scenario_card(scn, by_scenario[scn["id"]]) for scn in eligible],
+        "scenarios": [public_scenario_card(scn, by_scenario[scn["id"]]) for scn in ranked],
         "availability": availability,
         "availability_reason": availability_reason(student),
         "recommended": recommended,
@@ -894,6 +995,77 @@ def list_scenarios(student):
         "target_role": (student.get("target_role") or {}).get("title") or None,
         "note": "Practice simulations prepare you for real situations. They build practice confidence — they never verify skills, which always requires the Assessment.",
     }
+
+
+def scenario_history(student):
+    """Per-attempt history for the Practice page: attempt date/version/score
+    plus the scenario's role and family context, newest first."""
+    if not student:
+        return {"attempts": []}
+    student_id = student["id"]
+    rows = []
+    for a in models.list_scenario_attempts(student_id, limit=200):
+        scn = _scenario(a["scenario_id"])
+        if not scn:
+            continue
+        fb = a.get("feedback") or {}
+        diff = DIFFICULTIES.get(scn.get("difficulty"), DIFFICULTIES["beginner"])
+        fam = scn.get("family")
+        rows.append({
+            "attempt_id": a["id"],
+            "scenario_id": scn["id"],
+            "title": scn.get("title") or scn["id"],
+            "role_title": scn.get("role_title") or "",
+            "family": fam,
+            "family_label": scenario_catalog.FAMILY_LABEL_OF.get(fam),
+            "family_icon": scenario_catalog.FAMILY_ICON_OF.get(fam),
+            "difficulty_label": diff["label"],
+            "difficulty_icon": diff["icon"],
+            "status": a["status"],
+            "score": round(a["score"]) if a["score"] is not None else None,
+            "scenario_version": a.get("scenario_version") or scn.get("version") or scenario_catalog.SCENARIO_VERSION,
+            "hints_used": a.get("hints_used") or 0,
+            "started_at": a.get("started_at"),
+            "completed_at": a.get("completed_at"),
+            "outcome_title": fb.get("outcome_title"),
+            "outcome_tone": fb.get("outcome_tone"),
+        })
+    rows.sort(key=lambda r: (r.get("started_at") or ""), reverse=True)
+    return {"attempts": rows}
+
+
+def _rank_scenarios(student, candidate_scenarios, gaps, attempts):
+    """Recommendation order: tier 0 exact role-title match → tier 1 family →
+    tier 2 skill overlap → tier 3 difficulty/progress (guide §4.1-4.2).
+    Deterministic within a tier: difficulty, then unstarted, then title."""
+    target = ((student.get("target_role") or {}).get("title") or "").strip()
+    target_l = target.lower()
+    fam = family_for_role(target) if target else None
+    done_ids = {a["scenario_id"] for a in attempts if a["status"] == "completed"}
+    diff_order = {"beginner": 0, "intermediate": 1, "advanced": 2}
+    scored = []
+    for scn in candidate_scenarios:
+        scn_l = (scn.get("role_title") or "").strip().lower()
+        if target and scn_l == target_l:
+            tier = 0
+        elif target and scn.get("family") == "generic" and scn.get("role_title") == target:
+            tier = 0
+        elif fam and scn.get("family") == fam:
+            tier = 1
+        else:
+            sks = [s.lower().strip() for s in (scn.get("skills") or [])]
+            overlap_gap = sum(1 for g in gaps if g in sks)
+            overlap_profile = _skill_overlap(student, sks)
+            tier = 2 if (overlap_gap or overlap_profile) else 3
+        scored.append((
+            tier,
+            diff_order.get(scn.get("difficulty"), 1),
+            0 if scn["id"] in done_ids else 1,  # prefer unstarted within a tier
+            scn["title"].lower(),
+            scn,
+        ))
+    scored.sort(key=lambda t: (t[0], t[1], -t[2], t[3]))
+    return [t[-1] for t in scored]
 
 
 # --------------------------------------------------------------- attempt state
@@ -917,12 +1089,34 @@ def start_scenario(student_id, scenario_id):
     existing = models.find_in_progress_scenario(student_id, scenario_id)
     if existing:
         return existing, scenario
-    attempt = models.create_scenario_attempt(student_id, scenario_id, _new_state(scenario))
+    attempt = models.create_scenario_attempt(
+        student_id, scenario_id, _new_state(scenario),
+        scenario_version=scenario.get("version") or scenario_catalog.SCENARIO_VERSION,
+    )
     return attempt, scenario
 
 
-def player_view(attempt, scenario):
-    """Public step payload for the current state of an attempt."""
+def _hint_policy(used):
+    return {
+        "penalty": HINT_PENALTY,
+        "cap": HINT_PENALTY_CAP,
+        "used": used or 0,
+        "deduction": min(HINT_PENALTY_CAP, (used or 0) * HINT_PENALTY),
+    }
+
+
+def player_view(attempt, scenario, student=None):
+    """Public step payload for the current state of an attempt.
+
+    ``student`` is optional (looked up when omitted) and only used to surface
+    the target-role heading the Phase 4 player requires. ``last_decision`` is
+    the most-recent decision + its professional reasoning so the player can
+    explain consequences right after each submission (never before one)."""
+    if student is None:
+        try:
+            student = models.get_student(attempt.get("student_id"))
+        except Exception:
+            student = None
     state = attempt.get("state") or {}
     step_id = state.get("step_id") or scenario["start_step"]
     step = _step(scenario, step_id)
@@ -931,10 +1125,30 @@ def player_view(attempt, scenario):
     order = [s["id"] for s in scenario["steps"]]
     idx = order.index(step_id) if step_id in order else 0
     seen_outcomes = bool(state.get("outcome"))
+    decision_log = state.get("decision_log") or []
+    last = decision_log[-1] if decision_log else None
+    last_decision = None
+    if last:
+        last_decision = {
+            "label": last.get("label", "Decision made"),
+            "icon": last.get("icon"),
+            "verdict": last.get("verdict", "neutral"),
+            "good": last.get("verdict") == "good",
+            "points": last.get("points", 0),
+            "feedback": last.get("feedback", ""),
+            "consequence": last.get("consequence", ""),
+            "step_title": _step_title_for(scenario, last.get("step_id")),
+        }
     return {
         "attempt_id": attempt["id"],
         "scenario_id": scenario["id"],
         "scenario_title": scenario.get("title") or "",
+        "scenario_version": attempt.get("scenario_version") or scenario.get("version") or scenario_catalog.SCENARIO_VERSION,
+        "family": scenario.get("family"),
+        "family_label": scenario_catalog.FAMILY_LABEL_OF.get(scenario.get("family")),
+        "family_icon": scenario_catalog.FAMILY_ICON_OF.get(scenario.get("family")),
+        "target_role": (student.get("target_role") or {}).get("title") if student else None,
+        "role_title": scenario.get("role_title") or "",
         "status": attempt["status"],
         "step": {
             "id": step_id,
@@ -957,6 +1171,8 @@ def player_view(attempt, scenario):
             "current_phase": _phase_of(scenario, step_id),
             "phases": PHASES,
         },
+        "last_decision": last_decision,
+        "hint_policy": _hint_policy(len(state.get("hints") or [])),
         "outcome": state.get("outcome"),
     }
 
@@ -1237,15 +1453,88 @@ def improve_skill_confidence(student_id, scenario):
     return deltas
 
 
-def result_payload(attempt, scenario, match_before=None, match_after=None, deltas=None):
-    deltas = deltas or []
+def _skill_for_component(scenario, component):
+    """First scenario skill whose ``skills_components`` maps onto a competency
+    component (used to connect weak competencies to existing learning content)."""
+    for skill_name, comp in (scenario.get("skills_components") or {}).items():
+        if comp == component:
+            return skill_name
+    return None
+
+
+def _follow_up(scenario, attempt):
+    """Phase 4 requirement: results connect the weakest competency to an
+    existing learning/practice follow-up. The weakest component is chosen from
+    the persisted component percentages; the related scenario skill (when one
+    maps to it) becomes the learning target."""
     fb = attempt.get("feedback") or {}
     pcts = fb.get("component_pcts") or {}
+    labels = scenario_catalog.family_component_labels(scenario.get("family") or "")
+    scored = [(c, pcts[c]) for c in COMPONENTS if pcts.get(c) is not None]
+    base = {
+        "component_key": None,
+        "component_label": None,
+        "weakness_pct": None,
+        "skill": None,
+        "skill_id": None,
+        "action": "practice",
+    }
+    if not scored:
+        base["message"] = "Replay this scenario and inspect every evidence tab before deciding to sharpen the same calls."
+        return base
+    key, pct = min(scored, key=lambda kv: kv[1])
+    label = labels.get(key) or COMPONENT_LABELS.get(key) or key.title().replace("_", " ")
+    skill = _skill_for_component(scenario, key)
+    skill_id = None
+    if skill:
+        try:
+            row = models.get_skill_by_name(skill)
+            skill_id = row.get("id") if row else None
+        except Exception:
+            skill_id = None
+    is_weak = pct is not None and pct < 50
+    if skill_id and is_weak:
+        action = "lesson"
+        message = f"Your weakest competency here was {label} at {pct}%. Review the {skill} learning content for that competency before your next attempt."
+    elif skill:
+        action = "practice"
+        message = f"Your weakest competency here was {label} at {pct}%. Replay the scenario and focus your evidence review on that area next time."
+    else:
+        action = "practice"
+        message = f"Your weakest competency here was {label} at {pct}%. Replay and inspect the evidence before deciding to build it up."
+    base.update({
+        "component_key": key,
+        "component_label": label,
+        "weakness_pct": int(pct) if pct is not None else None,
+        "skill": skill,
+        "skill_id": skill_id,
+        "action": action,
+        "message": message,
+    })
+    return base
+
+
+def result_payload(attempt, scenario, match_before=None, match_after=None, deltas=None, student=None):
+    deltas = deltas or []
+    if student is None:
+        try:
+            student = models.get_student(attempt.get("student_id"))
+        except Exception:
+            student = None
+    fb = attempt.get("feedback") or {}
+    pcts = fb.get("component_pcts") or {}
+    labels = _component_label_map(scenario)
     return {
         "completed": True,
         "attempt_id": attempt["id"],
         "scenario_id": scenario["id"],
         "title": scenario["title"],
+        "scenario_version": attempt.get("scenario_version") or scenario.get("version") or scenario_catalog.SCENARIO_VERSION,
+        "family": scenario.get("family"),
+        "family_label": scenario_catalog.FAMILY_LABEL_OF.get(scenario.get("family")),
+        "family_icon": scenario_catalog.FAMILY_ICON_OF.get(scenario.get("family")),
+        "target_role": (student.get("target_role") or {}).get("title") if student else None,
+        "role_title": scenario.get("role_title") or "",
         "difficulty_icon": DIFFICULTIES.get(scenario.get("difficulty"), DIFFICULTIES["beginner"])["icon"],
         "difficulty_label": DIFFICULTIES.get(scenario.get("difficulty"), DIFFICULTIES["beginner"])["label"],
         "score": round(attempt.get("score") or 0),
@@ -1259,7 +1548,7 @@ def result_payload(attempt, scenario, match_before=None, match_after=None, delta
             "summary": fb.get("outcome_summary"),
         },
         "components": [
-            {"key": k, "label": COMPONENT_LABELS[k], "pct": pcts.get(k)}
+            {"key": k, "label": labels[k], "pct": pcts.get(k)}
             for k in COMPONENTS
         ],
         "skills": [
@@ -1276,6 +1565,8 @@ def result_payload(attempt, scenario, match_before=None, match_after=None, delta
         "strengths": attempt.get("strengths") or [],
         "improvements": attempt.get("improvements") or [],
         "hints_used": attempt.get("hints_used") or fb.get("hints_used") or 0,
+        "hint_policy": _hint_policy(attempt.get("hints_used") or fb.get("hints_used") or 0),
+        "follow_up": _follow_up(scenario, attempt),
         "evidence_inspected_pct": pcts.get("investigation"),
         "certified": False,
         "note": "Practice performance builds practice confidence in your profile, but it never verifies a skill — verified skills always require the Assessment system.",

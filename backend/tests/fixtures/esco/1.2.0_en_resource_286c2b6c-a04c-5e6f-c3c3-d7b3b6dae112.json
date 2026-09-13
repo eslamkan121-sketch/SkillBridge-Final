@@ -1,0 +1,24 @@
+{
+  "_meta": {
+    "note": "Recorded, sanitized ESCO resource payload (v1.2.0, en). Placeholder occupation metadata, no secrets.",
+    "params": {"uri": "http://data.europa.eu/esco/occupation/286c2b6c-a04c-5e6f-c3c3-d7b3b6dae112", "language": "en", "selectedVersion": "1.2.0"}
+  },
+  "uri": "http://data.europa.eu/esco/occupation/286c2b6c-a04c-5e6f-c3c3-d7b3b6dae112",
+  "preferredLabel": {"@language": "en", "@value": "Big data specialist"},
+  "altLabels": [{"@language": "en", "@value": "Big data consultant"}],
+  "code": "2512.9",
+  "description": [
+    {"@language": "en", "@value": "Collects, processes and interprets very large data sets, building the analytical foundations for data-driven decisions."}
+  ],
+  "_links": {
+    "iscoGroup": {"uri": "http://data.europa.eu/esco/isco/2512", "code": "2512"},
+    "hasEssentialSkill": [
+      {"uri": "http://data.europa.eu/esco/skill/sk-bigdata", "title": "big data analytics"},
+      {"uri": "http://data.europa.eu/esco/skill/sk-distcomp", "title": "distributed computing"},
+      {"uri": "http://data.europa.eu/esco/skill/sk-sql", "title": "SQL"}
+    ],
+    "hasOptionalSkill": [
+      {"uri": "http://data.europa.eu/esco/skill/sk-hadoop", "title": "Apache Hadoop"}
+    ]
+  }
+}

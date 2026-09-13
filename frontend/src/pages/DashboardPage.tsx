@@ -1,18 +1,71 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useApp } from '../AppContext'
 import { api } from '../lib/api'
 import { RELOCATION_MARKETS, marketLabel } from '../lib/markets'
-import type { Analysis, ActivitySummary, Student, RoleRecord, Candidate, RoleSkillCoverage, RecentJob, RecentJobsResponse, ProviderReport } from '../lib/types'
+import type { Analysis, ActivitySummary, ScenarioLibrary, Student, RoleRecord, Candidate, RoleSkillCoverage, RecentJob, RecentJobsResponse, ProviderReport, JobsHealthPayload } from '../lib/types'
 import { GapPill, SkillTag, LevelBadge, ScoreRing } from '../components/widgets'
-import { IconArrowRight, IconCheck, IconVerified, IconFlame, IconBolt, IconLeaderboard, IconTrophy, IconExternal, IconShield, IconUpload } from '../components/Icons'
+import MatchBreakdown from '../components/MatchBreakdown'
+import JobTrackerPanel from '../components/JobTrackerPanel'
+import { IconArrowRight, IconCheck, IconVerified, IconFlame, IconBolt, IconLeaderboard, IconTrophy, IconExternal, IconShield, IconUpload, IconBookmark } from '../components/Icons'
 
-function nextStep(analysis: Analysis | undefined): string {
-  if (!analysis) return 'Select a target role'
-  if (analysis.gap_count === 0) return 'All requirements met — you are career ready!'
-  const missing = analysis.skill_gaps.find((g) => g.status === 'missing')
-  const gap = analysis.skill_gaps.find((g) => g.status === 'gap')
-  const target = missing || gap
-  return target ? target.skill_name : 'Take the next assessment'
+// ---------------------------------------------------------------------------
+// Recommended Next Step — documented deterministic priority (first match wins).
+//
+//   P1. No target role / no analysis        -> Skills & Roles (choose a target)
+//   P2. Scenario currently in progress      -> Practice (resume it)
+//   P3. First non-strong required skill:
+//         - has a matching, not-yet-completed scenario  -> Practice that skill
+//         - otherwise                                    -> Learning that skill
+//   P4. All required skills strong but one is still
+//       self-reported (not verified)        -> Assessments (verify that skill)
+//   P5. No required-skill gaps at all:
+//         - scenarios are available          -> Practice (stay sharp)
+//         - otherwise                        -> career ready (no action)
+//
+// Rule choice only ever RECOMMENDS an action; it never changes the target role
+// and never grants verification by itself.
+// ---------------------------------------------------------------------------
+export interface NextStep {
+  action: 'skills' | 'learning' | 'scenarios' | 'assessments' | null
+  label: string
+  skillId?: number
+  roleTitle: string
+}
+
+function nextStep(analysis: Analysis | undefined, lib: ScenarioLibrary | null, roleTitle: string): NextStep {
+  if (!analysis || !roleTitle) {
+    return { action: analysis ? 'learning' : 'skills', label: analysis ? 'Pick up your learning' : 'Choose your target role', roleTitle: '' }
+  }
+  const cards = (lib?.scenarios as Array<{ skills: string[]; status: string }> | undefined) || []
+  const inProgress = cards.find((c) => c.status === 'in_progress')
+  if (inProgress) return { action: 'scenarios', label: 'Resume your practice session', roleTitle }
+  const gaps = analysis.skill_gaps || []
+  const nonStrong = gaps.filter((g) => g.status !== 'strong')
+  const target = nonStrong.find((g) => g.status === 'missing') || nonStrong[0]
+  if (target) {
+    const skillCard = cards.find((c) =>
+      (c.skills || []).some((s) => s.toLowerCase() === (target.skill_name || '').toLowerCase()) && c.status !== 'completed')
+    if (skillCard) return { action: 'scenarios', label: `Practice ${target.skill_name}`, skillId: target.skill_id, roleTitle }
+    return { action: 'learning', label: `Continue learning ${target.skill_name}`, skillId: target.skill_id, roleTitle }
+  }
+  const unverified = gaps.find((g) => g.status === 'strong' && !g.verified)
+  if (unverified) return { action: 'assessments', label: `Verify ${unverified.skill_name}`, skillId: unverified.skill_id, roleTitle }
+  if (cards.length > 0) return { action: 'scenarios', label: 'Practice a scenario to stay sharp', roleTitle }
+  return { action: null, label: 'All requirements met — career ready', roleTitle }
+}
+
+function NextStepAction({ step, go, roleTitle }: {
+  step: NextStep
+  go: (section: string, focus?: { skillId: number; roleTitle: string }) => void
+  roleTitle: string
+}) {
+  if (!step.action) return null
+  const focus = step.skillId ? { skillId: step.skillId, roleTitle } : undefined
+  return (
+    <button type="button" className="btn btn-sm dash-next-go" onClick={() => go(step.action!, focus)}>
+      Go <IconArrowRight size={13} />
+    </button>
+  )
 }
 
 function copyText(text: string): Promise<void> {
@@ -36,7 +89,7 @@ function feedHealth(providers?: ProviderReport[]) {
   }
 }
 
-function JobsCard({ student }: { student?: Student }) {
+function JobsCard({ student, onSaved, onNavigate }: { student?: Student; onSaved?: () => void; onNavigate?: (section: string) => void }) {
   const { me, refreshStudent, applyCopilot } = useApp()
   const [data, setData] = useState<RecentJobsResponse | null>(null)
   const [tried, setTried] = useState(false)
@@ -45,9 +98,58 @@ function JobsCard({ student }: { student?: Student }) {
   const [cvMsg, setCvMsg] = useState('')
   const [cvWarn, setCvWarn] = useState(false)
   const [market, setMarket] = useState(() => localStorage.getItem('jobs.market') || '')
+  const [savedFps, setSavedFps] = useState<Set<string>>(new Set())
+  const [stageByFp, setStageByFp] = useState<Record<string, string>>({})
+  const [savingFp, setSavingFp] = useState('')
+  const [q, setQ] = useState('')
+  const [provider, setProvider] = useState('')
+  const [workType, setWorkType] = useState('')
+  const [seniority, setSeniority] = useState('')
+  const [freshness, setFreshness] = useState('')
+  const [minMatch, setMinMatch] = useState(0)
+  const [savedOnly, setSavedOnly] = useState(false)
+  const [savedState, setSavedState] = useState('')
+  const [page, setPage] = useState(0)
+  const [healthOpen, setHealthOpen] = useState(false)
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [health, setHealth] = useState<JobsHealthPayload | null>(null)
+  const [reportedFps, setReportedFps] = useState<Set<string>>(new Set())
+  const healthLoaded = useRef(false)
 
   const hasCvSkills = (student?.self_reported_skills?.length ?? 0) > 0
   const cvKey = (student?.self_reported_skills || []).map((s) => s.name).sort().join('|')
+
+  useEffect(() => {
+    if (!me?.student?.id || !hasCvSkills) return
+    api.jobTracker(me.student.id)
+      .then((t) => {
+        setSavedFps(new Set((t.items || []).map((i) => i.fingerprint)))
+        setStageByFp(Object.fromEntries((t.items || []).map((i) => [i.fingerprint, i.stage])))
+      })
+      .catch((e) => console.error('[dashboard] tracker load failed:', e))
+    api.jobLinkReports(me.student.id)
+      .then((r) => setReportedFps(new Set((r.reports || []).map((x) => x.fingerprint))))
+      .catch(() => {})
+  }, [me?.student?.id, cvKey])
+
+  const saveJob = async (j: RecentJob) => {
+    if (!me?.student?.id || !j.fingerprint) return
+    setSavingFp(j.fingerprint)
+    setErr('')
+    try {
+      const s = me.student as any
+      const location = s?.location || (me as any)?.location || ''
+      const country = s?.country || (me as any)?.country || ''
+      await api.saveTrackedJob(me.student.id, { fingerprint: j.fingerprint, location, country, market })
+      setSavedFps((prev) => new Set(prev).add(j.fingerprint as string))
+      setStageByFp((prev) => ({ ...prev, [j.fingerprint as string]: 'saved' }))
+      onSaved?.()
+    } catch (e: any) {
+      setErr(e.message || String(e))
+    } finally {
+      setSavingFp('')
+    }
+  }
 
   useEffect(() => {
     if (!me?.student?.id || !hasCvSkills) return
@@ -58,7 +160,7 @@ function JobsCard({ student }: { student?: Student }) {
     const s = me.student as any
     const location = s?.location || (me as any)?.location || ''
     const country = s?.country || (me as any)?.country || ''
-    api.recentJobs({ location, country, market })
+    api.recentJobs({ location, country, market, limit: 16 })
       .then((d) => { setData(d); setTried(true) })
       .catch((e) => { console.error('[dashboard] recent jobs failed:', e); setErr(e.message || String(e)); setData(null); setTried(true) })
   }, [me?.student?.id, cvKey, market])
@@ -66,6 +168,49 @@ function JobsCard({ student }: { student?: Student }) {
   const openJob = (j: RecentJob) => {
     applyCopilot({ page: 'jobs', skillId: null, competency: null, jobTitle: j.title, jobUrl: j.url || null })
   }
+
+  const prepareJob = (j: RecentJob) => {
+    applyCopilot({ page: 'jobs', skillId: null, competency: null, jobTitle: j.title, jobUrl: j.apply_url || j.url || null })
+    // Jobs do not invent a "correct" skill to study.  The Skills hub preserves
+    // the learner's chosen role and lets them select a real gap to work on.
+    onNavigate?.('skills')
+  }
+
+  const reportLink = async (j: RecentJob) => {
+    if (!me?.student?.id || !j.fingerprint) return
+    const s = me.student as any
+    try {
+      await api.reportDeadJobLink(me.student.id, j.fingerprint, { location: s?.location || '', country: s?.country || '', market })
+      setReportedFps((prev) => new Set(prev).add(j.fingerprint as string))
+    } catch (e: any) { setErr(e.message || String(e)) }
+  }
+
+  const showHealth = async () => {
+    setHealthOpen(true)
+    if (!healthLoaded.current) {
+      healthLoaded.current = true
+      try { setHealth(await api.jobsHealth()) } catch (e: any) { setErr(e.message || String(e)) }
+    }
+  }
+
+  const providers = useMemo(() => Array.from(new Set((data?.jobs || []).map((j) => j.provider || j.source).filter(Boolean))) as string[], [data])
+  const workTypes = useMemo(() => Array.from(new Set((data?.jobs || []).map((j) => j.work_type || j.workplace_type || j.employment_type).filter(Boolean))) as string[], [data])
+  const seniorities = useMemo(() => Array.from(new Set((data?.jobs || []).map((j) => j.seniority).filter(Boolean))) as string[], [data])
+  const filteredJobs = useMemo(() => (data?.jobs || []).filter((j) => {
+    const hay = [j.title, j.company, j.location, j.provider, ...(j.tags || []), ...(j.required_skills || [])].join(' ').toLowerCase()
+    const days = j.listed_days_ago
+    const freshEnough = !freshness || (days != null && days <= Number(freshness))
+    return (!q || hay.includes(q.toLowerCase())) && (!provider || (j.provider || j.source) === provider) &&
+      (!workType || (j.work_type || j.workplace_type || j.employment_type) === workType) &&
+      (!seniority || j.seniority === seniority) && freshEnough && (j.match_pct ?? 0) >= minMatch &&
+      (!savedOnly || (!!j.fingerprint && savedFps.has(j.fingerprint))) &&
+      (!savedState || (!!j.fingerprint && stageByFp[j.fingerprint] === savedState))
+  }), [data, q, provider, workType, seniority, freshness, minMatch, savedOnly, savedState, savedFps, stageByFp])
+  const pageSize = 8
+  const pageCount = Math.max(1, Math.ceil(filteredJobs.length / pageSize))
+  const pagedJobs = filteredJobs.slice(page * pageSize, page * pageSize + pageSize)
+  useEffect(() => setPage(0), [q, provider, workType, seniority, freshness, minMatch, savedOnly, savedState, market])
+  const activeFilterCount = [q, provider, workType, seniority, freshness, minMatch, savedOnly, savedState].filter(Boolean).length
 
   const onUpload = async (file: File | undefined) => {
     if (!file || !student) return
@@ -107,7 +252,7 @@ function JobsCard({ student }: { student?: Student }) {
   return (
     <div className="card mt" style={{ marginTop: 18 }}>
       <div className="flex between" style={{ flexWrap: 'wrap', gap: 8 }}>
-        <h3 style={{ margin: 0 }}>Recent roles for you</h3>
+        <h3 style={{ margin: 0 }}>Jobs for you</h3>
         <span className="small muted">
           {data?.source === 'live' ? 'Live feed'
             : data?.source === 'empty' ? 'No live matches right now'
@@ -134,6 +279,24 @@ function JobsCard({ student }: { student?: Student }) {
           ))}
         </select>
       </div>
+      {data?.status === 'cached' && <p className="small muted">Showing a recently cached result while providers are protected from repeated requests.</p>}
+      {data?.status === 'stale_fallback' && <p className="small muted">Showing your last available result while the feed refreshes in the background.</p>}
+      <button type="button" className="btn btn-sm btn-secondary jobn-mobile-trigger" onClick={() => setFiltersOpen(true)}>Filters{activeFilterCount ? ` (${activeFilterCount})` : ''}</button>
+      {filtersOpen && <div className="jobn-filter-backdrop" onMouseDown={() => setFiltersOpen(false)} />}
+      <div className={`jobn-filterbar${filtersOpen ? ' is-open' : ''}`} aria-label="Job filters" onKeyDown={(e) => { if (e.key === 'Escape') setFiltersOpen(false) }}>
+        <div className="jobn-mobile-heading"><strong>Filters</strong><button type="button" className="btn btn-sm btn-secondary" autoFocus onClick={() => setFiltersOpen(false)}>Done</button></div>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search title, company, skill…" aria-label="Search jobs" />
+        <select value={provider} onChange={(e) => setProvider(e.target.value)} aria-label="Filter jobs by provider"><option value="">All providers</option>{providers.map((p) => <option key={p} value={p}>{p}</option>)}</select>
+        <select value={workType} onChange={(e) => setWorkType(e.target.value)} aria-label="Filter jobs by work type"><option value="">All work types</option>{workTypes.map((v) => <option key={v} value={v}>{v}</option>)}</select>
+        <select value={seniority} onChange={(e) => setSeniority(e.target.value)} aria-label="Filter jobs by seniority"><option value="">All seniority levels</option>{seniorities.map((v) => <option key={v} value={v}>{v}</option>)}</select>
+        <select value={freshness} onChange={(e) => setFreshness(e.target.value)} aria-label="Filter jobs by freshness"><option value="">Any posting date</option><option value="1">Posted today</option><option value="3">Past 3 days</option><option value="7">Past week</option><option value="30">Past month</option></select>
+        <select value={minMatch} onChange={(e) => setMinMatch(Number(e.target.value))} aria-label="Minimum job match"><option value={0}>Any match</option><option value={20}>20%+ match</option><option value={40}>40%+ match</option><option value={60}>60%+ match</option></select>
+        <button type="button" className={savedOnly ? 'btn btn-sm' : 'btn btn-sm btn-secondary'} onClick={() => setSavedOnly((v) => !v)}>{savedOnly ? 'Saved only' : 'Saved jobs'}</button>
+        <select value={savedState} onChange={(e) => setSavedState(e.target.value)} aria-label="Filter jobs by application state"><option value="">Any tracker state</option><option value="saved">Saved</option><option value="preparing">Preparing</option><option value="applied">Applied</option><option value="screening">Screening</option><option value="interview">Interview</option><option value="offer">Offer</option></select>
+        {(q || provider || workType || seniority || freshness || minMatch || savedOnly || savedState) && <button type="button" className="btn btn-sm btn-secondary" onClick={() => { setQ(''); setProvider(''); setWorkType(''); setSeniority(''); setFreshness(''); setMinMatch(0); setSavedOnly(false); setSavedState('') }}>Clear filters</button>}
+        <button type="button" className="btn btn-sm btn-secondary" onClick={showHealth}>Provider status</button>
+      </div>
+      {tried && data && <p className="small muted" aria-live="polite">{filteredJobs.length} matching job{filteredJobs.length === 1 ? '' : 's'} shown</p>}
       {err && <div className="error" style={{ marginBottom: 10 }}>{err}</div>}
       {tried && data?.providers && data.providers.length > 0 && (() => {
         const h = feedHealth(data.providers)
@@ -155,13 +318,20 @@ function JobsCard({ student }: { student?: Student }) {
         )
       })()}
       {!tried ? (
-        <div className="loading">Matching opening roles to your CV…</div>
-      ) : data && data.jobs.length > 0 ? (
+        <div className="stack jobs-loading-skel" role="status" aria-label="Matching opening roles to your CV">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div className="skeleton" key={i} style={{ height: 54, borderRadius: 10 }} />
+          ))}
+        </div>
+      ) : data && pagedJobs.length > 0 ? (
         <div className="stack">
-          {data.jobs.map((j, i) => {
+          {pagedJobs.map((j, i) => {
             const pct = j.match_pct ?? 0
             const isSeniorFit = pct <= 15
             const place = j.location_label || j.location || j.country
+            const s = me?.student as any
+            const feedLoc = s?.location || (me as any)?.location || ''
+            const feedCnty = s?.country || (me as any)?.country || ''
             const inner = (
               <>
                 <div className="job-match-badge" style={{ background: pct >= 40 ? 'var(--green)' : pct >= 20 ? 'var(--amber)' : 'var(--slate-300)' }}>
@@ -178,6 +348,8 @@ function JobsCard({ student }: { student?: Student }) {
                     {place ? ` · ${place}` : ''}
                   </span>
                   {j.match_reason && <span className="job-reason">{j.match_reason}</span>}
+                  {(j.description_excerpt || j.work_type || j.link_state) && <span className="small muted">{j.description_excerpt || [j.work_type, j.link_state].filter(Boolean).join(' · ')}</span>}
+                  {j.fingerprint && stageByFp[j.fingerprint] && <span className="small muted">Tracker: {stageByFp[j.fingerprint]}</span>}
                 </div>
                 {j.tags && j.tags.length > 0 && (
                   <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, flexWrap: 'wrap' }}>
@@ -186,15 +358,15 @@ function JobsCard({ student }: { student?: Student }) {
                 )}
               </>
             )
-            return j.is_expired ? (
-              <div className={`resource ${isSeniorFit ? 'job-senior' : ''}`} key={`${j.title}-${i}`} title="Listing has expired — no direct link" style={{ cursor: 'pointer' }} onClick={() => openJob(j)}>
+            const safeUrl = j.apply_url || j.url
+            const row = j.is_expired || j.listing_status === 'link-unavailable' || !safeUrl ? (
+              <div className={`resource ${isSeniorFit ? 'job-senior' : ''}`} title="Listing has expired or has no safe direct link">
                 {inner}
               </div>
             ) : (
               <a
                 className={`resource ${isSeniorFit ? 'job-senior' : ''}`}
-                key={`${j.title}-${i}`}
-                href={j.url}
+                href={safeUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={() => openJob(j)}
@@ -202,13 +374,42 @@ function JobsCard({ student }: { student?: Student }) {
                 {inner}
               </a>
             )
+            return (
+              <div className="job-row" key={`${j.title}-${i}`}>
+                {row}
+                {j.fingerprint && student ? (
+                  <>
+                    <div className="job-row-actions">
+                      <button
+                        type="button"
+                        className={`job-save-btn${savedFps.has(j.fingerprint) ? ' on' : ''}`}
+                        disabled={savingFp === j.fingerprint}
+                        aria-label={savedFps.has(j.fingerprint) ? `${j.title} is saved to your tracker` : `Save ${j.title} to your tracker`}
+                        onClick={() => saveJob(j)}
+                      >
+                        <IconBookmark size={13} />
+                        {savingFp === j.fingerprint ? 'Saving…'
+                          : savedFps.has(j.fingerprint) ? 'Saved · tracked' : 'Save to tracker'}
+                      </button>
+                      <button type="button" className="btn btn-sm btn-secondary" onClick={() => prepareJob(j)}>Prepare</button>
+                      <button type="button" className="btn btn-sm btn-secondary" disabled={reportedFps.has(j.fingerprint)} onClick={() => reportLink(j)}>{reportedFps.has(j.fingerprint) ? 'Link reported' : 'Report link'}</button>
+                    </div>
+                    <MatchBreakdown kind="job" pct={pct}
+                      onRequest={() =>
+                        api.jobMatchBreakdown(student.id, j.fingerprint!,
+                          { location: feedLoc, country: feedCnty, market })} />
+                  </>
+                ) : null}
+              </div>
+            )
           })}
+          {pageCount > 1 && <div className="jobn-pages"><button type="button" className="btn btn-sm btn-secondary" disabled={page === 0} onClick={() => setPage((n) => n - 1)}>Previous</button><span className="small muted">Page {page + 1} of {pageCount}</span><button type="button" className="btn btn-sm btn-secondary" disabled={page + 1 >= pageCount} onClick={() => setPage((n) => n + 1)}>Next</button></div>}
         </div>
+      ) : data && data.jobs.length > 0 ? (
+        <div className="empty">No jobs match these filters. Clear filters to see the current feed.</div>
       ) : data?.source === 'empty' ? (
         <div>
-          <div className="empty">
-            No relevant live openings were found for your selected {student?.target_role?.title ? `${student.target_role.title} ` : ''}target role in this market — nothing is invented to fill the list.
-          </div>
+          <div className="empty">No live roles matched this search right now — nothing is invented to fill the list.</div>
           {data.providers && data.providers.some((p) => p.status === 'failed') ? (
             <p className="small muted" style={{ marginTop: 8 }}>
               Unavailable now: {data.providers.filter((p) => p.status === 'failed').map((f) => f.source).join(', ')}.
@@ -227,6 +428,7 @@ function JobsCard({ student }: { student?: Student }) {
       ) : (
         <div className="empty">No recent roles available right now.</div>
       )}
+      {healthOpen && <div className="jobn-modal-backdrop" onMouseDown={() => setHealthOpen(false)}><div className="jobn-health" role="dialog" aria-modal="true" aria-label="Job provider status" onKeyDown={(e) => { if (e.key === 'Escape') setHealthOpen(false) }} onMouseDown={(e) => e.stopPropagation()} tabIndex={-1}><div className="flex between"><h3>Provider status</h3><button type="button" className="btn btn-sm btn-secondary" autoFocus onClick={() => setHealthOpen(false)}>Close</button></div>{health?.jobs ? <><p className="small muted">Last build: {health.jobs.last_build_at || 'not built yet'}</p><p className="small muted">Cache: {health.jobs.cache?.hits || 0} hits · {health.jobs.cache?.misses || 0} misses</p><div className="stack">{Object.entries(health.jobs.providers_health || {}).map(([name, state]) => <div key={name} className="resource"><strong>{name}</strong><span className="small muted">{state}{health.jobs?.last_error_by_provider?.[name] ? ` · ${health.jobs.last_error_by_provider[name]}` : ''}</span></div>)}</div></> : <p className="small muted">Loading provider status…</p>}</div></div>}
     </div>
   )
 }
@@ -239,11 +441,13 @@ export default function DashboardPage({ onNavigate }: { onNavigate?: (section: s
   return <UniversityDashboard />
 }
 
-function StudentDashboard({ student, analysis, onNavigate }: { student?: Student; analysis?: Analysis; onNavigate?: (section: string) => void }) {
+function StudentDashboard({ student, analysis, onNavigate }: { student?: Student; analysis?: Analysis; onNavigate?: (section: string, focus?: { skillId: number; roleTitle: string }) => void }) {
   const { refreshStudent, applyCopilot } = useApp()
+  const [trackerTick, setTrackerTick] = useState(0)
   const [activity, setActivity] = useState<ActivitySummary | null>(null)
   const [shareOn, setShareOn] = useState(!!student?.share_public)
   const [copied, setCopied] = useState('')
+  const [scenarioLib, setScenarioLib] = useState<ScenarioLibrary | null>(null)
   useEffect(() => {
     applyCopilot({ page: 'dashboard', skillId: null, competency: null, jobTitle: null, jobUrl: null })
   }, [])
@@ -251,6 +455,9 @@ function StudentDashboard({ student, analysis, onNavigate }: { student?: Student
     if (student) api.studentActivity(student.id)
       .then(setActivity)
       .catch((e) => { console.error('[dashboard] activity failed:', e) })
+  }, [student?.id])
+  useEffect(() => {
+    if (student?.id) api.scenarios(student.id).then(setScenarioLib).catch(() => {})
   }, [student?.id])
   useEffect(() => setShareOn(!!student?.share_public), [student?.share_public])
   if (!student) return <div className="empty">No student profile linked to this account.</div>
@@ -273,7 +480,7 @@ function StudentDashboard({ student, analysis, onNavigate }: { student?: Student
   const publicUrl = `${window.location.origin}/p/${student.id}`
   const skillUrl = (skillId: number) => `${publicUrl}#skill-${skillId}`
 
-  const go = (section: string) => onNavigate?.(section)
+  const go = (section: string, focus?: { skillId: number; roleTitle: string }) => onNavigate?.(section, focus)
 
   const toggleShare = async (on: boolean) => {
     setShareOn(on)
@@ -344,7 +551,8 @@ function StudentDashboard({ student, analysis, onNavigate }: { student?: Student
             </div>
           </div>
         )}
-        <JobsCard student={student} />
+        <JobsCard student={student} onSaved={() => setTrackerTick((n) => n + 1)} onNavigate={onNavigate} />
+        <JobTrackerPanel student={student} refreshKey={trackerTick} />
       </div>
     )
   }
@@ -370,6 +578,10 @@ function StudentDashboard({ student, analysis, onNavigate }: { student?: Student
         </div>
         <ScoreRing value={analysis.match_score} />
       </section>
+      {student && (
+        <MatchBreakdown kind="target-role" pct={analysis.match_score}
+          onRequest={() => api.targetRoleMatchBreakdown(student.id)} />
+      )}
 
       <div className="insight-grid">
         <div className="insight-card">
@@ -387,8 +599,9 @@ function StudentDashboard({ student, analysis, onNavigate }: { student?: Student
         </div>
         <div className="insight-card">
           <span className="label">Recommended Next Step</span>
-          <strong className="next-step-label">{nextStep(analysis)}</strong>
+          <strong className="next-step-label">{nextStep(analysis, scenarioLib, analysis.role_title).label}</strong>
           <small>{gapCount === 0 ? 'Career ready' : `${gapCount} skill gap${gapCount === 1 ? '' : 's'} to close`}</small>
+          <NextStepAction step={nextStep(analysis, scenarioLib, analysis.role_title)} go={go} roleTitle={analysis.role_title} />
         </div>
       </div>
 
@@ -522,7 +735,8 @@ function StudentDashboard({ student, analysis, onNavigate }: { student?: Student
         </div>
       </div>
 
-      <JobsCard student={student} />
+      <JobsCard student={student} onSaved={() => setTrackerTick((n) => n + 1)} onNavigate={onNavigate} />
+      <JobTrackerPanel student={student} refreshKey={trackerTick} />
     </div>
   )
 }

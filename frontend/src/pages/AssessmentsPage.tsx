@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useApp } from '../AppContext'
 import { api, getToken } from '../lib/api'
+import { LoadingBlock } from '../components/ui'
 import type { Analysis, AssessmentAttempt, IntegrityFlag, QuizQuestion, Skill } from '../lib/types'
 import {
   CAMERA_INTEGRITY_THRESHOLDS,
@@ -20,7 +21,7 @@ import {
   type WebcamDetector,
 } from '../lib/webcamIntegrity'
 import { GapPill } from '../components/widgets'
-import { IconAssessment, IconAlert, IconFlag, IconCheck, IconTrophy, IconClock, IconEye, IconShield, IconUsers } from '../components/Icons'
+import { IconAssessment, IconAlert, IconFlag, IconCheck, IconTrophy, IconClock, IconEye, IconShield, IconUsers, IconBack, IconTarget } from '../components/Icons'
 import { ToastRegion, useToast } from '../components/ui'
 
 function shuffle<T>(arr: T[]): T[] {
@@ -160,7 +161,12 @@ function AttemptEvidence({ attempt }: { attempt: AssessmentAttempt }) {
   )
 }
 
-export default function AssessmentsPage() {
+export default function AssessmentsPage({ initialSkillId, onFocusConsumed, backTo, onNavigate }: {
+  initialSkillId?: number
+  onFocusConsumed?: () => void
+  backTo?: { key: string; label: string } | null
+  onNavigate?: (section: string, focus?: { skillId: number; roleTitle: string }) => void
+}) {
   const { me, refreshStudent, applyCopilot } = useApp()
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
   const [attempts, setAttempts] = useState<AssessmentAttempt[]>([])
@@ -168,11 +174,39 @@ export default function AssessmentsPage() {
   const [allSkills, setAllSkills] = useState<Skill[]>([])
   const [loadError, setLoadError] = useState('')
   const [evidenceId, setEvidenceId] = useState<number | null>(null)
+  const [focusSkillName, setFocusSkillName] = useState('')
   const toast = useToast()
 
   useEffect(() => {
     applyCopilot({ page: 'assessment', skillId: null, competency: null, jobTitle: null, jobUrl: null })
   }, [])
+
+  // Phase 5: a role detail can deep-link here ("Verify a Skill"). Consume the
+  // focus immediately (no loops), reveal the skill even when it is already
+  // strong, and bring it into view once the gap list has loaded. The skill id
+  // is kept in a ref so focus consumption never races the async skills fetch.
+  const focusSkillIdRef = useRef<number | null>(initialSkillId != null ? initialSkillId : null)
+  useEffect(() => {
+    if (focusSkillIdRef.current != null) onFocusConsumed?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  useEffect(() => {
+    const id = focusSkillIdRef.current
+    if (id == null) return
+    const name = allSkills.find((s) => s.id === id)?.name || ''
+    if (!name) return
+    setFocusSkillName(name)
+    setKeepIds((prev) => { const n = new Set(prev); n.add(id); return n })
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-skill-id="${id}"]`)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        el.classList.add('asm-focus-flash')
+        setTimeout(() => el.classList.remove('asm-focus-flash'), 2600)
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allSkills])
 
   useEffect(() => {
     if (me?.student?.id) {
@@ -222,6 +256,20 @@ export default function AssessmentsPage() {
 
   return (
     <div className="assessment-page">
+      <nav className="crumbs" aria-label="Breadcrumbs">
+        {backTo && (
+          <button type="button" className="crumb-back" onClick={() => onNavigate?.(backTo.key)}>
+            <IconBack size={14} /> Back to {backTo.label}
+          </button>
+        )}
+        {focusSkillName && <span className="crumb-context">Verifying <b>{focusSkillName}</b></span>}
+      </nav>
+      {focusSkillName && (
+        <div className="asm-focus-strip" role="status">
+          <IconTarget size={15} />
+          <span>Opened from your career journey — <b>{focusSkillName}</b> is highlighted below. Assessment results only ever change verification through a passed attempt.</span>
+        </div>
+      )}
       <section className="assessment-hero">
         <div>
           <p className="eyebrow">Assessments</p>
@@ -919,7 +967,13 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate,
     }
   }
 
-  if (generating) return <div className="loading">Generating assessment questions with AI…</div>
+  if (generating) {
+    return (
+      <div className="assessment-generating">
+        <LoadingBlock label="Generating assessment questions with AI…" />
+      </div>
+    )
+  }
 
   if (mode === 'camera_notice') {
     return (
@@ -1090,7 +1144,7 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate,
             <p className="eyebrow">Verified Final Assessment</p>
             <h1>{gap.skill_name}</h1>
           </div>
-          <button className="btn btn-ghost" disabled={busy} onClick={() => setConfirmEnd(true)}>
+          <button className="btn btn-ghost" disabled={busy} onClick={() => setConfirmEnd(true)} aria-label="End assessment">
             End assessment
           </button>
         </div>
@@ -1162,7 +1216,7 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate,
               <h2 id="confirm-end-title">End this assessment early?</h2>
               <p>Your attempt will be finalized with unanswered questions scored as zero. This cannot be undone.</p>
               <div className="confirm-actions">
-                <button className="btn btn-ghost" onClick={() => setConfirmEnd(false)}>Cancel</button>
+                <button className="btn btn-ghost" onClick={() => setConfirmEnd(false)} aria-label="Cancel ending assessment">Cancel</button>
                 <button className="btn btn-danger" disabled={busy} onClick={() => { setConfirmEnd(false); void finalizeNow() }}>
                   End assessment
                 </button>
@@ -1295,7 +1349,7 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate,
   }
 
   return (
-    <div className="verify-item">
+    <div className="verify-item" data-skill-id={gap.skill_id}>
       <span className={`verify-icon ${categoryToneFor(gap.category)}`}>
         <IconAssessment size={17} />
       </span>

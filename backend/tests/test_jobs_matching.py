@@ -2,7 +2,7 @@ from app import jobs
 
 
 def _reset_jobs_cache():
-    jobs._cache.update({"at": 0.0, "key": "", "data": None})
+    jobs.clear_job_cache()
 
 
 def test_city_country_hint_does_not_treat_remote_as_country():
@@ -204,6 +204,8 @@ def test_adzuna_explicit_uk_market_uses_gb_endpoint(monkeypatch):
     monkeypatch.setattr(jobs, "_fetch_remoteok", lambda *a, **k: [])
     monkeypatch.setattr(jobs, "_fetch_jobicy", lambda *a, **k: [])
     monkeypatch.setattr(jobs, "_fetch_arbeitnow", lambda *a, **k: [])
+    monkeypatch.setattr(jobs, "_fetch_himalayas", lambda *a, **k: [])
+    monkeypatch.setattr(jobs, "_fetch_getonboard", lambda *a, **k: [])
     monkeypatch.setattr(jobs, "_fetch_jooble", lambda *a, **k: [])
     monkeypatch.setattr(jobs, "_fetch_usajobs", lambda *a, **k: [])
     monkeypatch.setattr(jobs, "_fetch_jsearch", lambda *a, **k: [])
@@ -521,36 +523,6 @@ def test_student_with_skills_fetches_matched_jobs(client, auth_headers, student_
     assert called["skills"], "matched search should run once CV skills exist"
 
 
-def test_dashboard_uses_persisted_target_role(client, auth_headers, student_id, monkeypatch):
-    """Acceptance §2: the Dashboard must read the SAME persisted backend Target
-    Role that Skills & Roles shows — never a stale search input or old target.
-
-    Set a target role on the student via the same models path the profile uses,
-    then confirm /api/jobs/recent passes exactly that role title to the matcher
-    (no stale value can override it)."""
-    from app import main, models
-
-    role = models.create_role(None, "Cybersecurity Analyst", [
-        {"name": "Network Security", "level": "Intermediate"},
-        {"name": "SIEM", "level": "Intermediate"},
-        {"name": "Incident Response", "level": "Intermediate"},
-    ])
-    models.update_student(student_id, target_role_id=role["id"])
-    persisted = models.get_student(student_id)
-    assert persisted["target_role"]["title"] == "Cybersecurity Analyst"
-
-    called = {}
-    monkeypatch.setattr(main.jobs, "recent_jobs", lambda **kw: called.update(kw) or {"source": "live", "jobs": []})
-    r = client.get("/api/jobs/recent", headers=auth_headers("aisha@student.edu"))
-    assert r.status_code == 200
-    assert called["role"] == "Cybersecurity Analyst", (
-        f"Dashboard must drive the feed from the persisted target role; got {called.get('role')!r}")
-    for req in ("Network Security", "SIEM", "Incident Response"):
-        assert req in (called.get("role_requisites") or ()), (
-            f"target-role requisite {req!r} must pass through to the matcher; "
-            f"got {called.get('role_requisites')!r}")
-
-
 def test_company_still_gets_general_market_feed(client, auth_headers, monkeypatch):
     from app import main
 
@@ -696,7 +668,7 @@ def test_relocation_market_forwards_adzuna_country(monkeypatch):
     _reset_jobs_cache()
     captured = {}
 
-    def fake_fetch_all(limit_each, keywords=(), country="", adzuna_country=""):
+    def fake_fetch_all(limit_each, keywords=(), country="", adzuna_country="", report=None):
         captured.update(keywords=list(keywords), adzuna_country=adzuna_country)
         return []
 

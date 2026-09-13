@@ -1,0 +1,220 @@
+==============================================================================
+AUTH_SESSION_MIGRATION_PLAN.txt
+SkillBridge private team handoff — Phase C (Prompt C1: design only; no code
+edited). Companion to BASELINE_BEFORE_BACKEND_ROLES_JOBS_UI.txt.
+PRIVATE — TEAM ONLY. No live credentials, tokens, hashes, salts, or .env
+values are reproduced anywhere in this file.
+==============================================================================
+
+1. SCOPE OF THIS DOCUMENT
+-------------------------
+This is the C1 design for a backward-compatible authentication / session
+hardening migration. Prompt C2 (implementation) may begin only after the owner
+approves this plan or a reviewed subset slice. No file was modified during C1.
+
+2. EXISTING BEHAVIOR (traced from source; unchanged by this document)
+--------------------------------------------------------------------
+All auth lives in backend/app/auth.py, backend/app/models.py, backend/app/
+database.py, and the routes in backend/app/main.py. Frontend login flow
+(frontend/src/AppContext.tsx, frontend/src/lib/api.ts) consumes the existing
+response shape and is intentionally unchanged.
+
+Password storage formats CURRENTLY accepted at login (check_credentials):
+  A. Password-hash path (primary): users.password_hash (base64) +
+     users.password_salt (base64), PBKDF2-HMAC-SHA256, 160,000 iterations,
+     verified in constant time via hmac.compare_digest (auth.py:37-46).
+  B. Legacy plaintext path (fallback): when password_hash is empty, the raw
+     password is compared against users.password (models.py:895-898). This is
+     NOT only historical data: create_user (models.py:819-831) still writes the
+     plaintext into the NOT NULL "password" column for every local account, and
+     seed.py creates demo accounts the same way. So plaintext is being written
+     TODAY for brand-new accounts as well.
+  C. Google / demo-google accounts: auth_provider='google', no password at all.
+
+Session handling (models.py:906-931, database.py:82-86):
+  - sessions(token TEXT PK, user_id, created_at) — opaque bearer token
+    (secrets.token_urlsafe(32)) stored in the DB PLAINTEXT.
+  - No expiry, no revocation, no last-used timestamp, no per-user cap.
+  - get_session_user looks up sessions.token directly (plaintext compare).
+  - logout deletes only the presented token. Password reset/change does not
+    revoke sessions (there is no authenticated password-change endpoint yet;
+    only /api/auth/reset/confirm, which updates the hash and leaves every
+    existing session live).
+
+Rate limiting: NONE on login, signup, reset request, or google flows.
+
+Reset / verification tokens: password_resets / email_verifications store their
+random tokens in plaintext with expires_at and a used flag; reset_confirm
+consumes one reset token then calls set_user_password (new hash only, plaintext
+"password" column left untouched).
+
+3. THREATS THIS PHASE ADDRESSES
+--------------------------------
+  1. Plaintext passwords written today on every new account + legacy rows.
+  2. Session bearer tokens recoverable from the SQLite file (plaintext).
+  3. Unlimited-lifetime sessions (no expiry/revocation) after logout/reset.
+  4. No authentication rate limiting (brute-force friendly).
+  5. Constant-time hashing exists but is not standardized across rows.
+
+4. DESIGN PRINCIPLES
+--------------------
+  - All database changes are ADDITIVE new migrations under the Phase B
+    migration framework (MIGRATIONS list). No existing column/table/route/env
+    name is removed, renamed, or resemantized.
+  - Auth responses stay byte-compatible: "token" in the same format, same
+    Authorization: Bearer scheme, same field set. Frontend unchanged.
+  - Existing active sessions and legacy accounts keep working through the
+    compatibility window; anything only-removed-after window expiry.
+  - No live credentials anywhere; tests use the existing demo fixtures and
+    never real keys.
+
+5. SCHEMA CHANGES (single additive migration 0002_auth_sessions)
+----------------------------------------------------------------
+All in the Phase B MIGRATIONS list; idempotent; rollback-safe (dropping the
+new columns/tables is purely subtractive to NEW artifacts and never touches
+users.password, users.password_hash/salt, or sessions).
+
+  a) New table auth_sessions:
+       id            INTEGER PRIMARY KEY AUTOINCREMENT
+       user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE
+       token_hash    TEXT NOT NULL UNIQUE    -- SHA-256 hex of the bearer token
+       created_at    TEXT NOT NULL           -- UTC ISO
+       expires_at    TEXT NOT NULL           -- UTC ISO, now + session TTL
+       last_used_at  TEXT                    -- UTC ISO, throttled heartbeat
+       revoked_at    TEXT                    -- UTC ISO; NULL == active
+     Only the hash of a newly issued bearer token is stored here; the raw token
+     is never written to the DB. Keep the existing sessions table untouched for
+     the whole compatibility window.
+
+  b) No change to users.password (NOT NULL legacy column). Instead the app
+     stops writing plaintext there (create_user + seed write an empty string)
+     and clears it to "" on legacy login (see 6.2). password_hash/ssalt remain
+     the canonical stored form.
+
+6. DESIGN DECISIONS BY REQUIREMENT
+----------------------------------
+6.1 Hash remaining legacy plaintext; upgrade only after successful auth.
+  - create_user / seed: stop writing plaintext to users.password (write "").
+  - check_credentials keeps the plaintext fallback (B) during the compatibility
+    window so legacy rows still sign in.
+  - On a SUCCESSFUL login where password_hash was empty: compute the PBKDF2
+    hash/salt from the password the user just supplied, store it, and replace
+    users.password with "". (Never bulk-hashes stored plaintext without a
+    successful authentication against it.)
+  - New accounts already store only the hash from day one (A path).
+  - Residual legacy rows that never log in again: harmless (empty password
+    column, no valid credential); documented + forced-reset option below.
+
+6.2 Constant-time verification through a maintained library.
+  - Keep PBKDF2-HMAC-SHA256 (hashlib, 160,000 iterations) as the canonical
+    scheme; verification already uses hmac.compare_digest. Record iterations
+    centrally; future strength upgrades require rehash-on-login.
+  - Optional (needs owner approval + requirements.txt change because it is a
+    new runtime dependency): adopt argon2-cffi for NEW hashes and accept
+    legacy PBKDF2 for verification until the next successful login migrates
+    the row. Default plan does NOT add a dependency in slice 1.
+
+6.3 Session creation, expiry, revocation, last-used metadata.
+  - create_session inserts into auth_sessions: token_hash, expires_at =
+    now + SKILLBRIDGE_SESSION_TTL_HOURS (default 24), last_used_at = now.
+  - get_session_user hashes the presented token and reads auth_sessions;
+    returns None (→ existing 401 "Session expired, please sign in again") when
+    the row is missing, revoked, or expired. Updates last_used_at at most once
+    per SKILLBRIDGE_SESSION_HEARTBEAT_MINUTES (default 5) per session to avoid
+    write amplification.
+  - logout deletes from BOTH auth_sessions (by hash) and sessions (legacy raw).
+  - New revoke_user_sessions(user_id): soft-revoke (revoked_at now) every
+    active session for a user in both tables. Called after password reset
+    confirm, and by any future password-change endpoint. Optional additive
+    endpoint POST /api/auth/password (authenticated, bounded fields) as the
+    explicit "change password" path, subject to owner approval.
+
+6.4 Store only a hash of newly issued bearer tokens (feasible, additive).
+  - New sessions → auth_sessions.token_hash only (raw token never persisted).
+  - The legacy sessions table still holds pre-existing raw tokens for the
+    window; get_session_user keeps a fallback so those sessions are not killed.
+  - A maintenance function/exercise logs how many legacy sessions remain;
+    after the compatibility window a later slice may retire the legacy table.
+
+6.5 Revoke sessions after password change/reset.
+  - reset_confirm: consume token → set_user_password → revoke_user_sessions.
+  - Optional password-change endpoint routes through the same revoker.
+
+6.6 Rate limiting without locking out everyone.
+  - In-process, TTL-bounded, thread-safe counter store (dict + lock), never
+    containing credentials/email beyond the count key itself.
+  - Buckets:
+      * failed logins per (email) focused window: lock that account ~2 min
+        after N fails (default 8); sliding; a successful login clears it.
+      * login attempts per source IP: generous burst cap (default 40 / 5 min)
+        returning the existing 401 shape, not a global block.
+      * password-reset requests per (email): default 3 / hour → 429.
+  - Counters auto-expire (TTL) so nobody is locked out permanently; no global
+    lockout key that could brick every user.
+  - Disabled/no-op under pytest (suite must stay deterministic); applied only
+    to unauthenticated auth endpoints (login, reset/request, signup), never to
+    already-authenticated traffic.
+
+7. COMPATIBILITY PERIOD AND FRONTEND
+------------------------------------
+  - Login/signup/me/logout response shapes unchanged; token format unchanged.
+  - Old sessions remain valid until their natural (legacy) lifetime — for
+    pre-existing rows we backfill an expiry of created_at + TTL during the
+    migration so unfettered sessions eventually age out.
+  - Frontend (AppContext/api) requires NO changes.
+  - Demo accounts (seed, password used in tests/fixtures) have no real
+    credentials and are covered by the same migration path.
+
+8. ROLLBACK STRATEGY
+--------------------
+  - Everything is additive. Rollback = revert main.py/models.py/auth.py edits
+    and remove migration 0002 markers; the legacy sessions table and plaintext
+    columns remain intact, so the pre-C code paths work unchanged.
+  - Sessions created under C live only in auth_sessions; after code rollback
+    those tokens are no longer recognized (users sign in again) — documented,
+    harmless, no data loss.
+  - users.password is only ever set to "" (empty), never modified otherwise;
+    password_hash/salt never destroyed. No DELETE/ALTER of existing data.
+
+9. TEST PLAN (C2)
+-----------------
+  New auth-migration test file (mixed slices follow the approved subset):
+  - signup stores hash, "password" column empty (no plaintext written);
+  - legacy row (hash empty, plaintext present) signs in AND is upgraded in one
+    login (hash present, plaintext cleared);
+  - correct password ok; wrong password 401 for both formats;
+  - legacy account with WRONG password: no upgrade, no plaintext read, 401;
+  - session expiry: expired auth_session → 401 "Session expired";
+  - logout revocation: deleted hash lookup fails; cross-user token rejected;
+  - password reset confirm revokes all sessions for that user;
+  - rate limit: N failures → short lockout; success clears; IP burst cap;
+    reset-path limit; limiter inert under pytest;
+  - token hashing: auth_sessions table contains ONLY token_hash (assert no
+    raw token equals stored value);
+  - fresh DB migration, existing DB migration, idempotent rerun, rollback of
+    0002 (Phase B suite pattern);
+  - legacy sessions table still valid during window.
+  Full backend suite rerun + existing login browser smoke (frontend unchanged).
+
+10. FAILURE MODES
+------------------
+  - argon2 dependency decision left open here; PBKDF2 path is fully
+    self-contained (stdlib) so slice 1 never depends on new installs.
+  - In-process rate limiter is per-process only; multi-process deployments
+    would need a shared store — noted, not a current deployment topology.
+  - Heartbeat writes bounded by TTL rule; still SQLite-local and cheap.
+  - If a stored hash is corrupt, verification returns False (existing
+    try/except), never a crash; account is not silently claimable.
+
+11. APPROVAL SLICES (owner picks slice(s) before C2)
+----------------------------------------------------
+  Slice 1 (recommended first, self-contained):
+    stop writing plaintext passwords; upgrade-on-login; auth_sessions table
+    (hash-only new tokens, expiry + last-used + soft revoke); logout from both
+    tables; revoke_on_reset; backfill legacy expiry; rate limiting; tests.
+  Slice 2 (deferred, separate approval):
+    argon2-cffi adoption for new hashes if approved; authenticated
+    password-change endpoint; forced-reset process for accounts that never
+    log in; retiring the legacy sessions table after the window.
+
+END OF AUTH_SESSION_MIGRATION_PLAN.txt

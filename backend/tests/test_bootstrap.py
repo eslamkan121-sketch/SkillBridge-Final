@@ -64,7 +64,7 @@ def test_jobs_unavailable_without_network(monkeypatch, client, auth_headers):
 
     monkeypatch.setattr(jobs_mod.httpx, "get", boom)
     # Make sure the module-level cache can't serve stale live data.
-    jobs_mod._cache.update({"at": 0.0, "key": "", "data": None})
+    jobs_mod.clear_job_cache()
 
     h = auth_headers("aisha@student.edu")
     r = client.get("/api/jobs/recent", headers=h)

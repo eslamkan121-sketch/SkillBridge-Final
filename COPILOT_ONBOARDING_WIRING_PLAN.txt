@@ -1,0 +1,174 @@
+COPILOT ONBOARDING QUIZ WIRING — PLAN (Phase "Copilot onboarding")
+
+Source: COPILOT_ONBOARDING_QUIZ_SPEC.md + "Wiring the Copilot Onboarding Quiz — Implementation Instructions" (owner's handoff).
+Status: PLAN — implement in this pass (owner directive: "continue with everything and update the todos").
+
+--------------------------------------------------------------------------
+1. WHAT THIS ADDS (summarized from the spec)
+--------------------------------------------------------------------------
+A student's FIRST authenticated session may show a short, skippable, non-blocking
+3-question flow that assigns one of the THREE existing copilots (Navigator /
+Strategist / Confidant). Completing or skipping is persisted so a returning
+student is never re-asked in the normal flow; a settings "Change your copilot"
+entry reuses the same three-option picker. Still exactly three outcomes — no
+fourth archetype, matching the three working voice agents.
+
+11. DEVIATIONS FROM THE SPEC (documented honestly)
+--------------------------------------------------------------------------
+d1. Onboarding state lives in a SEPARATE table `copilot_onboarding`
+    (student_id PK, state, source, quiz_answers_json, answered_at) instead of on
+    `copilot_config`. Reason: DELETE copilot removes the config row — storing
+    "already asked" on the same row would reset not_started and re-trigger the
+    modal after a user removes their copilot. The spec's "only ask once" rule
+    must survive deletion, so the flag is row-independent. The raw answers +
+    source live here too (spec allowed "or extend").
+d2. Endpoints are mounted under the existing student-scoped family
+    `GET/POST /api/students/{student_id}/copilot/onboarding-state|onboarding`
+    instead of the spec's unscoped `/api/copilot/...` paths. Reason: every
+    student-data endpoint in this repo is student-scoped and ownership-gated
+    (`_own_student`); unscoped routes would break that invariant. The SPA knows
+    `student.id` from /api/auth/me. The spec's `PUT /api/copilot/config`
+    (settings picker) already exists as `PUT /api/students/{student_id}/copilot`.
+d3. Client-side scoring for the INSTANT preview is a pure mirror of the server
+    `tally` in a shared `lib/copilotArchetypes.ts`; the server recomputes from
+    the submitted answers and stores ITS result (spec: "treat the server's
+    computation as the source of truth"). The result screen's "Choose this
+    instead" override is encoded honestly: the client substitutes the chosen
+    archetype into the answer set before POST, so the server's recompute yields
+    the user's explicit pick — no untrusted `choice` key is ever trusted for
+    correctness. (An optional `choice` field IS accepted but always recomputed
+    over, and a mismatched one is overridden — spec test requirement.)
+d4. No partial-answer persistence (spec §5: fine for v1). Abandoning mid-quiz
+    leaves state `not_started` and the flow re-shows next login.
+d5. UI strings stay inline English, consistent with the rest of this app (the
+    app has no general i18n system yet — only tutor-language strings exist in
+    lib/tutorI18n.ts). The spec's "Arabic/RTL from day one" is a cross-app
+    concern owned by Phase R; this component reuses the app's existing language/
+    RTL-ready primitives and is structured so the strings can move to a real
+    i18n layer later without rework.
+d6. The static `build-your-copilot.html` keeps its own copy of the archetype
+    copy (it renders options from the backend payload `GET /copilot` at runtime;
+    it is deliberately standalone per its extension-point note). The single
+    source of truth requirement applies to the React SPA: one shared
+    `lib/copilotArchetypes.ts` used by BOTH the onboarding quiz and the
+    settings picker.
+
+--------------------------------------------------------------------------
+2. BACKEND
+--------------------------------------------------------------------------
+m1. database.py — MIGRATION 0010_copilot_onboarding:
+    copilot_onboarding(
+        student_id INTEGER PRIMARY KEY REFERENCES students(id) ON DELETE CASCADE,
+        state TEXT NOT NULL DEFAULT 'not_started'
+            CHECK (state IN ('not_started','completed','skipped')),
+        source TEXT NOT NULL DEFAULT 'manual_change'
+            CHECK (source IN ('quiz','skip','manual_change')),
+        quiz_answers_json TEXT NOT NULL DEFAULT '[]',
+        answered_at TEXT
+    )
+    Additive; nothing backfilled; MIGRATIONS becomes [0001..0010].
+m2. copilot.py —
+    ONBOARDING_STATES / ONBOARDING_SOURCES / QUIZ_QUESTION_COUNT = 3 /
+    DEFAULT_ARCHETYPE = "navigator" /
+    quiz_archetype_keys() / validate_onboarding_answers(answers) /
+    score_archetype(answers)  (tally, highest wins, ties -> default) /
+    a local quiz-options helper used only by the onboarding payload.
+m3. models.py —
+    get_copilot_onboarding(student_id) -> dict|None (decoded answers)
+    set_copilot_onboarding(student_id, state, source, answers=None) -> dict
+    get_copilot_config gains additive "onboarding" state block? -> NO: expose
+    the state through the onboarding endpoints; GET /copilot stays unchanged
+    (additive only, avoid schema drift surprises). Set source=manual_change
+    from the PUT endpoint path via a tiny helper set_copilot_source(student_id).
+m4. main.py —
+    GET  /api/students/{sid}/copilot/onboarding-state
+         -> {"state","source","answered_at","configured","copilot","options"}
+         (state not_started when no row; configured = has copilot config)
+    POST /api/students/{sid}/copilot/onboarding
+         body {answers?: [3 valid keys], skipped?: bool, choice?: string}
+         400 when: nothing provided; skipped true AND answers both present;
+         answers present but not a list of exactly 3 valid keys; choice present
+         but invalid.
+         skipped True -> choice=DEFAULT_ARCHETYPE, state=skipped, source=skip.
+         else winner = score_archetype(answers) (choice, even if valid, is
+         ALWAYS recomputed over).
+         Persists config snapshot (set_copilot_config), pins tutor preference
+         to the voice agent (same as PUT), writes copilot_onboarding
+         (state completed|skipped, source quiz|skip, quiz_answers_json,
+         answered_at=now).
+         Returns {state, source, assigned, copilot, options}.
+    PUT /api/students/{sid}/copilot  -> additionally set source=manual_change
+         in copilot_onboarding (create row with state completed if absent, so a
+         settings picker build is never followed by the first-run modal).
+    DELETE /api/students/{sid}/copilot -> unchanged; onboarding row survives so
+         state stays completed/skipped (only ask once).
+m5. seed.py — wipe adds DELETE FROM copilot_onboarding.
+
+--------------------------------------------------------------------------
+3. FRONTEND
+--------------------------------------------------------------------------
+f1. lib/types.ts — CopilotOnboardingState, CopilotOption, CopilotConfigResponse,
+    CopilotOnboardingResponse types.
+f2. lib/api.ts — copilotOnboardingState(sid), submitCopilotOnboarding(sid, body),
+    copilotConfig(sid), setCopilot(sid, choice).
+f3. lib/copilotArchetypes.ts (NEW, single source of truth in the SPA):
+    ARCHETYPES {navigator|strategist|confidant -> {name,title,personality,desc}},
+    DEFAULT_ARCHETYPE, QUESTIONS (3 x text + 3 options with labels mapping to a
+    key), tallyAnswers(answers) (mirror of server), canonicalizeArchetype(),
+    forcedAnswers(answers, key) helper for the "choose this instead" override.
+f4. components/CopilotOnboarding.tsx (NEW) — modal port of copilot-onboarding.html:
+    welcome -> q0..q2 (one per screen, "Question 1 of 3" progress + aria-live) ->
+    result (name/personality/voice + Compare all three grid). Skip from welcome
+    and in-flow nav, and header "Exit" are ONE action: POST skipped=1, dismiss.
+    Finish ("Continue to SkillBridge") POSTs the (possibly overridden) answers,
+    keeps the pre-submission preview for the result screen, server response is
+    source of truth; a status banner surfaces honest errors; no LOCALSTORAGE and
+    no provider calls. Keyboard + aria-pressed + focus-visible preserved.
+    Prop-driven: auto-managed (show when onboarding_state==='not_started') OR
+    `forceOpen` (settings "Retake the quiz") — one component, two entry points.
+f5. components/CopilotSettingsModal.tsx (NEW): "Change your copilot" three-card
+    picker (same data from lib/copilotArchetypes.ts), current choice pre-selected,
+    PUT on confirm -> updates + closes; secondary "Retake the quiz instead".
+f6. App.tsx — user menu gains "Change your copilot" (Students only) that opens
+    CopilotSettingsModal; `<CopilotOnboarding />` mounted for Students (non-
+    blocking overlay; app renders normally). Eats clicks outside? No — it is a
+    genuine first-run overlay with a visible Skip/Exit on the first frame.
+f7. index.css — .cob-* + .csm-* block reusing existing design tokens (navy/
+    coral/teal, modal-backdrop pattern, prefers-reduced-motion already global).
+f8. frontend/scripts/check-copilot-onboarding-phaseP.mjs + backend
+    tests/test_runtime_copilot_onboarding_phaseP_frontend.py (repo runtime
+    source-contract pattern): onboarding modal + settings picker only read
+    archetype data from lib/copilotArchetypes.ts; hit ONLY api.copilot* helpers;
+    never fetch/build provider endpoints; skip and exit both call
+    submitCopilotOnboarding(sid,{skipped:true}); a11y attributes present
+    (aria-live/aria-pressed); forceOpen==true can show when state is completed;
+    CSS classes exist.
+
+--------------------------------------------------------------------------
+4. TESTS (backend, all offline)
+--------------------------------------------------------------------------
+backend/tests/test_copilot_onboarding_phaseP.py:
+  - migration 0010 fresh / upgrade-preserves-everything / rollback-safe
+  - scoring: score_archetype pure (all-one, mixed, tie->default, empty->default,
+    3-answer invariant, validate_onboarding_answers rejects wrong lengths/keys)
+  - GET state: not_started with no row; completed/skipped after writes
+  - POST onboarding: completes with answers (state completed, source quiz,
+    stores answers, config snapshot for winner, tutor preference pinned to the
+    voice agent); skipped:true (default archetype navigator, state skipped,
+    source skip); skipped with answers -> 400; malformed payloads -> 400;
+    invalid choice -> 400; MISMATCH "choice" overridden by recompute
+  - retake: POST after existing config replaces config + source quiz
+  - PUT copilot sets source manual_change (and never re-triggers modal state)
+  - DELETE copilot keeps onboarding state (only ask once survives removal)
+  - authz matrix: guest 401 / company+university 403 / cross-student 403
+  - migration-count assertions bumped in the 8 legacy files + phaseO file.
+  - zero provider calls anywhere.
+
+--------------------------------------------------------------------------
+5. VERIFICATION GATES
+--------------------------------------------------------------------------
+  triplet: new phaseP suite + migration files + tutor files + phaseO file green;
+  tsc --noEmit + vite build clean; runtime checker green; in-memory TestClient
+  smoke (aisha: state not_started -> POST quiz -> completed/assigned ->
+  preference tutor matches voice agent -> page still serves); docs updated.
+  NO live deploy in this workspace (restart-only; migration applies on boot).

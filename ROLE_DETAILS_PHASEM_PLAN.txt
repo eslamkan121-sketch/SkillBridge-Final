@@ -1,0 +1,178 @@
+ROLE DETAILS, COMPARISON & CAREER TRANSITIONS — PHASE M PLAN
+=============================================================
+Guide: /Users/aboodmr/Desktop/SKILLBRIDGE_BACKEND_ROLES_JOBS_UI_OPENCODE_GUIDE.txt (Phase M, guide lines 604-632)
+Repo root: /Users/aboodmr/Desktop/SkillBridge-Complete-Upgraded-Private-Handoff/SkillBridge-Final-main
+STATUS: COMPLETE — IMPLEMENTED, TESTED, BUILT, LIVE, BROWSER-VERIFIED (14-Sep-2026)
+
+SCOPE (additive delta only)
+---------------------------
+Phase M says: "Create a reusable role-details surface and improve role
+comparison. Role details should show only sourced data: title, aliases,
+description, source, and catalogue version; essential versus optional skills;
+student's verified/self-reported/missing evidence separately; exact explainable
+match; related roles and hierarchy where supported; available jobs with
+source/freshness state; relevant lessons and eligible practice scenarios; save
+role, set target, compare, and prepare actions. Role comparison must support two
+or three roles and compare shared/unique skills, evidence-based match, missing
+skills, current valid jobs, and available learning/scenario coverage. Career
+transitions may appear only when backed by maintained relationships. Provide a
+normal list/table alternative to any graph. Do not invent career probability,
+salary, time-to-role, or promotion guarantees. Test provenance, exact score
+consistency, missing data, deprecated roles, deep links, keyboard use,
+responsive layout, and unchanged current flows."
+
+The existing page ALREADY ships most of the details surface: the role-detail
+drawer (RoleDetailsDrawer, ~line 637) with match ring + reason, required-skills
+list with status (have/developing/missing via statusOfSkill), learning-gap
+buttons, honest practice-scenario note, "other sources" dedupe list, and the
+save/target/compare/Start-learning/Verify/Practice actions; the CompareModal
+(~line 821) side-by-side for up to 3 roles with match/difficulty/covered/gaps/
+scenarios; provenance chips; deep-link #explorer state; Phase L keyboard ring.
+So Phase M is implemented as honest, additive DELTAS on top of that architecture
+(never a second details surface, never a graph):
+
+M1. Related roles + hierarchy (BACKEND, additive read-only, NO migration)
+    - models.related_roles(role_id) -> dict:
+        parent        : full role dict of roles.parent_role_id (real FK) or None
+        children      : roles where parent_role_id == role_id   (ACTIVE only)
+        siblings      : roles sharing the same non-empty family   (ACTIVE only,
+                        self excluded)
+        supersedes    : roles where superseded_by_role_id == role_id (ACTIVE)
+        superseded_by : full role dict of roles.superseded_by_role_id or None
+      Every entry is a get_role()-shaped dict (incl. required_skills + family/
+      source_version/canonical_status/source) so the drawer can open it directly.
+      Only real maintained columns drive this (parent_role_id / family /
+      superseded_by_role_id) — no invented transitions. No relationship found =>
+      None / [] (never fabricated). Active filter = existing _ACTIVE_ROLE_CLAUSE
+      (mirrors Phase D feed/recommendation status gating). A deprecated role
+      itself still resolves as a drawer subject; a deprecated row never appears
+      among children/siblings/supersedes.
+    - role_provenance(role_id) response gains additive key "related":
+      related_roles(role_id). Existing keys byte-identical (additive only).
+    - NO new endpoint: GET /api/roles/{id}/provenance (existing, same ownership
+      model as the role) carries it. No schema change.
+
+M2. Frontend types + api
+    - types.ts: RelatedRoleSummary (RoleRecord-shaped), RoleRelated { parent,
+      children[], siblings[], supersedes[], superseded_by }, RoleProvenance
+      (role_id/title/source/role_key/canonical_status/source_version/external_id/
+      family/parent_role_id/aliases/isco_codes/skill_sources/mapping/related).
+    - api.ts: roleProvenance(roleId) -> GET /api/roles/{id}/provenance.
+
+M3. Role-details drawer federates ONLY sourced data (frontend)
+    - Meta additions (rendered only when the data is real, never invented):
+      * aliases line "Also known as: a · b" driven by provenance.aliases
+        (non-empty only; alias_type shown when != 'alternative').
+      * source-version chip `· v{source_version}` reuse of sourceVersionMeta
+        (present only for a real version).
+      * honest deprecated/superseded banner when role.canonical_status is not
+        active: uses the real superseded_by title from provenance.related.
+    - Essential vs optional skills: group required-skills rows by the real
+      role_skills.skill_kind column ('essential' / 'optional', imported by
+      Phase D/ESCO import). Roles without a kind keep the single "Required
+      skills" list. Per-row status (statusOfSkill) unchanged.
+    - Evidence separation: StudentBrowse builds verifiedByName /
+      selfReportedByName sets FROM student.verified_skills and
+      student.self_reported_skills only. Each required-skill row gains an
+      evidence badge: verified / self-reported / none — combined with the
+      existing have/developing/missing status (a verified 'have' is distinct
+      from a self-reported 'have'). The match block gains an exact explainable
+      sub-line "Verified-covered X · self-reported-covered Y · missing Z",
+      computed from the SAME statusOfSkill + evidence sets the cards rank from
+      (no new computation, no new request — exact-score consistency by
+      construction).
+    - Available jobs WITH source/freshness state: a new drawer section renders
+      the student's cached profile feed (api.recentJobs, the same profile-keyed
+      cache the Dashboard uses — fetch ONCE per SkillsRolesPage mount when a
+      student, latched; company/university views never fetch). Filtered to
+      roles relevant to this role by token-overlap on title/family/aliases.
+      Each row: title · company · provider chip · listing_status chip
+      (live/expired-honest) · listed freshness · location · match_pct (all real
+      feed fields). Honest states: no-CV nudge, feed unavailable ("The live
+      feed hasn't answered yet — open the Dashboard to prime it."), empty
+      ("No current listings overlap this role."). External link opens safely
+      (target=_blank rel=noopener noreferrer — never auto-opens).
+    - Related roles & career moves (M4) section (below), per-mount provenance
+      fetch keyed to the OPEN role (cheap DB read, no PID 44 refetch storms).
+    - Unchanged: match ring + reason, learning-gap Learn buttons (the existing
+      sourced lessons journey), practice-scenario note (existing honest gating),
+      save/target/compare/prepare actions, Esc/keyboard close, "other sources".
+
+M4. Career transitions — list/table ONLY, no graph
+    - New drawer section "Related roles & career moves" renders provenance.
+      related as a normal table: parent ("Parent career"), children
+      ("Specialisations"), siblings ("Family peers"), supersedes / superseded_by
+      ("Replaced by / Replaces") rows. Each entry a button that opens that
+      role's details in-place. Honest caption: "Shown only where a maintained
+      relationship exists between roles. Deprecated roles never appear among
+      the suggestions. No salaries, probabilities, or time-to-role are ever
+      invented." Empty state: honest "No maintained relationships exist for
+      this role yet." No graph library, no arrows, no d3 (guide: list/table
+      alternative).
+
+M5. Compare modal improvements (2-3 roles, unchanged cap)
+    - New rows:
+      * SHARED skills: intersection of required-skill names across all
+        compared roles -> "Core to all: N · a, b, …" (empty shows "None").
+      * UNIQUE skills per role: names present in that role but no other ->
+        "Unique to {role}: N · …" (empty shows "None").
+      * Evidence-based match: the "Covered skills" row gains the verified/self
+        split "X verified · Y self-reported (of Z)" computed from the same
+        verified/self sets; keeps the existing total.
+      * CURRENT VALID JOBS: "Live jobs" row shows the relevant-feed-job count
+        per role from the same once-per-mount feed (M3); honest "—" when
+        loading / no-CV / unavailable.
+    - Unchanged: match %, difficulty, gaps, scenarios, actions, tray cap 3.
+
+Out-of-slice (documented reasons)
+---------------------------------
+- No DB migration and no new endpoints: provenance (related) is read-only
+  computed; jobs reuse the existing student feed cache. Live DB stays
+  0001-0007.
+- No graph / diagram (guide wants a list/table alternative; a graph adds no
+  data here).
+- No invented career probability, salary, time-to-role, or promotion anywhere.
+- "Relevant lessons" remain the existing per-gap Learn deep links from the
+  drawer (the Phase 5 connected journey); no new lessons endpoint.
+- Eligible practice scenarios stay the existing scenarioNote gating for the
+  target role (already honest); no new scenarios endpoint.
+- The Phase J /role-match/breakdown endpoint (which recomputes the student's
+  recommendations, ~20 s on the live DB) is NOT pulled into the drawer; the
+  drawer's exact explainable match stays the client-side displayMatch/statusOfSkill
+  the cards already rank from (exact-score consistency, no new compute).
+- Company/University views never fetch the jobs feed; for them the drawer's
+  jobs section is simply not rendered (no invented "no jobs" claim).
+- The compare tray cap of 3 is already enforced (CompareTray shows /3).
+
+IMPLEMENTATION ORDER
+--------------------
+1. Backend: models.related_roles() + additive "related" in role_provenance().
+2. Tests: tests/test_role_details_phaseM.py (parent/children/siblings/
+   supersede wiring, active-only + self-excluded, deprecated never suggested,
+   deprecated role still resolvable, no-relationship -> None/[], NULL
+   family/parent missing data, provenance additive-key regression + ownership
+   spot re-check, exact-score consistency: /api/roles scores untouched by the
+   additive key).
+3. Frontend: types.ts (RoleProvenance/RoleRelated), api.ts (roleProvenance),
+   SkillsRolesPage.tsx (M3-M5: evidence sets, skill-kind grouping, related
+   section + per-open provenance fetch, once-per-mount jobs fetch latch,
+   compare rows), index.css (.rd-ev, .rd-egenres, .rd-related, .rd-jobs, .rd-cmp shared/unique rows).
+4. Runtime guard: frontend/scripts/check-role-details-phaseM.mjs +
+   backend/tests/test_runtime_role_details_phaseM_frontend.py (patterns:
+   related only via api.roleProvenance; jobs only via api.recentJobs; evidence
+   split only from verified_skills/self_reported_skills; essential/optional via
+   skill_kind; no salary/probability/timing literals in the new sections; no
+   graph libs; CompareModal still max 3; new sections never call
+   updateStudent/createRole/updateRole; no localStorage writes, no fetch(, no
+   re-rounded Math.round matches).
+5. Build: tsc --noEmit + vite build; run all 19 prior checkers + the M checker.
+6. Full backend suite (must stay 1080 passed / 5 skipped).
+7. Live: restart uvicorn (backend/), curl smoke (provenance related for a
+   family-bearing catalog role + ownership matrix 401/403/403; config/demo-mode
+   unchanged).
+8. Browser smoke: sbverify/phaseM-roledetails-verify.js at 1440 + 390 (omar):
+   drawer essential/optional + evidence badges + related table (opens another
+   role), jobs row honest, compare shared/unique/covered-split/jobs rows,
+   keyboard/Escape preserved, deep-link preserved, console clean, zero overflow.
+9. Docs: AGENTS.md Phase M section + README "Role Details & Comparison
+   (Phase M)" + this plan's STATUS -> COMPLETE.

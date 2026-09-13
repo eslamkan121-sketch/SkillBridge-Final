@@ -1,0 +1,111 @@
+PROVIDER_HEALTH_DIAGNOSTICS_PLAN.txt — Phase I (guide lines 470-505)
+======================================================================
+Replace global/misleading job-provider status with request-safe, honest
+diagnostics. NO provider removed, all routes + env vars preserved, DB untouched
+(in-memory only). Deploy = restart only.
+
+GOAL I1 — Canonical health vocabulary (exactly the prompt's statuses)
+--------------------------------------------------------------------
+unconfigured | healthy | empty_success | cached | stale_fallback |
+rate_limited | unauthorized | network_unreachable | timeout |
+malformed_response | disabled_by_feature_flag | unknown
+
+Providers carry BOTH fields:
+- `status` (LEGACY: ok|failed|skipped) — kept byte-for-byte for the
+  compatibility period (frontend DashboardPage reads `status === 'ok'` and
+  `status === 'failed'`; nothing may change).
+- `health` (NEW additive) — the honest vocabulary above, DERIVED from the same
+  report entry so the engine and fetch functions are untouched:
+  * status ok + count>0            -> healthy
+  * status ok + count==0           -> empty_success  (valid empty != failure)
+  * skipped no_credentials/host_not_configured -> unconfigured (config presence
+    is NOT health; a key being present is only visible as empty_success/healthy
+    once a real build succeeded)
+  * skipped unsupported_country    -> disabled_by_feature_flag (region gate)
+  * skipped cooldown               -> cooldown reason mapped (rate_limited /
+    timeout / unauthorized)
+  * failed rate_limited            -> rate_limited
+  * failed forbidden/unauthorized  -> unauthorized
+  * failed timeout                 -> timeout
+  * failed network_unreachable/network_error/connection_error -> cooldown
+    reason when set (timeout -> timeout) else network_unreachable
+  * failed request_failed          -> error-text classification (429 ->
+    rate_limited; 401/403 -> unauthorized; "timed out"/TimeoutException ->
+    timeout; JSONDecode/Expecting-* -> malformed_response; else unknown)
+  * failed malformed_response      -> malformed_response
+  * JOBS_DISABLED_PROVIDERS CSV    -> disabled_by_feature_flag (NEW additive
+    env, default empty; a provider can be feature-gated without removing it)
+  * everything else                -> unknown
+
+GOAL I2 — Request-safe scoping + no races
+-----------------------------------------
+Per-build report (Phase G thread-local) carries an optional `request_id`;
+`recent_jobs(..., request_id="")` -> `_build_result(..., request_id)` ->
+`report["request_id"]`. Global `_provider_status` is updated ONLY from a
+finished build, under the existing lock, and the stray `request_id` key is
+never committed into the global snapshot. Logs: `_fetch_all` logs one
+category-level line per provider outcome WITH the request id
+(`[rid] provider <name> -> <health> (<count> jobs, <reason>)`);
+`_build_result` logs a build-complete line with rid + feed source + jobs count.
+Keywords/CV/keys are NEVER logged (search terms omitted by design).
+
+GOAL I3 — Health caching + public payload safety
+------------------------------------------------
+- `provider_status()` derives health from the committed global report; it never
+  probes providers and never triggers a build. A tiny TTL snapshot
+  (`JOBS_HEALTH_TTL_SECONDS`, default 10) makes repeated health polls cheap and
+  stable; no quota is ever spent by a health check.
+- `provider_status()` ADDITIVE fields: `providers_health` (map source -> health
+  code) + `last_build_at` (ISO UTC of the last finished build). ALL existing
+  keys retained (`providers_total/configured/available/last_success_provider/
+  last_error_by_provider/cache`).
+- Feed `data["providers"]` entries gain `health` next to the legacy
+  `status/count/reason/error` (compatibility preserved; frontend unchanged).
+- `_redact` HARDENED to also mask `http(s)://...` URLs -> `<url>` so no host/URL
+  ever leaks through `.error`; keys/emails already scrubbed. Truncation stays.
+- Health-scoped `providers_available` and `providers_configured` exclude
+  disabled-by-feature providers.
+
+GOAL I4 — Tests (new backend/tests/test_provider_health_diagnostics_phaseI.py)
+-------------------------------------------------------------------------------
+- Mapping unit tests for every health code incl. empty_success vs healthy,
+  unconfigured, unsupported_country, unknown fallback.
+- Empty-success: ok+0 is health `empty_success`, never counts as failure, feed
+  still `live` when a sibling provider returns listings.
+- Rate-limit: 429 -> `rate_limited` + cooldown set; the cooldown-skip entry on
+  the next build still reports `rate_limited`.
+- Timeout: httpx.TimeoutException -> cooldown(timeout) + health `timeout`.
+- Unauthorized: 403/forbidden -> `unauthorized`.
+- Disabled-by-feature-flag: JOBS_DISABLED_PROVIDERS marks a provider
+  `disabled_by_feature_flag`, excluded from configured/available + skipped
+  without submitting.
+- Concurrency: parallel builds with distinct reports never cross; global
+  snapshot reflects only a completed build; no request_id leaks into the global
+  snapshot or the public payload.
+- Redaction: error containing a real key value + a full https URL -> public
+  payload has neither; logs carry request id + category only.
+- Compatibility: recent_jobs + provider_status() keep all legacy keys; provider
+  entries keep status/count/reason/error and gain health.
+- cached/stale_fallback vocabulary tie-in at feed level (already implemented in
+  Phase G) asserted in this suite too.
+
+IMPLEMENTATION STATUS
+---------------------
+Plan: written ✔ | Code: IMPLEMENTED ✔ | Tests: 28 passed ✔ | Full backend suite: 1019 passed / 5 skipped ✔ | Deploy: approved (restart-only, live smoke verified) ✔
+
+Completed (per approved design):
+- Phase I health vocabulary constants + `_health_of` mapper + `_disabled_providers()` feature-flag gate + `_PROVIDER_COOLDOWN`-aware cooldown/timeout conflation + malformed-response error-text classification (guide lines 470-505).
+- `provider_status()`: `providers_health` + `last_build_at` + fingerprint-keyed TTL snapshot (`JOBS_HEALTH_TTL_SECONDS` default 10s); `providers_configured`/`providers_available` exclude feature-flag-disabled.
+- `_redact` URL → `<url>` / email → `<email>` hardening.
+- `request_id` threaded through `recent_jobs` → `_build_result` → `_fetch_all`; `[rid]`-prefixed provider outcome logs; `request_id` excluded from global `_provider_status` update; `_build_result` providers entries gain `health`; commit sets `last_build_at` + invalidates health snapshot.
+- `JOBS_DISABLED_PROVIDERS` env support; `disabled_by_feature_flag` status.
+- Tests: `backend/tests/test_provider_health_diagnostics_phaseI.py` (28).
+- Live smoke verified (source live/cached, all 12 providers with `health`, demo-mode `providers_health`/`last_build_at`/`cache`, request-id in logs).
+- `AGENTS.md` Phase I section appended.
+
+VERIFICATION GATE
+-----------------
+✔ Focused + full backend suite: **1019 passed / 5 skipped**.
+✔ Deploy gate approved (restart-only). Server PID 47362, `/tmp/sb-backend.log`, `http://localhost:8000`. Live smoke: `GET /api/jobs/recent` (source live/cached, every provider carries `health`), `GET /api/config/demo-mode` (`providers_health`, `last_build_at`, `cache`).
+
+OUT OF SCOPE (documented): no frontend change (legacy status fields preserved; `health` additive/ignored); genai.provider_status untouched; no DB migration; no new provider; no re-writing of the 12 fetch functions' outcome recording (mapping derived at consolidation boundary).

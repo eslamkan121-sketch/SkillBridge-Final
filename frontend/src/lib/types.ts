@@ -55,6 +55,116 @@ export interface RoleRecord {
   is_reference?: number
   source?: string
   external_id?: string | null
+  canonical_role_id?: number | null
+  canonical_mapping_updated_at?: string | null
+  family?: string | null
+  source_version?: string | null
+  canonical_status?: string
+  role_key?: string | null
+}
+
+export interface RecentRole {
+  id: number
+  title: string
+  company_name?: string | null
+  family?: string | null
+  source?: string
+  source_version?: string | null
+  is_reference?: number
+  external_id?: string | null
+  viewed_at: string
+}
+
+export interface RecentRolesResponse {
+  roles: RecentRole[]
+}
+
+export interface RoleAlias {
+  id: number
+  alias: string
+  alias_type: string
+  language: string
+  created_at: string
+}
+
+export interface RoleIscoCode {
+  id: number
+  isco_code: string
+  source: string
+  source_ref?: string | null
+  created_at: string
+}
+
+export interface RoleSkillSource {
+  skill_id: number
+  source?: string | null
+  source_uri?: string | null
+  attested_at?: string | null
+}
+
+export interface RoleRelated {
+  parent: RoleRecord | null
+  children: RoleRecord[]
+  siblings: RoleRecord[]
+  supersedes: RoleRecord[]
+  superseded_by: RoleRecord | null
+}
+
+export interface RoleProvenance {
+  role_id: number
+  title: string
+  source: string
+  role_key?: string | null
+  canonical_status: string
+  source_version?: string | null
+  external_id?: string | null
+  is_local_authoring: boolean
+  family?: string | null
+  parent_role_id?: number | null
+  fetched_at?: string | null
+  imported_at?: string | null
+  updated_at?: string | null
+  aliases: RoleAlias[]
+  isco_codes: RoleIscoCode[]
+  skill_sources: Record<number, RoleSkillSource>
+  mapping: RoleMappingTarget | null
+  related: RoleRelated
+}
+
+export interface RoleMappingTarget {
+  canonical_role_id: number
+  mapped_title: string
+  source: string
+  external_id?: string | null
+  mapped_at?: string | null
+}
+
+export interface RoleMappingMatch {
+  role_id: number
+  title: string
+  source: string
+  confidence: number
+  confidence_label: 'High' | 'Medium' | 'Low'
+  explanation: string
+}
+
+export interface RoleMappingSuggestion {
+  role_id: number
+  mapped: RoleMappingTarget | null
+  matches: RoleMappingMatch[]
+  ambiguous: boolean
+}
+
+export interface RoleMappingEvent {
+  event_id: number
+  action: 'mapped' | 'unmapped' | 'changed'
+  from_canonical_role_id?: number | null
+  from_title?: string | null
+  to_canonical_role_id?: number | null
+  to_title?: string | null
+  actor_user_id: number
+  actor_role: string
+  created_at: string
 }
 
 export interface RolesResponse {
@@ -63,6 +173,7 @@ export interface RolesResponse {
   is_company: boolean
   company_id: number | null
   location?: string
+  role_data_version?: string | null
 }
 
 export interface SelfReportedSkill {
@@ -413,6 +524,18 @@ export interface RecentJob {
   is_expired?: boolean
   expires_at?: string
   listed_days_ago?: number
+  fingerprint?: string
+  work_type?: string
+  listing_status?: string
+  provider?: string
+  provider_job_id?: string
+  apply_url?: string
+  description_excerpt?: string
+  published_date?: string
+  fetched_at?: string
+  link_state?: string
+  link_reason?: string
+  provenance?: Record<string, { value?: unknown; basis?: string }>
 }
 
 export type ProviderStatus = 'ok' | 'failed' | 'skipped'
@@ -423,6 +546,7 @@ export interface ProviderReport {
   count?: number
   reason?: string
   error?: string
+  health?: string
 }
 
 export interface RecentJobsResponse {
@@ -430,6 +554,79 @@ export interface RecentJobsResponse {
   jobs: RecentJob[]
   groups?: { local_count: number; broader_count: number; other_count: number }
   providers?: ProviderReport[]
+  status?: 'fresh' | 'cached' | 'stale_fallback' | 'unavailable'
+  cache?: { hits?: number; misses?: number; avg_fetch_ms?: number }
+}
+
+export interface JobLinkReport {
+  id: number
+  fingerprint: string
+  url: string
+  title: string
+  provider: string
+  reported_at: string
+}
+
+export interface JobsHealthPayload {
+  jobs?: {
+    providers_total?: number
+    providers_available?: string[]
+    providers_health?: Record<string, string>
+    last_error_by_provider?: Record<string, string>
+    last_build_at?: string | null
+    cache?: { hits?: number; misses?: number; avg_fetch_ms?: number }
+  }
+}
+
+export type JobStage = 'saved' | 'preparing' | 'applied' | 'screening' | 'interview' | 'offer' | 'hired' | 'rejected' | 'withdrawn' | 'archived_or_expired'
+
+export const JOB_STAGES: JobStage[] = ['saved', 'preparing', 'applied', 'screening', 'interview', 'offer', 'hired', 'rejected', 'withdrawn', 'archived_or_expired']
+
+export interface TrackerStageHistory {
+  id: number
+  stage: JobStage
+  changed_from: JobStage | null
+  note: string
+  created_at: string
+}
+
+export interface TrackedJob {
+  id: number
+  student_id: number
+  fingerprint: string
+  title: string
+  company: string
+  url: string
+  apply_url: string
+  location: string
+  country: string
+  provider?: string
+  source?: string
+  match_pct?: number
+  work_type?: string
+  seniority?: string
+  listing_status?: string
+  link_state?: string
+  is_expired: boolean
+  stage: JobStage
+  note: string
+  interview_date?: string
+  application_deadline?: string
+  created_at: string
+  updated_at: string
+  history: TrackerStageHistory[]
+}
+
+export interface TrackerResponse {
+  items: TrackedJob[]
+  counts: Record<JobStage, number>
+}
+
+export interface SaveJobRequest {
+  fingerprint: string
+  location?: string
+  country?: string
+  market?: string
 }
 
 export interface EscoOccupation {
@@ -479,6 +676,156 @@ export interface RoleRecommendationsResponse {
   esco_status: 'ok' | 'unavailable'
   source_counts: Partial<Record<RecommendationSource, number>>
 }
+
+// ---- Phase J: explainable match breakdowns (backend match_explain.py) ----
+
+export interface MatchAdjustmentLine {
+  label: string
+  label_long?: string
+  points: number
+}
+
+export interface TargetRoleRequirement {
+  skill_id: number
+  skill_name: string
+  category?: string | null
+  required_level: string | null
+  student_level: string | null
+  status: string
+  evidence: 'verified' | 'self_reported' | 'none'
+  contribution_points: number
+  max_points: number
+}
+
+export interface TargetRoleMatchBreakdown {
+  formula: string
+  version: string
+  as_of: string
+  role_data_version: string
+  role_title: string | null
+  company?: string | null
+  requirements: TargetRoleRequirement[]
+  total_points: number
+  max_points: number
+  raw_percent: number
+  displayed_percent: number
+  adjustment_lines: MatchAdjustmentLine[]
+  evidence_precedence: string
+  missing_data: string[]
+  next_action: string
+}
+
+export interface RoleMatchRequirement {
+  name: string
+  required_level: string | null
+  student_level: string | null
+  evidence: 'verified' | 'self_reported' | 'none'
+  essential: boolean
+  weight: number
+  level_factor: number | null
+  credit: number
+  is_discovery: boolean
+  verified: boolean
+}
+
+export interface RoleMatchBreakdown {
+  formula: string
+  version: string
+  as_of: string
+  role_data_version: string
+  role_id: number | null
+  external_id?: string | null
+  title: string | null
+  source: string
+  company_name?: string | null
+  requirements: RoleMatchRequirement[]
+  total_weight: number
+  earned_weight: number
+  raw_percent: number
+  displayed_percent: number
+  adjustment_lines: MatchAdjustmentLine[]
+  matched_skills: MatchedSkillDetail[]
+  missing_key_skills: string[]
+  verified_matches: string[]
+  evidence_precedence: string
+  missing_data: string[]
+  next_action: string
+}
+
+export interface JobMatchRelevance {
+  final: number
+  base_points: number
+  family_bonus: number
+  family_cap_70: number | null
+  family_top_bump: number | null
+  title_fallback_boost: number | null
+  minor_bonus: number
+  verified_bonus: number
+  fresh_bonus: number
+  title_family_hit: boolean
+}
+
+export interface JobMatchExperience {
+  points: number
+  label: string
+  job_seniority: number
+  student_seniority: number
+}
+
+export interface JobMatchLocation {
+  tier: 'city' | 'country' | 'country_remote' | 'global_remote' | 'unknown' | 'different'
+  points: number
+  label: string
+}
+
+export interface JobMatchMatches {
+  matched: string[]
+  title_hits: string[]
+  minor_hits: string[]
+  verified_hits: string[]
+}
+
+export interface JobMatchConstraints {
+  location: { tier: string; label: string; supported: boolean }
+  work_type: { value: string; supported: boolean }
+  seniority: { job: number; student: number; supported: boolean }
+}
+
+export interface JobMatchBreakdown {
+  formula: string
+  version: string
+  as_of: string
+  role_data_version: string
+  role_title: string
+  job: {
+    title?: string
+    company?: string
+    location_label?: string | null
+    work_type?: string | null
+    seniority?: string | null
+    listed_days_ago?: number | null
+    listing_status?: string | null
+    apply_url?: string | null
+  }
+  components: {
+    relevance: JobMatchRelevance
+    experience: JobMatchExperience
+    location: JobMatchLocation
+  }
+  lines: MatchAdjustmentLine[]
+  displayed_percent: number
+  matches: JobMatchMatches
+  verified_skill_hits: string[]
+  other_matched_keywords: string[]
+  constraints: JobMatchConstraints
+  evidence_note: string
+  next_action: string
+}
+
+export type MatchBreakdownPayload =
+  | TargetRoleMatchBreakdown
+  | RoleMatchBreakdown
+  | JobMatchBreakdown
 
 export interface CareerRoadmapSkill {
   name: string
@@ -760,6 +1107,65 @@ export interface TutorPreferences {
   language: TutorLanguage
 }
 
+// ------------------------------------------------------------------ copilot onboarding & config
+
+export type CopilotArchetypeKey = 'nova' | 'axel' | 'sage' | 'vex'
+export type CopilotOnboardingState = 'not_started' | 'completed' | 'skipped'
+export type CopilotOnboardingSource = 'quiz' | 'skip' | 'manual_change'
+
+export interface CopilotOption {
+  key: CopilotArchetypeKey
+  name: string
+  title: string
+  voice_agent_id: string
+  capabilities: Record<string, boolean>
+}
+
+export interface CopilotConfigRecord {
+  choice: CopilotArchetypeKey
+  voice_agent_id: string
+  name: string
+  title: string
+  role: string
+  specialty: string
+  origin: string
+  traits: string[]
+  behavior: string
+  style: string
+  capabilities: Record<string, boolean>
+  updated_at?: string
+}
+
+export interface CopilotOnboardingStateResponse {
+  state: CopilotOnboardingState
+  source: CopilotOnboardingSource
+  answered_at: string | null
+  configured: boolean
+  copilot: CopilotConfigRecord | null
+  options: CopilotOption[]
+}
+
+export interface CopilotOnboardingSubmit {
+  answers?: string[]
+  skipped?: boolean
+  choice?: string
+}
+
+export interface CopilotOnboardingResponse {
+  state: CopilotOnboardingState
+  source: CopilotOnboardingSource
+  assigned: string
+  answered_at: string | null
+  copilot: CopilotConfigRecord
+  options: CopilotOption[]
+}
+
+export interface CopilotConfigResponse {
+  configured: boolean
+  copilot: CopilotConfigRecord | null
+  options: CopilotOption[]
+}
+
 // ------------------------------------------------------------------ practice scenarios
 
 export type ScenarioDifficulty = 'beginner' | 'intermediate' | 'advanced'
@@ -779,6 +1185,10 @@ export interface ScenarioCard {
   category: string
   category_label: string
   category_icon: string
+  family: string | null
+  family_label: string | null
+  family_icon: string | null
+  version: number
   skills: string[]
   steps_count: number
   status: ScenarioStatus
@@ -851,6 +1261,34 @@ export interface ScenarioProgress {
   phases: ScenarioPhase[]
 }
 
+export interface ScenarioHintPolicy {
+  penalty: number
+  cap: number
+  used: number
+  deduction: number
+}
+
+export interface ScenarioLastDecision {
+  label: string
+  icon: string | null
+  verdict: 'good' | 'neutral' | 'bad'
+  good: boolean
+  points: number
+  feedback: string
+  consequence: string
+  step_title: string
+}
+
+export interface ScenarioFollowUp {
+  component_key: string | null
+  component_label: string | null
+  weakness_pct: number | null
+  skill: string | null
+  skill_id: number | null
+  action: 'lesson' | 'practice' | 'review'
+  message: string
+}
+
 export interface ScenarioStepView {
   id: string
   index: number
@@ -874,6 +1312,10 @@ export interface ScenarioPlayer {
   status: 'in_progress'
   step: ScenarioStepView
   progress: ScenarioProgress
+  target_role: string | null
+  role_title: string
+  last_decision: ScenarioLastDecision | null
+  hint_policy: ScenarioHintPolicy
   outcome: string | null
 }
 
@@ -883,6 +1325,7 @@ export interface ScenarioHint {
   source: 'curated'
   hints_used: number
   hints_capped: boolean
+  hint_policy: ScenarioHintPolicy
 }
 
 export interface ScenarioOutcome {
@@ -940,9 +1383,37 @@ export interface ScenarioResult {
   strengths: string[]
   improvements: string[]
   hints_used: number
+  hint_policy: ScenarioHintPolicy
+  follow_up: ScenarioFollowUp
   evidence_inspected_pct: number | null
+  target_role: string | null
+  role_title: string
   certified: false
   note: string
+}
+
+export interface ScenarioHistoryEntry {
+  attempt_id: number
+  scenario_id: string
+  title: string
+  role_title: string
+  family: string | null
+  family_label: string | null
+  family_icon: string | null
+  difficulty_label: string
+  difficulty_icon: string
+  status: 'in_progress' | 'completed'
+  score: number | null
+  scenario_version: number
+  hints_used: number
+  started_at: string | null
+  completed_at: string | null
+  outcome_title: string | null
+  outcome_tone: string | null
+}
+
+export interface ScenarioHistory {
+  attempts: ScenarioHistoryEntry[]
 }
 
 export interface SavedRolesResponse {

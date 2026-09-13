@@ -3,11 +3,58 @@
 Pure functions over sqlite3 Row dictionaries. Kept free of framework imports so
 they can be unit tested in isolation.
 """
-from .database import get_cursor
+from .database import get_cursor, MAX_ROLE_VIEW_EVENTS
+from . import role_intent
+import contextlib
+import datetime as dt
 import json
+import re
 
 LEVEL_ORDER = {"Beginner": 1, "Intermediate": 2, "Advanced": 3}
 VALID_LEVELS = set(LEVEL_ORDER)
+
+# Status values the canonical role model understands. Existing rows default to
+# 'active' (honest: nothing previously marked them otherwise).
+VALID_ROLE_STATUS = ("active", "deprecated", "superseded")
+CATALOG_COMPANY_NAME = "SkillBridge Talent Catalog"
+
+_SLUG_KEEP = re.compile(r"[^a-z0-9]+")
+
+
+def _now():
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _canonical_title(title):
+    """Normalized search form of a title (never replaces the display title)."""
+    parts = role_intent.normalize_title(title) or []
+    return " ".join(parts).strip() or (title or "").strip().lower()
+
+
+def _canonical_family(title):
+    """Family label from the same classifier the rest of the app uses, or ''."""
+    return role_intent.family_of(title) or ""
+
+
+def _slugify(text):
+    parts = [p for p in _SLUG_KEEP.split((text or "").lower()) if p]
+    return "-".join(parts) if parts else "role"
+
+
+def _esc_like(text):
+    """Escape a LIKE pattern so user input '%'/'_'/'\' is treated literally
+    (matched against the normalized search form only)."""
+    return str(text).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _role_key_for(source, title, external_id=None):
+    """Stable, human-readable canonical key for a role (identity hint, not an
+    enforced unique constraint - legacy duplicates may share a title)."""
+    if source == "esco" and external_id:
+        seg = str(external_id).rstrip("/").split("/")[-1]
+        slug = _slugify(seg) or _slugify(title)
+        return f"esco:{slug}"
+    return f"{source or 'company'}:{_slugify(title)}"
 
 
 def _row(r):
@@ -122,18 +169,33 @@ def delete_company(company_id):
 
 # ---------------------------------------------------------------- roles
 
-def list_roles(company_id=None):
+_ACTIVE_ROLE_CLAUSE = "(canonical_status IS NULL OR canonical_status = 'active')"
+
+
+def list_roles(company_id=None, search=None):
+    """Company-created openings, optionally filtered by a free-text title
+    search (matched against ``normalized_title``, never against the display
+    title)."""
     with get_cursor() as c:
         q = """SELECT r.*, c.name AS company_name, c.location AS company_location
                FROM roles r LEFT JOIN companies c ON c.id=r.company_id"""
+        conds = []
+        params = []
         if company_id is not None:
-            q += " WHERE r.company_id=?"
-        if company_id is None:
+            conds.append("r.company_id=?")
+            params.append(company_id)
+        else:
             # Company-created openings only: imported ESCO occupations are not
             # company openings (source='esco') and must never leak into rosters.
-            q += " WHERE r.is_reference=0 AND (r.source IS NULL OR r.source != 'esco')"
+            conds.append("r.is_reference=0 AND (r.source IS NULL OR r.source != 'esco')")
+        search = (search or "").strip()
+        if search:
+            conds.append("r.normalized_title LIKE ? ESCAPE '\\'")
+            params.append("%" + _esc_like(_canonical_title(search)) + "%")
+        if conds:
+            q += " WHERE " + " AND ".join(conds)
         q += " ORDER BY r.title"
-        rows = c.execute(q, (company_id,) if company_id is not None else ()).fetchall()
+        rows = c.execute(q, tuple(params)).fetchall()
         out = []
         for r in rows:
             rd = _row(r)
@@ -142,11 +204,18 @@ def list_roles(company_id=None):
         return out
 
 
-def list_catalog_roles():
+def list_catalog_roles(search=None):
     """Reference roles seeded as the talent catalog (read-only baseline)."""
     with get_cursor() as c:
-        rows = c.execute("SELECT r.*, c.name AS company_name FROM roles r "
-                         "LEFT JOIN companies c ON c.id=r.company_id WHERE r.is_reference=1 ORDER BY r.title").fetchall()
+        q = ("SELECT r.*, c.name AS company_name FROM roles r "
+             "LEFT JOIN companies c ON c.id=r.company_id WHERE r.is_reference=1")
+        params = []
+        search = (search or "").strip()
+        if search:
+            q += " AND r.normalized_title LIKE ? ESCAPE '\\'"
+            params.append("%" + _esc_like(_canonical_title(search)) + "%")
+        q += " ORDER BY r.title"
+        rows = c.execute(q, tuple(params)).fetchall()
         out = []
         for r in rows:
             rd = _row(r)
@@ -159,7 +228,8 @@ def list_feed_roles(location=None, country=None, limit=8):
     """Live openings (company-posted, non-reference roles) ranked by how close
     they are to the requesting user's location: same location first, roles with
     no location (remote/global) next, the rest after. Supplies the 'available
-    roles' live feed on the student dashboard."""
+    roles' live feed on the student dashboard. Deprecated/superseded roles are
+    excluded but stay resolvable by id for existing links."""
     location = (location or "").strip()
     country = (country or "").strip()
     with get_cursor() as c:
@@ -167,6 +237,7 @@ def list_feed_roles(location=None, country=None, limit=8):
                                    c.name AS company_name, c.location AS company_location
                             FROM roles r LEFT JOIN companies c ON c.id=r.company_id
                             WHERE r.is_reference=0 AND (r.source IS NULL OR r.source != 'esco')
+                              AND """ + _ACTIVE_ROLE_CLAUSE + """
                             ORDER BY r.title""").fetchall()
         out = []
         for r in rows:
@@ -237,29 +308,386 @@ def remove_saved_role(student_id, role_id):
         return True
 
 
-def create_role(company_id, title, required_skills, description=None, is_reference=0, source="company"):
-    """required_skills: list of {name, category, level}."""
+# ------------------------------------------------------------------ job tracker (Phase K)
+# Private, per-student application tracker. Stage vocabulary is EXACTLY the ten
+# guide stages; transitions are validated against an allow-list and every stage
+# change is appended to tracker_stage_history (an audit record, never rewritten).
+
+JOB_TRACKER_STAGES = (
+    "saved", "preparing", "applied", "screening", "interview", "offer", "hired",
+    "rejected", "withdrawn", "archived_or_expired",
+)
+
+JOB_TRACKER_TRANSITIONS = {
+    "saved": {"preparing", "applied", "archived_or_expired"},
+    "preparing": {"applied", "withdrawn", "archived_or_expired"},
+    "applied": {"screening", "interview", "rejected", "withdrawn", "archived_or_expired"},
+    "screening": {"interview", "rejected", "archived_or_expired"},
+    "interview": {"offer", "rejected", "withdrawn", "archived_or_expired"},
+    "offer": {"hired", "rejected", "withdrawn", "archived_or_expired"},
+    "hired": {"archived_or_expired"},
+    "rejected": {"archived_or_expired"},
+    "withdrawn": {"saved", "archived_or_expired"},
+    # archived/expired rows stay stored forever; a student may reactivate one.
+    "archived_or_expired": {"saved", "preparing", "applied"},
+}
+
+
+class TrackerError(Exception):
+    """Tracker validation error; ``code`` becomes the HTTP status.
+
+    400 = unknown stage / bad payload, 409 = know legal stage but not reachable
+    from the row's current stage (delete or transition refusal)."""
+
+    def __init__(self, message, code=400):
+        super().__init__(message)
+        self.message = message
+        self.code = code
+
+
+def _validate_iso_date(value, field):
+    if value is None or str(value).strip() == "":
+        return None
+    s = str(value).strip()
+    if len(s) != 10 or not re.match(r"^\d{4}-\d{2}-\d{2}$", s):
+        raise TrackerError(f"{field} must be an ISO date (YYYY-MM-DD)")
+    return s
+
+
+def _tracker_history_rows(tracker_id, conn=None):
+    """Append-only stage-history rows for one tracker entry (oldest first)."""
+    rows = conn.execute(
+        "SELECT id, stage, changed_from, note, created_at FROM tracker_stage_history "
+        "WHERE tracker_id=? ORDER BY id", (tracker_id,)).fetchall()
+    return [{"id": r["id"], "stage": r["stage"], "changed_from": r["changed_from"],
+             "note": r["note"], "created_at": r["created_at"]} for r in rows]
+
+
+def _tracker_row(tracker_id, conn):
+    row = conn.execute(
+        "SELECT * FROM student_job_tracker WHERE id=?", (tracker_id,)).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": row["id"], "student_id": row["student_id"], "fingerprint": row["fingerprint"],
+        "title": row["title"], "company": row["company"], "url": row["url"],
+        "apply_url": row["apply_url"], "location": row["location"], "country": row["country"],
+        "provider": row["provider"], "source": row["source"], "match_pct": row["match_pct"],
+        "work_type": row["work_type"], "seniority": row["seniority"],
+        "listing_status": row["listing_status"], "link_state": row["link_state"],
+        "is_expired": bool(row["is_expired"]), "stage": row["stage"], "note": row["note"],
+        "interview_date": row["interview_date"], "application_deadline": row["application_deadline"],
+        "created_at": row["created_at"], "updated_at": row["updated_at"],
+        "history": _tracker_history_rows(tracker_id, conn),
+    }
+
+
+def save_job_snapshot(student_id, job):
+    """Idempotently snapshot a normalized live-feed job into the tracker.
+
+    ``job`` must be the surfaced feed record (with ``fingerprint``). The
+    snapshot is stored as-is at save time and is NEVER re-derived from the live
+    feed on read, so the row survives feed churn/expiry honestly. Returns
+    ``(tracker_id, created)`` — created is False when the row already existed
+    (UNIQUE(student_id, fingerprint))."""
+    if not (job or {}).get("fingerprint"):
+        raise TrackerError("A saved job needs its feed fingerprint")
+    now = _now()
+    fields = {
+        "fingerprint": job["fingerprint"],
+        "title": (job.get("title") or "").strip() or "Untitled listing",
+        "company": (job.get("company") or "").strip(),
+        "url": job.get("url") or "",
+        "apply_url": job.get("apply_url") or "",
+        "location": job.get("location") or "",
+        "country": job.get("country") or "",
+        "provider": job.get("provider"),
+        "source": job.get("source"),
+        "match_pct": job.get("match_pct"),
+        "work_type": job.get("work_type"),
+        "seniority": job.get("seniority"),
+        "listing_status": job.get("listing_status"),
+        "link_state": job.get("link_state"),
+        "is_expired": 1 if job.get("is_expired") else 0,
+    }
     with get_cursor() as c:
-        cur = c.execute("INSERT INTO roles (company_id, title, description, is_reference, source) VALUES (?,?,?,?,?)",
-                        (company_id, title, description, int(is_reference), source))
+        existing = c.execute("SELECT id FROM student_job_tracker "
+                             "WHERE student_id=? AND fingerprint=?",
+                             (student_id, fields["fingerprint"])).fetchone()
+        if existing:
+            return existing["id"], False
+        tracker_id = c.execute(
+            "INSERT INTO student_job_tracker (student_id, fingerprint, title, company, url,"
+            " apply_url, location, country, provider, source, match_pct, work_type, seniority,"
+            " listing_status, link_state, is_expired, stage, created_at, updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (student_id, fields["fingerprint"], fields["title"], fields["company"],
+             fields["url"], fields["apply_url"], fields["location"], fields["country"],
+             fields["provider"], fields["source"], fields["match_pct"], fields["work_type"],
+             fields["seniority"], fields["listing_status"], fields["link_state"],
+             fields["is_expired"], "saved", now, now),
+        ).lastrowid
+        c.execute("INSERT INTO tracker_stage_history (tracker_id, stage, changed_from, note, created_at)"
+                  " VALUES (?,?,?,?,?)",
+                  (tracker_id, "saved", None, "Saved from the job feed", now))
+        return tracker_id, True
+
+
+def list_job_tracker(student_id):
+    """Tracker entries for a student, newest-updated first, each with its
+    append-only stage history. Private to the student."""
+    with get_cursor() as c:
+        rows = c.execute("SELECT id FROM student_job_tracker WHERE student_id=?"
+                         " ORDER BY updated_at DESC, id DESC", (student_id,)).fetchall()
+        return [_tracker_row(r["id"], c) for r in rows]
+
+
+def get_tracker_entry(student_id, tracker_id):
+    with get_cursor() as c:
+        row = c.execute("SELECT id FROM student_job_tracker WHERE id=? AND student_id=?",
+                        (tracker_id, student_id)).fetchone()
+        return _tracker_row(row["id"], c) if row else None
+
+
+def update_tracker_entry(student_id, tracker_id, stage=None, note=None,
+                         interview_date=None, application_deadline=None):
+    """Apply a validated patch. Stage changes go through the transition
+    allow-list and append an audit row; re-applying the same stage is a no-op
+    that never writes history. Returns the refreshed entry."""
+    with get_cursor() as c:
+        row = c.execute("SELECT * FROM student_job_tracker WHERE id=? AND student_id=?",
+                        (tracker_id, student_id)).fetchone()
+        if row is None:
+            raise TrackerError("Tracker entry not found", 404)
+        now = _now()
+        updates = {}
+        new_stage = None
+        if stage is not None:
+            if stage not in JOB_TRACKER_STAGES:
+                raise TrackerError(f"Unknown stage '{stage}'")
+            if stage != row["stage"] and stage not in JOB_TRACKER_TRANSITIONS.get(row["stage"], set()):
+                raise TrackerError(f"Cannot move a '{row['stage']}' job to '{stage}'", 409)
+            new_stage = stage
+        if note is not None:
+            updates["note"] = str(note or "").strip()
+        death_line = _validate_iso_date(interview_date, "interview_date")
+        if death_line is not None or interview_date is not None:
+            updates["interview_date"] = death_line
+        deadline = _validate_iso_date(application_deadline, "application_deadline")
+        if deadline is not None or application_deadline is not None:
+            updates["application_deadline"] = deadline
+        if not updates and new_stage is None:
+            return _tracker_row(tracker_id, c)
+        values = list(updates.values())
+        sets = [f"{k}=?" for k in updates]
+        if new_stage is not None:
+            sets.append("stage=?")
+            values.append(new_stage)
+        values.extend([now, tracker_id, student_id])
+        c.execute(f"UPDATE student_job_tracker SET {', '.join(sets)}, updated_at=? "
+                  f"WHERE id=? AND student_id=?", values)
+        if new_stage is not None and new_stage != row["stage"]:
+            history_note = updates.get("note", "") or ""
+            c.execute("INSERT INTO tracker_stage_history (tracker_id, stage, changed_from, note, created_at)"
+                      " VALUES (?,?,?,?,?)",
+                      (tracker_id, new_stage, row["stage"], history_note, now))
+        return _tracker_row(tracker_id, c)
+
+
+def archive_tracker_entry(student_id, tracker_id):
+    """Archive a tracked job (-> archived_or_expired). The record is NEVER
+    destroyed — the stage row (and its history) stays stored forever."""
+    with get_cursor() as c:
+        row = c.execute("SELECT stage FROM student_job_tracker WHERE id=? AND student_id=?",
+                        (tracker_id, student_id)).fetchone()
+        if row is None:
+            raise TrackerError("Tracker entry not found", 404)
+        if row["stage"] == "archived_or_expired":
+            return _tracker_row(tracker_id, c)
+    return update_tracker_entry(student_id, tracker_id, stage="archived_or_expired")
+
+
+def delete_saved_only(student_id, tracker_id):
+    """Delete ONLY a tracker row still in 'saved'. Anything beyond saved must
+    keep its history — the caller gets ``TrackedError`` 409 with the reason."""
+    with get_cursor() as c:
+        row = c.execute("SELECT stage FROM student_job_tracker WHERE id=? AND student_id=?",
+                        (tracker_id, student_id)).fetchone()
+        if row is None:
+            raise TrackerError("Tracker entry not found", 404)
+        if row["stage"] != "saved":
+            raise TrackerError(
+                f"A '{row['stage']}' job keeps its history — archive it instead of deleting", 409)
+        c.execute("DELETE FROM student_job_tracker WHERE id=? AND student_id=?",
+                  (tracker_id, student_id))
+        return True
+
+
+def report_job_link(student_id, job):
+    """Idempotently record a student's report about a job link.
+
+    This deliberately does not mark a provider record dead or hide it for
+    anyone else: reports require later manual verification.
+    """
+    if not (job or {}).get("fingerprint"):
+        raise TrackerError("A link report needs a job fingerprint")
+    with get_cursor() as c:
+        existing = c.execute("SELECT id FROM job_link_reports WHERE student_id=? AND fingerprint=?",
+                             (student_id, job["fingerprint"])).fetchone()
+        if existing:
+            return existing["id"], False
+        report_id = c.execute(
+            "INSERT INTO job_link_reports (student_id, fingerprint, url, title, provider, reported_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (student_id, job["fingerprint"], job.get("apply_url") or job.get("url") or "",
+             job.get("title") or "", job.get("provider") or job.get("source") or "", _now()),
+        ).lastrowid
+        return report_id, True
+
+
+def list_job_link_reports(student_id):
+    with get_cursor() as c:
+        rows = c.execute("SELECT id, fingerprint, url, title, provider, reported_at "
+                         "FROM job_link_reports WHERE student_id=? ORDER BY reported_at DESC, id DESC",
+                         (student_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def record_role_view(student_id, role_id):
+    """Record a student opening a role's details (Phase L recently-viewed). A
+    re-view bumps ``viewed_at`` (moves the role back to the top of the list)
+    and never duplicates. Raises ``ValueError`` for an unknown role. The
+    per-student list is capped at ``MAX_ROLE_VIEW_EVENTS`` newest rows."""
+    with get_cursor() as c:
+        exists = c.execute("SELECT id FROM roles WHERE id=?", (role_id,)).fetchone()
+        if exists is None:
+            raise ValueError(f"Role {role_id} not found")
+        now = _now()
+        c.execute(
+            "INSERT INTO role_view_events (student_id, role_id, viewed_at) VALUES (?,?,?) "
+            "ON CONFLICT(student_id, role_id) DO UPDATE SET viewed_at=excluded.viewed_at",
+            (student_id, role_id, now))
+        c.execute(
+            "DELETE FROM role_view_events WHERE student_id=? AND role_id NOT IN ("
+            "SELECT role_id FROM role_view_events WHERE student_id=? "
+            "ORDER BY viewed_at DESC, role_id DESC LIMIT ?)",
+            (student_id, student_id, MAX_ROLE_VIEW_EVENTS))
+        return now
+
+
+def list_recent_role_views(student_id):
+    """A student's recently-viewed roles, newest-first (capped at the same
+    limit). Only additive, real role columns ride along (never fabricated) and
+    the company name comes from the LEFT JOIN — company-authored roles keep
+    their author context, ESCO/catalogue roles stay reference rows."""
+    with get_cursor() as c:
+        rows = c.execute(
+            "SELECT v.viewed_at, r.id, r.title, r.description, r.company_id, r.source, "
+            "r.external_id, r.is_reference, r.canonical_role_id, r.canonical_mapping_updated_at, "
+            "r.family, r.source_version, r.canonical_status, r.role_key, c.name AS company_name "
+            "FROM role_view_events v "
+            "JOIN roles r ON r.id = v.role_id "
+            "LEFT JOIN companies c ON c.id = r.company_id "
+            "WHERE v.student_id=? ORDER BY v.viewed_at DESC, v.role_id DESC LIMIT ?",
+            (student_id, MAX_ROLE_VIEW_EVENTS)).fetchall()
+        return [_row(r) for r in rows]
+
+
+def roles_catalog_version():
+    """Newest ``source_version`` among reference catalogue roles (max over real
+    pinned import versions), or ``None`` when no reference row carries one —
+    never synthesized. Drives the honest catalogue-version meta line."""
+    with get_cursor() as c:
+        row = c.execute(
+            "SELECT MAX(source_version) AS ver FROM roles "
+            "WHERE is_reference=1 AND source_version IS NOT NULL AND source_version != ''"
+        ).fetchone()
+        ver = (row["ver"] or "").strip() if row else ""
+        return ver or None
+
+
+def create_role(company_id, title, required_skills, description=None, is_reference=0, source="company",
+                parent_role_id=None, source_version=None, aliases=(), isco_codes=(), external_id=None,
+                fetched_at=None):
+    """required_skills: list of {name, category, level}.
+
+    Additive canonical fields: ``parent_role_id`` (only from a real source
+    hierarchy), ``source_version`` (a real pinned dataset version, never
+    guessed), ``aliases`` (list of ``{alias, type, language}``), and
+    ``isco_codes`` (list of ``{code, source, source_ref}``) are only stored
+    when a real source supplied them.
+    """
+    now = _now()
+    title = (title or "").strip() or "Untitled role"
+    with get_cursor() as c:
+        cur = c.execute(
+            "INSERT INTO roles (company_id, title, description, is_reference, source, external_id, "
+            "role_key, source_version, canonical_status, is_local_authoring, normalized_title, family, "
+            "parent_role_id, fetched_at, imported_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,'active',?,?,?,?,?,?,?)",
+            (company_id, title, description, int(is_reference), source, external_id,
+             _role_key_for(source, title, external_id), source_version,
+             int(source != "esco"), _canonical_title(title), _canonical_family(title),
+             parent_role_id, fetched_at, now, now))
         role_id = cur.lastrowid
         for rs in required_skills:
             sk = get_or_create_skill(rs["name"], rs.get("category", "General"))
             c.execute("INSERT INTO role_skills (role_id, skill_id, required_level) VALUES (?,?,?)",
                       (role_id, sk["id"], rs["level"]))
+            _record_skill_source(c, role_id, sk["id"], source, None, now)
+        for a in aliases:
+            _insert_alias(c, role_id, a.get("alias"), a.get("type", "alternative"),
+                          a.get("language", "en"), now)
+        for ic in isco_codes:
+            _insert_isco_code(c, role_id, ic.get("code"), ic.get("source", "esco"),
+                              ic.get("source_ref"), now)
         return get_role(role_id)
+
+
+def _insert_alias(cur, role_id, alias, alias_type, language, created_at):
+    alias = (alias or "").strip()
+    if not alias:
+        return
+    if alias_type not in ("alternative", "hidden"):
+        alias_type = "alternative"
+    cur.execute(
+        "INSERT OR IGNORE INTO role_aliases (role_id, alias, alias_type, language, created_at) "
+        "VALUES (?,?,?,?,?)",
+        (role_id, alias, alias_type, language or "en", created_at))
+
+
+def _insert_isco_code(cur, role_id, code, source, source_ref, created_at):
+    code = (code or "").strip()
+    if not code:
+        return
+    cur.execute(
+        "INSERT OR IGNORE INTO role_isco_codes (role_id, isco_code, source, source_ref, created_at) "
+        "VALUES (?,?,?,?,?)",
+        (role_id, code, source or "esco", source_ref, created_at))
 
 
 def update_role(role_id, title=None, description=None, required_skills=None):
     with get_cursor() as c:
-        c.execute("UPDATE roles SET title=COALESCE(?,title), description=COALESCE(?,description) WHERE id=?",
-                  (title, description, role_id))
+        new_title = (title or "").strip()
+        if new_title:
+            c.execute(
+                "UPDATE roles SET title=?, normalized_title=?, family=?, updated_at=? WHERE id=?",
+                (new_title, _canonical_title(new_title), _canonical_family(new_title), _now(), role_id))
+        if description is not None:
+            c.execute("UPDATE roles SET description=?, updated_at=? WHERE id=?",
+                      (description, _now(), role_id))
         if required_skills is not None:
+            row = c.execute("SELECT source FROM roles WHERE id=?", (role_id,)).fetchone()
+            skill_source = (row["source"] if row else "company") or "company"
+            now = _now()
+            c.execute("UPDATE roles SET updated_at=? WHERE id=?", (now, role_id))
             c.execute("DELETE FROM role_skills WHERE role_id=?", (role_id,))
+            c.execute("DELETE FROM role_skill_sources WHERE role_id=?", (role_id,))
             for rs in required_skills:
                 sk = get_or_create_skill(rs["name"], rs.get("category", "General"))
                 c.execute("INSERT INTO role_skills (role_id, skill_id, required_level) VALUES (?,?,?)",
                           (role_id, sk["id"], rs["level"]))
+                _record_skill_source(c, role_id, sk["id"], skill_source, None, now)
         return get_role(role_id)
 
 
@@ -271,15 +699,14 @@ def delete_role(role_id):
     return 1
 
 
-_CATALOG_COMPANY_NAME = "SkillBridge Talent Catalog"
-
-
 def _catalog_company_id(c):
-    row = c.execute("SELECT id FROM companies WHERE name=?", (_CATALOG_COMPANY_NAME,)).fetchone()
+    row = c.execute("SELECT id FROM companies WHERE name=?", (CATALOG_COMPANY_NAME,)).fetchone()
     return row["id"] if row else None
 
 
-def import_esco_role(uri, title, essential=(), optional=(), required_level="Intermediate", max_total=16):
+def import_esco_role(uri, title, essential=(), optional=(), required_level="Intermediate",
+                     max_total=16, source_version=None, isco_code=None, aliases=(),
+                     source_language=None, import_imprint=None, parent_uri=None, conn=None):
     """Import an ESCO occupation as a selectable, per-student target role.
 
     Idempotent: one ``roles`` row per ESCO ``source``+``external_id`` pair, so
@@ -295,11 +722,20 @@ def import_esco_role(uri, title, essential=(), optional=(), required_level="Inte
     Intermediate) -- never a level ESCO did not provide. ESCO ``essential``
     skills are imported as ``skill_kind='essential'`` and ``optional`` skills as
     ``'optional'``; noisy tail skills are trimmed via ``max_total``.
+
+    ``source_version``/``isco_code``/``aliases`` are recorded only when the
+    import/reference flow received them from a real source (never guessed).
+    ``source_language``/``import_imprint`` are the Phase E import-audit trail:
+    written only by the ESCO refresh service on a whole-row re-import.
+    ``parent_uri`` links to an already-imported managed ESCO occupation when one
+    exists. ``conn`` lets the managed refresh service run this inside its single
+    apply transaction (backward-compatible; default opens its own cursor).
     """
     uri = (uri or "").strip()
     if not uri:
         return None
-    with get_cursor() as c:
+    cursor = get_cursor() if conn is None else contextlib.nullcontext(conn)
+    with cursor as c:
         existing = c.execute("SELECT id FROM roles WHERE source='esco' AND external_id=?",
                              (uri,)).fetchone()
         if existing:
@@ -312,12 +748,29 @@ def import_esco_role(uri, title, essential=(), optional=(), required_level="Inte
         if len(essential) + len(optional) > max_total:
             optional = optional[:max(0, max_total - len(essential))]
         title = (title or "").strip() or "ESCO occupation"
+        now = _now()
+        parent_role_id = None
+        if parent_uri:
+            prow = c.execute("SELECT id FROM roles WHERE source='esco' AND external_id=?",
+                             (parent_uri,)).fetchone()
+            if prow:
+                parent_role_id = prow["id"]
         cur = c.execute(
-            "INSERT INTO roles (company_id, title, description, is_reference, source, external_id) "
-            "VALUES (?,?,?,0,'esco',?)",
+            "INSERT INTO roles (company_id, title, description, is_reference, source, external_id, "
+            "role_key, source_version, canonical_status, is_local_authoring, normalized_title, family, "
+            "source_language, import_imprint, parent_role_id, fetched_at, imported_at, updated_at) "
+            "VALUES (?,?,?,0,'esco',?,?,?, 'active', 0, ?,?,?,?,?,?,?,?)",
             (company_id, title,
-             "Occupation imported from the ESCO labour-market catalogue.", uri))
+             "Occupation imported from the ESCO labour-market catalogue.", uri,
+             _role_key_for("esco", title, uri), source_version,
+             _canonical_title(title), _canonical_family(title),
+             source_language, import_imprint, parent_role_id, now, now, now))
         role_id = cur.lastrowid
+        if isco_code:
+            _insert_isco_code(c, role_id, isco_code, "esco", uri, now)
+        for a in aliases:
+            _insert_alias(c, role_id, a.get("alias"), a.get("type", "alternative"),
+                          a.get("language", "en"), now)
         seen = set()
         for name, kind in list((n, "essential") for n in essential) + list((n, "optional") for n in optional):
             key = name.lower().strip()
@@ -328,7 +781,316 @@ def import_esco_role(uri, title, essential=(), optional=(), required_level="Inte
             c.execute("INSERT INTO role_skills (role_id, skill_id, required_level, skill_kind) "
                       "VALUES (?,?,?,?)",
                       (role_id, sk["id"], required_level, kind))
+            _record_skill_source(c, role_id, sk["id"], "esco", None, now)
         return get_role(role_id)
+
+
+def _record_skill_source(cur, role_id, skill_id, source, source_uri, attested_at=None):
+    cur.execute(
+        "INSERT OR IGNORE INTO role_skill_sources (role_id, skill_id, source, source_uri, attested_at) "
+        "VALUES (?,?,?,?,?)",
+        (role_id, skill_id, source, source_uri, attested_at or _now()))
+
+
+def backfill_role_canonical_metadata():
+    """Idempotent startup backfill for rows created before migration 0003.
+
+    Fills only fields that are provably derivable from existing data (title
+    normalization, family, role_key, the explicit local-authoring flag) and
+    records per-skill provenance copied from each role's own source. Never
+    invents versions, URIs, ISCO codes, aliases, or hierarchy edges - those
+    stay NULL/absent until a real source supplies them.
+    """
+    now = _now()
+    with get_cursor() as c:
+        rows = c.execute(
+            "SELECT id, title, source, external_id, role_key, is_local_authoring, "
+            "normalized_title, family, imported_at, updated_at FROM roles"
+        ).fetchall()
+        for r in rows:
+            updates = []
+            params = []
+            if not r["normalized_title"] or not r["family"]:
+                updates.append("normalized_title=?, family=?")
+                params.extend([_canonical_title(r["title"]), _canonical_family(r["title"])])
+            if not r["role_key"]:
+                updates.append("role_key=?")
+                params.append(_role_key_for(r["source"], r["title"], r["external_id"]))
+            if not r["is_local_authoring"] and r["source"] != "esco":
+                updates.append("is_local_authoring=1")
+            if (r["source"] == "esco" and not r["imported_at"]
+                    and not r["updated_at"]):
+                # Legacy ESCO row: it exists (so it was imported), but the import
+                # time was never recorded. Mark an honest "known since backfill"
+                # timestamp rather than claiming a specific import instant.
+                updates.append("updated_at=?")
+                params.append(now)
+            if updates:
+                params.append(r["id"])
+                c.execute(f"UPDATE roles SET {', '.join(updates)} WHERE id=?", tuple(params))
+        # Per-skill provenance: each existing role_skills attestation is declared
+        # with the role's own source (company/catalog/esco), URI unknown.
+        skill_rows = c.execute("""
+            SELECT rs.role_id, rs.skill_id, r.source
+            FROM role_skills rs JOIN roles r ON r.id=rs.role_id
+            LEFT JOIN role_skill_sources rss
+              ON rss.role_id=rs.role_id AND rss.skill_id=rs.skill_id
+            WHERE rss.role_id IS NULL""").fetchall()
+        attested = _now()
+        for s in skill_rows:
+            _record_skill_source(c, s["role_id"], s["skill_id"],
+                                 s["source"] or "company", None, attested)
+
+
+def role_aliases(role_id):
+    with get_cursor() as c:
+        return [_row(r) for r in c.execute(
+            "SELECT id, alias, alias_type, language, created_at FROM role_aliases "
+            "WHERE role_id=? ORDER BY alias_type, language, alias", (role_id,)).fetchall()]
+
+
+def add_role_alias(role_id, alias, alias_type="alternative", language="en"):
+    with get_cursor() as c:
+        _insert_alias(c, role_id, alias, alias_type, language, _now())
+        return True
+
+
+def remove_role_alias(alias_id):
+    with get_cursor() as c:
+        cur = c.execute("DELETE FROM role_aliases WHERE id=?", (alias_id,))
+        return cur.rowcount
+
+
+def role_isco_codes(role_id):
+    with get_cursor() as c:
+        return [_row(r) for r in c.execute(
+            "SELECT id, isco_code, source, source_ref, created_at FROM role_isco_codes "
+            "WHERE role_id=? ORDER BY source, isco_code", (role_id,)).fetchall()]
+
+
+def role_skill_sources(role_id):
+    with get_cursor() as c:
+        rows = c.execute(
+            "SELECT skill_id, source, source_uri, attested_at FROM role_skill_sources "
+            "WHERE role_id=?", (role_id,)).fetchall()
+        return {r["skill_id"]: _row(r) for r in rows}
+
+
+def related_roles(role_id):
+    """Roles reachable through a *maintained* relationship ONLY: the real
+    parent_role_id / family / superseded_by_role_id links. Never invents career
+    transitions; no relationship => None / empty lists. Children, siblings and
+    superseded-by links are restricted to active roles (mirrors Phase D status
+    gating); the direct parent and the superseded_by target are shown as-is
+    because they are the role's own real links."""
+    with get_cursor() as c:
+        def role_row(rid):
+            r = c.execute(
+                "SELECT r.*, c.name AS company_name FROM roles r "
+                "LEFT JOIN companies c ON c.id=r.company_id WHERE r.id=?",
+                (rid,)).fetchone()
+            if not r:
+                return None
+            rd = _row(r)
+            rd["required_skills"] = role_skills(c, rid)
+            return rd
+
+        self_row = c.execute("SELECT * FROM roles WHERE id=?", (role_id,)).fetchone()
+        if not self_row:
+            return None
+        parent = role_row(self_row["parent_role_id"]) if self_row["parent_role_id"] else None
+        children = []
+        for r in c.execute(
+                "SELECT r.*, c.name AS company_name FROM roles r "
+                "LEFT JOIN companies c ON c.id=r.company_id "
+                "WHERE r.parent_role_id=? AND " + _ACTIVE_ROLE_CLAUSE +
+                " ORDER BY r.title", (role_id,)).fetchall():
+            rd = _row(r)
+            rd["required_skills"] = role_skills(c, r["id"])
+            children.append(rd)
+        siblings = []
+        fam = (self_row["family"] or "").strip()
+        if fam:
+            for r in c.execute(
+                    "SELECT r.*, c.name AS company_name FROM roles r "
+                    "LEFT JOIN companies c ON c.id=r.company_id "
+                    "WHERE r.family=? AND r.id <> ? AND "
+                    "(r.parent_role_id IS NULL OR r.parent_role_id <> ?) AND "
+                    + _ACTIVE_ROLE_CLAUSE +
+                    " ORDER BY r.title", (fam, role_id, role_id)).fetchall():
+                rd = _row(r)
+                rd["required_skills"] = role_skills(c, r["id"])
+                siblings.append(rd)
+        supersedes = []
+        for r in c.execute(
+                "SELECT r.*, c.name AS company_name FROM roles r "
+                "LEFT JOIN companies c ON c.id=r.company_id "
+                "WHERE r.superseded_by_role_id=? AND " + _ACTIVE_ROLE_CLAUSE +
+                " ORDER BY r.title", (role_id,)).fetchall():
+            rd = _row(r)
+            rd["required_skills"] = role_skills(c, r["id"])
+            supersedes.append(rd)
+        superseded_by = role_row(self_row["superseded_by_role_id"]) if self_row["superseded_by_role_id"] else None
+    return {
+        "parent": parent,
+        "children": children,
+        "siblings": siblings,
+        "supersedes": supersedes,
+        "superseded_by": superseded_by,
+    }
+
+
+def role_provenance(role_id):
+    """Full canonical metadata for one role: fields + aliases + ISCO codes +
+    per-skill provenance. Mirrors the role's own source - a locally authored
+    role is never presented with ESCO labels."""
+    role = get_role(role_id)
+    if not role:
+        return None
+    return {
+        "role_id": role["id"],
+        "title": role["title"],
+        "source": role.get("source") or "company",
+        "role_key": role.get("role_key"),
+        "canonical_status": role.get("canonical_status") or "active",
+        "source_version": role.get("source_version"),
+        "external_id": role.get("external_id"),
+        "is_local_authoring": bool(role.get("is_local_authoring")),
+        "family": role.get("family"),
+        "parent_role_id": role.get("parent_role_id"),
+        "fetched_at": role.get("fetched_at"),
+        "imported_at": role.get("imported_at"),
+        "updated_at": role.get("updated_at"),
+        "aliases": role_aliases(role["id"]),
+        "isco_codes": role_isco_codes(role["id"]),
+        "skill_sources": role_skill_sources(role["id"]),
+        "mapping": mapping_of(role["id"]),
+        "related": related_roles(role["id"]),
+    }
+
+
+# ---------------------------------------------------------- role mapping (Phase F)
+
+# Canonical pool a company role can be mapped *to*: reference roles that are
+# still active (never deprecated/superseded). Local/company roles and imported
+# non-reference rows are excluded by construction.
+CANONICAL_POOL_CLAUSE = "r.is_reference=1 AND " + _ACTIVE_ROLE_CLAUSE
+
+
+def canonical_mapping_pool():
+    """Active reference roles eligible as mapping targets (read-only)."""
+    with get_cursor() as c:
+        rows = c.execute(
+            "SELECT r.*, c.name AS company_name FROM roles r "
+            "LEFT JOIN companies c ON c.id=r.company_id "
+            "WHERE " + CANONICAL_POOL_CLAUSE + " ORDER BY r.title").fetchall()
+        out = []
+        for r in rows:
+            rd = _row(r)
+            rd["required_skills"] = role_skills(c, r["id"])
+            out.append(rd)
+        return out
+
+
+def mapping_of(role_id):
+    """The role's confirmed canonical mapping (dict or None), or None when the
+    role/its target no longer exists."""
+    with get_cursor() as c:
+        row = c.execute(
+            "SELECT canonical_role_id, canonical_mapping_updated_at FROM roles WHERE id=?",
+            (role_id,)).fetchone()
+        if not row or not row["canonical_role_id"]:
+            return None
+        target = c.execute(
+            "SELECT id, title, source, external_id FROM roles WHERE id=?",
+            (row["canonical_role_id"],)).fetchone()
+        if not target:
+            return None
+        return {
+            "canonical_role_id": target["id"],
+            "mapped_title": target["title"],
+            "source": target["source"] or "catalog",
+            "external_id": target["external_id"],
+            "mapped_at": row["canonical_mapping_updated_at"],
+        }
+
+
+def set_mapping(role_id, canonical_role_id, actor):
+    """Confirm or clear a company role's canonical mapping. Append-only audit:
+    every write records exactly one role_mapping_events row.
+
+    ``canonical_role_id`` None unmaps; anything else must be an active reference
+    role and never the role itself - otherwise ValueError. Re-confirming the
+    current target is a no-op. Never touches the local role's title, description
+    or skills. ``actor`` is the user dict from ``_current_user``.
+    """
+    now = _now()
+    with get_cursor() as c:
+        row = c.execute("SELECT canonical_role_id FROM roles WHERE id=?", (role_id,)).fetchone()
+        if not row:
+            raise ValueError("role not found")
+        current = row["canonical_role_id"]
+        if canonical_role_id is None:
+            target_id = None
+            action = None
+        else:
+            target_id = int(canonical_role_id)
+            if target_id == role_id:
+                raise ValueError("cannot map a role to itself")
+            ref = c.execute(
+                "SELECT id FROM roles r WHERE r.id=? AND " + CANONICAL_POOL_CLAUSE,
+                (target_id,)).fetchone()
+            if not ref:
+                raise ValueError("target is not an active reference role")
+            if current == target_id:
+                return get_role(role_id)
+            action = "changed" if current else "mapped"
+        c.execute(
+            "UPDATE roles SET canonical_role_id=?, canonical_mapping_updated_at=? WHERE id=?",
+            (target_id, now, role_id))
+        if action is not None:
+            c.execute(
+                "INSERT INTO role_mapping_events "
+                "(role_id, action, from_canonical_role_id, to_canonical_role_id, "
+                "actor_user_id, actor_role, created_at) VALUES (?,?,?,?,?,?,?)",
+                (role_id, action, current, target_id, actor["id"],
+                 actor.get("role") or actor.get("display_name") or "user", now))
+        elif current:
+            c.execute(
+                "INSERT INTO role_mapping_events "
+                "(role_id, action, from_canonical_role_id, to_canonical_role_id, "
+                "actor_user_id, actor_role, created_at) VALUES (?,?,?,?,?,?,?)",
+                (role_id, "unmapped", current, None, actor["id"],
+                 actor.get("role") or actor.get("display_name") or "user", now))
+        return get_role(role_id)
+
+
+def mapping_history(role_id):
+    """Append-only audit for one role, newest first, with canonical titles
+    resolved live for both endpoints of each event."""
+    with get_cursor() as c:
+        rows = c.execute(
+            "SELECT * FROM role_mapping_events WHERE role_id=? ORDER BY id DESC",
+            (role_id,)).fetchall()
+        out = []
+        for r in rows:
+            def title_of(rid):
+                if rid is None:
+                    return None
+                t = c.execute("SELECT title FROM roles WHERE id=?", (rid,)).fetchone()
+                return t["title"] if t else None
+            out.append({
+                "event_id": r["id"],
+                "action": r["action"],
+                "from_canonical_role_id": r["from_canonical_role_id"],
+                "from_title": title_of(r["from_canonical_role_id"]),
+                "to_canonical_role_id": r["to_canonical_role_id"],
+                "to_title": title_of(r["to_canonical_role_id"]),
+                "actor_user_id": r["actor_user_id"],
+                "actor_role": r["actor_role"],
+                "created_at": r["created_at"],
+            })
+        return out
 
 
 # ---------------------------------------------------------------- students
@@ -622,6 +1384,151 @@ def get_tutor_mode(student_id):
         return (mode or "").strip().lower() or None
 
 
+_COPILOT_CONFIG_JSON_FIELDS = (("traits_json", "traits", []),
+                               ("capabilities_json", "capabilities", {}))
+
+
+def get_copilot_config(student_id):
+    """The student's Build-Your-Copilot configuration, or None.
+
+    Returns the frozen creation snapshot (choice, voice_agent_id, the
+    personality fields that compose the dynamic system prompt, and the enabled
+    capabilities), with the JSON columns decoded to their friendly ``traits`` /
+    ``capabilities`` keys (the same shape as ``copilot.snapshot_for``).
+    ``None`` when no copilot has been built yet — the current fixed four-persona
+    behavior stays unchanged.
+    """
+    with get_cursor() as c:
+        row = c.execute("SELECT * FROM copilot_config WHERE student_id=?",
+                        (student_id,)).fetchone()
+    if not row:
+        return None
+    cfg = dict(row)
+    for src, dst, fallback in _COPILOT_CONFIG_JSON_FIELDS:
+        raw = cfg.pop(src, None)
+        try:
+            cfg[dst] = json.loads(raw or ("[]" if isinstance(fallback, list) else "{}"))
+        except Exception:
+            cfg[dst] = fallback
+    return cfg
+
+
+def set_copilot_config(student_id, cfg):
+    """Create/replace the student's copilot configuration from a snapshot dict.
+
+    ``cfg`` must already carry the frozen preset values (choice, voice_agent_id,
+    name, title, role, specialty, origin, traits, behavior, style, capabilities)
+    — this layer just persists them and never fabricates any field. Upserts the
+    single per-student row; returns the stored config (decoded).
+    """
+    with get_cursor() as c:
+        c.execute("""INSERT INTO copilot_config
+                     (student_id, choice, voice_agent_id, name, title, role,
+                      specialty, origin, traits_json, behavior, style,
+                      capabilities_json)
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                     ON CONFLICT(student_id) DO UPDATE SET
+                       choice=excluded.choice,
+                       voice_agent_id=excluded.voice_agent_id,
+                       name=excluded.name,
+                       title=excluded.title,
+                       role=excluded.role,
+                       specialty=excluded.specialty,
+                       origin=excluded.origin,
+                       traits_json=excluded.traits_json,
+                       behavior=excluded.behavior,
+                       style=excluded.style,
+                       capabilities_json=excluded.capabilities_json,
+                       updated_at=datetime('now')""",
+                  (student_id,
+                   cfg["choice"], cfg["voice_agent_id"], cfg["name"], cfg["title"],
+                   cfg["role"], cfg["specialty"], cfg["origin"],
+                   json.dumps(cfg["traits"]), cfg["behavior"], cfg["style"],
+                   json.dumps(cfg["capabilities"])))
+    return get_copilot_config(student_id)
+
+
+def clear_copilot_config(student_id):
+    """Remove the student's copilot configuration (back to the fixed personas)."""
+    with get_cursor() as c:
+        c.execute("DELETE FROM copilot_config WHERE student_id=?", (student_id,))
+    return True
+
+
+def get_copilot_onboarding(student_id):
+    """The student's first-run copilot-onboarding record, or a synthetic
+    not_started row when none exists yet.
+
+    The row is DELIBERATELY independent of copilot_config so the "only ask once"
+    rule survives DELETE copilot. ``quiz_answers`` is the decoded raw 3-answer
+    set (empty for skip/manual_change); ``answered_at`` is None while the row is
+    still not_started.
+    """
+    with get_cursor() as c:
+        row = c.execute("SELECT student_id, state, source, quiz_answers_json, answered_at "
+                        "FROM copilot_onboarding WHERE student_id=?", (student_id,)).fetchone()
+    if not row:
+        return {"student_id": student_id, "state": "not_started", "source": "manual_change",
+                "quiz_answers": [], "answered_at": None}
+    d = dict(row)
+    raw = d.pop("quiz_answers_json", None)
+    try:
+        d["quiz_answers"] = json.loads(raw or "[]")
+    except Exception:
+        d["quiz_answers"] = []
+    return d
+
+
+def set_copilot_onboarding(student_id, state, source, answers=None):
+    """Record how/when the first-run copilot question was resolved.
+
+    Upserts the single per-student row. ``state``/``source`` must be one of the
+    documented vocabularies (callers validate); ``answers`` is the raw 3-answer
+    set persisted for audit (empty for skip/manual_change). Sets answered_at to
+    now whenever the row is written.
+    """
+    with get_cursor() as c:
+        c.execute("""INSERT INTO copilot_onboarding
+                     (student_id, state, source, quiz_answers_json, answered_at)
+                     VALUES (?,?,?,?, datetime('now'))
+                     ON CONFLICT(student_id) DO UPDATE SET
+                       state=excluded.state,
+                       source=excluded.source,
+                       quiz_answers_json=excluded.quiz_answers_json,
+                       answered_at=excluded.answered_at""",
+                  (student_id, state, source, json.dumps(answers or [])))
+    return get_copilot_onboarding(student_id)
+
+
+def mark_copilot_manual(student_id):
+    """Source bookkeeping when the student builds a copilot via the settings
+    picker (PUT copilot) rather than the first-run quiz.
+
+    A manual build MEANS the student decided: if the onboarding row is still
+    not_started it is marked completed with source=manual_change (so the
+    first-run modal never appears after a manual pick), and an existing
+    completed/skipped row just records that the latest decision came from the
+    settings. The quiz row itself is never re-opened by this path.
+    """
+    with get_cursor() as c:
+        row = c.execute("SELECT state FROM copilot_onboarding WHERE student_id=?",
+                        (student_id,)).fetchone()
+        if row is None:
+            c.execute("""INSERT INTO copilot_onboarding
+                         (student_id, state, source, quiz_answers_json, answered_at)
+                         VALUES (?, 'completed', 'manual_change', '[]', datetime('now'))""",
+                      (student_id,))
+        elif row["state"] == "not_started":
+            c.execute("""UPDATE copilot_onboarding
+                         SET state='completed', source='manual_change',
+                             answered_at=datetime('now')
+                         WHERE student_id=?""", (student_id,))
+        else:
+            c.execute("UPDATE copilot_onboarding SET source='manual_change' WHERE student_id=?",
+                      (student_id,))
+    return get_copilot_onboarding(student_id)
+
+
 def start_active_assessment(student_id, skill_id, external_token=None, webcam_gate=None):
     """Mark an in-progress verified assessment so the Tutor is locked out.
 
@@ -817,8 +1724,11 @@ def delete_assessment_attempt(attempt_id):
 # ---------------------------------------------------------------- users / auth
 
 def create_user(email, role, display_name, password=None, auth_provider="local", google_sub=None, verified=0, country=None, university=None, location=None, education_level=None):
-    """Create a user. Local accounts hash their password; Google accounts store none."""
-    pw_col = password or ""  # legacy NOT NULL constraint; auth always uses password_hash
+    """Create a user. Local accounts hash their password; Google accounts store none.
+
+    Phase C: the legacy NOT NULL ``password`` column is only ever written as an
+    empty placeholder - plaintext passwords are never persisted any more."""
+    pw_col = ""  # legacy NOT NULL constraint; auth always uses password_hash
     hash_b64 = salt_b64 = None
     if password:
         from .auth import hash_password
@@ -874,8 +1784,11 @@ def set_user_password(user_id, password):
 
 def check_credentials(email, password):
     """Verify email/password. Returns the user row or None. Supports legacy
-    plaintext rows so pre-upgrade seed accounts keep signing in.
+    plaintext rows so pre-migration accounts keep signing in.
 
+    Phase C: a successful legacy-plaintext login immediately upgrades the row
+    to a stored PBKDF2 hash and clears the plaintext column, using only the
+    password the caller just supplied (never a stored credential wholesale).
     Reads the raw row (including the legacy 'password' column) for the
     comparison, but only ever returns a sanitized copy without it.
     """
@@ -885,15 +1798,21 @@ def check_credentials(email, password):
         return None
     full = dict(raw)
     user = _safe_user(full)
-    if user.get("auth_provider") == "google" or (user.get("password_hash") is None and user.get("auth_provider") == "google"):
+    if user.get("auth_provider") == "google":
         return None
     if user.get("password_hash"):
         from .auth import verify_password
         if verify_password(password, user["password_hash"], user["password_salt"]):
             return user
         return None
-    # legacy plaintext
+    # legacy plaintext (pre-C rows): verify first, then upgrade in place.
     if full.get("password") and hmac_compat(password, full["password"]):
+        from .auth import hash_password
+        hash_b64, salt_b64 = hash_password(password)
+        with get_cursor() as c:
+            c.execute(
+                "UPDATE users SET password_hash=?, password_salt=?, password='' WHERE id=?",
+                (hash_b64, salt_b64, user["id"]))
         return user
     return None
 
@@ -906,28 +1825,79 @@ def hmac_compat(a, b):
 # ---------------------------------------------------------------- sessions
 
 def create_session(user_id, token=None):
+    """Issue a session. New tokens are stored ONLY as their SHA-256 hash in
+    auth_sessions (with expiry + last-used metadata); the raw token is returned
+    to the caller and never persisted."""
     if token is None:
         from .auth import new_session_token
         token = new_session_token()
+    from .auth import hash_token, session_expiry_iso, utcnow_iso
+    now = utcnow_iso()
     with get_cursor() as c:
-        c.execute("INSERT INTO sessions (token, user_id) VALUES (?,?)", (token, user_id))
+        c.execute(
+            """INSERT INTO auth_sessions (user_id, token_hash, created_at, expires_at, last_used_at)
+               VALUES (?,?,?,?,?)""",
+            (user_id, hash_token(token), now, session_expiry_iso(), now))
     return token
+
+
+def _session_user(r):
+    """Project a joined auth-session/user row down to a plain safe user dict."""
+    return _safe_user({k: v for k, v in dict(r).items() if k not in {
+        "sid", "expires_at", "revoked_at", "created_at", "last_used_at"}})
 
 
 def get_session_user(token):
     if not token:
         return None
+    from .auth import hash_token, utcnow_iso, heartbeat_cutoff_iso, created_plus_ttl
+    now = utcnow_iso()
     with get_cursor() as c:
-        r = c.execute("""SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id
-                         WHERE s.token=?""", (token,)).fetchone()
-        return _safe_user(r) if r else None
+        # New-format session: hash-only token storage.
+        r = c.execute(
+            """SELECT a.id AS sid, a.expires_at AS expires_at, a.revoked_at AS revoked_at,
+                      u.* FROM auth_sessions a JOIN users u ON u.id = a.user_id
+               WHERE a.token_hash = ?""", (hash_token(token),)).fetchone()
+        if r:
+            if r["revoked_at"] or (r["expires_at"] and r["expires_at"] < now):
+                return None
+            c.execute(
+                "UPDATE auth_sessions SET last_used_at = ? WHERE id = ? "
+                "AND (last_used_at IS NULL OR last_used_at < ?)",
+                (now, r["sid"], heartbeat_cutoff_iso()))
+            return _session_user(r)
+        # Legacy-format session: raw token in the pre-C sessions table, still
+        # honoured for the compatibility window but aged out by the same TTL.
+        r = c.execute(
+            """SELECT s.created_at AS created_at, u.* FROM sessions s
+               JOIN users u ON u.id = s.user_id WHERE s.token = ?""",
+            (token,)).fetchone()
+        if not r:
+            return None
+        if created_plus_ttl(r["created_at"]) < now:
+            c.execute("DELETE FROM sessions WHERE token = ?", (token,))
+            return None
+        return _session_user(r)
 
 
 def delete_session(token):
     if not token:
         return
+    from .auth import hash_token
     with get_cursor() as c:
+        c.execute("DELETE FROM auth_sessions WHERE token_hash=?", (hash_token(token),))
         c.execute("DELETE FROM sessions WHERE token=?", (token,))
+
+
+def revoke_user_sessions(user_id):
+    """Revoke every active session for a user (password change/reset). New-format
+    rows are soft-revoked; legacy rows are removed outright."""
+    from .auth import utcnow_iso
+    with get_cursor() as c:
+        c.execute(
+            "UPDATE auth_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
+            (utcnow_iso(), user_id))
+        c.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
 
 
 # ---------------------------------------------------------------- google registrations (role pending)
@@ -1360,6 +2330,7 @@ def _scenario_attempt_dict(d):
         "id": d["id"],
         "student_id": d["student_id"],
         "scenario_id": d["scenario_id"],
+        "scenario_version": d.get("scenario_version") or 1,
         "status": d["status"],
         "state": _json_loads(d.get("state_json")) or {},
         "decisions": _json_loads(d.get("decisions_json")) or [],
@@ -1376,12 +2347,12 @@ def _scenario_attempt_dict(d):
     }
 
 
-def create_scenario_attempt(student_id, scenario_id, state_json):
+def create_scenario_attempt(student_id, scenario_id, state_json, scenario_version=1):
     with get_cursor() as c:
         cur = c.execute(
-            """INSERT INTO scenario_attempts (student_id, scenario_id, state_json)
-               VALUES (?, ?, ?)""",
-            (student_id, scenario_id, _json_dumps(state_json)),
+            """INSERT INTO scenario_attempts (student_id, scenario_id, scenario_version, state_json)
+               VALUES (?, ?, ?, ?)""",
+            (student_id, scenario_id, scenario_version, _json_dumps(state_json)),
         )
         return _scenario_attempt_dict(_row(c.execute(
             "SELECT * FROM scenario_attempts WHERE id=?", (cur.lastrowid,)
