@@ -33,7 +33,7 @@ export function ScoreRing({ value }: { value: number }) {
           <circle cx="75" cy="75" r={r} fill="none" stroke="var(--slate-100)" strokeWidth="12" />
           <circle
             cx="75" cy="75" r={r} fill="none"
-            stroke="var(--coral)" strokeWidth="12" strokeLinecap="round"
+            stroke="var(--sb-indigo)" strokeWidth="12" strokeLinecap="round"
             strokeDasharray={c} strokeDashoffset={offset}
           />
         </svg>

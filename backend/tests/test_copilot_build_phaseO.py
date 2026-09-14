@@ -49,7 +49,7 @@ def test_migration_0009_on_fresh_db(tmp_path):
     try:
         database.init_db()
         applied = [m["migration_id"] for m in database.applied_migrations()]
-        assert applied[-1] == "0012_tutor_memory"
+        assert applied[-1] == "0013_tutor_conversations"
         tables = {r["name"] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
         assert "copilot_config" in tables
@@ -84,7 +84,7 @@ def test_migration_0009_upgrades_pre_0009_db_and_keeps_rows(tmp_path):
     try:
         pre = [m for m in database.MIGRATIONS
                if m["id"] not in ("0009_copilot_config", "0010_copilot_onboarding",
-                                  "0011_mentor_keys", "0012_tutor_memory")]
+                                  "0011_mentor_keys", "0012_tutor_memory", "0013_tutor_conversations")]
         database.run_migrations(conn=conn, migrations=pre)
         conn.execute("INSERT INTO students (email, name, university, education_level) "
                      "VALUES ('legacy@student.edu', 'Legacy', 'Old U', 'Undergraduate')")
@@ -93,7 +93,7 @@ def test_migration_0009_upgrades_pre_0009_db_and_keeps_rows(tmp_path):
             "SELECT name FROM sqlite_master WHERE type='table'")}
         pending = database.run_migrations()
         assert pending == ["0009_copilot_config", "0010_copilot_onboarding",
-                           "0011_mentor_keys", "0012_tutor_memory"]
+                           "0011_mentor_keys", "0012_tutor_memory", "0013_tutor_conversations"]
         kept = conn.execute("SELECT email FROM students WHERE email='legacy@student.edu'").fetchone()
         assert kept is not None
         assert database.run_migrations() == []
@@ -118,7 +118,7 @@ def test_migration_0009_backs_out_on_failure(tmp_path):
             "SELECT name FROM sqlite_master WHERE type='table'")}
         assert "oops" not in tables and "copilot_config" not in tables
         assert "copilot_onboarding" not in tables
-        assert database.run_migrations()[-1] == "0012_tutor_memory"
+        assert database.run_migrations()[-1] == "0013_tutor_conversations"
     finally:
         database.set_db_for_test()
         conn.close()

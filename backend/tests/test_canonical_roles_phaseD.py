@@ -123,7 +123,7 @@ def test_fresh_db_gains_canonical_schema(tmp_path):
     try:
         database.init_db()
         applied_ids = [m["migration_id"] for m in database.applied_migrations()]
-        assert applied_ids[-1] == "0012_tutor_memory"
+        assert applied_ids[-1] == "0013_tutor_conversations"
         assert MIGRATION_0003 in applied_ids
         assert NEW_COLUMNS <= _conn_columns(conn, "roles")
         assert NEW_TABLES <= _conn_tables(conn)

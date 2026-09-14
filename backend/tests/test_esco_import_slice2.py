@@ -77,7 +77,7 @@ def test_migration_0004_on_fresh_db(tmp_path):
     try:
         database.init_db()
         applied = [m["migration_id"] for m in database.applied_migrations()]
-        assert applied[-1] == "0012_tutor_memory"
+        assert applied[-1] == "0013_tutor_conversations"
         role_cols = {r["name"] for r in conn.execute("PRAGMA table_info(roles)")}
         assert {"source_language", "import_imprint"} <= role_cols
         tables = {r["name"] for r in conn.execute(
@@ -99,13 +99,13 @@ def test_migration_0004_upgrades_pre_0004_db(tmp_path):
     database.set_db_for_test(conn)
     try:
         pre = [m for m in database.MIGRATIONS
-               if m["id"] not in (MIGRATION_0004, MIGRATION_0005, "0006_saved_jobs_tracker", "0007_role_view_events", "0008_job_link_reports", "0009_copilot_config", "0010_copilot_onboarding", "0011_mentor_keys", "0012_tutor_memory")]
+               if m["id"] not in (MIGRATION_0004, MIGRATION_0005, "0006_saved_jobs_tracker", "0007_role_view_events", "0008_job_link_reports", "0009_copilot_config", "0010_copilot_onboarding", "0011_mentor_keys", "0012_tutor_memory", "0013_tutor_conversations")]
         database.run_migrations(conn=conn, migrations=pre)
         tables = {r["name"] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
         assert "esco_import_runs" not in tables
         pending = database.run_migrations()
-        assert pending == [MIGRATION_0004, MIGRATION_0005, "0006_saved_jobs_tracker", "0007_role_view_events", "0008_job_link_reports", "0009_copilot_config", "0010_copilot_onboarding", "0011_mentor_keys", "0012_tutor_memory"]
+        assert pending == [MIGRATION_0004, MIGRATION_0005, "0006_saved_jobs_tracker", "0007_role_view_events", "0008_job_link_reports", "0009_copilot_config", "0010_copilot_onboarding", "0011_mentor_keys", "0012_tutor_memory", "0013_tutor_conversations"]
         tables = {r["name"] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
         assert "esco_import_runs" in tables

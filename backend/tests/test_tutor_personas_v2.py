@@ -644,7 +644,7 @@ def test_unmapped_general_arabic_limitation(monkeypatch):
     assert genai._has_arabic(reply)
     assert "مختلق" not in reply
     assert "مهارة عملية" not in reply
-    assert "GenAI" in reply
+    assert "موثوق" in reply  # honest offline limitation — no internal terms leaked
 
 
 # ------------------------------------------------------------------ Phase 1B: Vex persona vs mode separation

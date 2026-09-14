@@ -1093,7 +1093,7 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate,
 
   if (mode === 'practice' && practiceData) {
     return (
-      <div className="learning-item open" style={{ border: '1.5px solid var(--coral)' }}>
+      <div className="learning-item open" style={{ border: '1.5px solid var(--sb-indigo)' }}>
         <div className="li-body" style={{ display: 'block', padding: 16 }}>
           <h4 style={{ marginBottom: 6 }}>Practice review: {gap.skill_name}</h4>
           <p className="small muted mb">

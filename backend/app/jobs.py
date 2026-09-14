@@ -572,15 +572,14 @@ def _safe_key_component(text):
     return s
 
 
-def _cache_key(skills=(), role="", country="", location="", requisites=(), market="", limit=10):
-    """Deterministic, secret-free canonical cache key.
+def _cache_key_parts(skills=(), role="", country="", location="", requisites=(), market="", limit=10):
+    """Cache-key components (everything except the config tag).
 
     Every input that changes the ranked result is folded in: each skill's
     (name, level, verified) triple — levels drive ``_student_seniority`` and the
     reranker uses verified flags, so two users with the same skill names but
     different depth must NEVER share a row — plus role, normalised country/city,
-    sorted requisites, normalised market, the result limit, and the config tag.
-    User ids/emails, raw CV text, keys and secrets never appear.
+    sorted requisites, normalised market, and the result limit.
     """
     skill_parts = []
     for s in skills or ():
@@ -591,7 +590,7 @@ def _cache_key(skills=(), role="", country="", location="", requisites=(), marke
         else:
             name, level, verified = s, "", "0"
         skill_parts.append(f"{_safe_key_component(name)}:{_safe_key_component(level)}:{verified}")
-    parts = [
+    return [
         "|".join(sorted(skill_parts)),
         _safe_key_component(role),
         _normalise_country(country or ""),
@@ -599,8 +598,35 @@ def _cache_key(skills=(), role="", country="", location="", requisites=(), marke
         "|".join(sorted(_safe_key_component(n) for n in requisites or ())),
         _normalise_country(market or ""),
         str(int(limit)),
-        _CACHE_TAG,
     ]
+
+
+def _same_profile_key(existing_key, target_parts):
+    """True when an existing cache entry was built for the same profile minus
+    the result limit (components 0..5 and the tag match, limit ignored).
+
+    A fingerprint identifies one normalized listing; a row the student saw in a
+    limit-N entry is the same row at a different slice, so locators may reuse it
+    without forcing a fresh build.
+
+    NOTE: the profile pieces themselves are joined with ``|`` (the sorted
+    skill and requisite lists are list-joined before being folded into the key),
+    so a naive ``existing_key.split("|")`` misaligns components. Comparing the
+    canonical non-limit serialization as a string is exact: two profiles that
+    serialize identically ARE the same profile under this canonical form, and a
+    different profile can never be a strict prefix of this one without agreeing
+    on every ``|``-free component."""
+
+    profile_prefix = "|".join(target_parts[:-1])
+    return (existing_key.startswith(profile_prefix + "|")
+            and existing_key.endswith("|" + _CACHE_TAG))
+
+
+def _cache_key(skills=(), role="", country="", location="", requisites=(), market="", limit=10):
+    """Deterministic, secret-free canonical cache key (see ``_cache_key_parts``;
+    the full key adds the config tag so schema/ranking changes orphan old rows)."""
+    parts = _cache_key_parts(skills, role, country, location, requisites, market, limit)
+    parts.append(_CACHE_TAG)
     return "|".join(parts)
 
 # Curated offline stand-ins, aligned with the app's own seeded companies and
@@ -1543,9 +1569,24 @@ def locate_feed_job(skills, role, country, location, requisites, market,
     ``match_pct`` is the displayed score. Returns ``None`` when the job is not
     in the current feed (honest 404, cross-profile/market mismatch).
     """
-    key = _cache_key(skills, role, country, location, requisites, market, limit)
+    target_parts = _cache_key_parts(skills, role, country, location, requisites, market, limit)
+    key = "|".join(target_parts + [_CACHE_TAG])
     with _lock:
         entry = _cache.get(key) if key in _cache else None
+        if entry is None:
+            # The row the student clicked may live in a same-profile cache entry
+            # built under a different limit (feed callers vary the result slice).
+            # Locate by fingerprint across those entries first so a visible row
+            # never 404s merely because its entry split at another limit; only a
+            # genuinely absent profile triggers a (re)build.
+            for k, e in _cache.items():
+                if _same_profile_key(k, target_parts):
+                    for j in (e.get("data") or {}).get("jobs") or []:
+                        if j.get("fingerprint") == fingerprint:
+                            entry = e
+                            break
+                if entry is not None:
+                    break
     if entry is None:
         data = _build_result(key, skills, role, country, location, limit,
                              role_requisites=requisites, market_country=market,
@@ -1568,9 +1609,15 @@ def peek_feed_job(skills, role, country, location, requisites, market,
     ``link_state`` / ``is_expired``) from an already-built feed entry. Returns
     ``None`` when the feed for this profile/market has not been built or the
     fingerprint is not in it, leaving the stored snapshot untouched."""
-    key = _cache_key(skills, role, country, location, requisites, market, limit)
+    target_parts = _cache_key_parts(skills, role, country, location, requisites, market, limit)
+    key = "|".join(target_parts + [_CACHE_TAG])
     with _lock:
         entry = _cache.get(key) if key in _cache else None
+        if entry is None:
+            for k, e in _cache.items():
+                if _same_profile_key(k, target_parts):
+                    entry = e
+                    break
     if entry is None:
         return None
     for j in (entry.get("data") or {}).get("jobs") or []:
@@ -3076,11 +3123,13 @@ def _build_result(key, skills, role, country, location, limit, role_requisites=(
     local = [j for j in ranked if j.get("location_tier") in ("city", "country", "country_remote", "market")]
     broader = [j for j in ranked if j.get("location_tier") in ("global_remote", "unknown")]
     other = [j for j in ranked if j.get("location_tier") == "different"]
-    selected = list(local)
-    if len(selected) < limit:
-        selected.extend(broader[:limit - len(selected)])
-    if len(selected) < limit:
-        selected.extend(other[:limit - len(selected)])
+    # ``_apply`` already sorts ``ranked`` by the dominance contract (tier →
+    # title evidence → location fit → numeric match). Select in that global
+    # order — never re-bucket by location first — so a directly-relevant
+    # title in another country is not pushed below a same-family listing that
+    # merely happens to be remote/unknown-location. Local fit still decides
+    # ordering *within* a band because location is the third sort key.
+    selected = ranked[:limit]
 
     if not selected and feed_source == "live":
         feed_source = "empty"

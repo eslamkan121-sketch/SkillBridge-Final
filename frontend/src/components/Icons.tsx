@@ -18,6 +18,7 @@ const base = (size = 18, className = '', style?: React.CSSProperties) => ({
   className,
   style,
   'aria-hidden': true,
+  'focusable': false,
 })
 
 export const IconDashboard = (p: IconProps) => (
@@ -92,10 +93,23 @@ export const IconSendRTL = (p: IconProps) => (
     <path d="M2 22L13 11" /><path d="M2 22l7 20 4-9 9-4-20-7z" />
   </svg>
 )
+export const IconSendUp = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)} strokeWidth={2.2}>
+    <path d="M12 19V5" />
+    <path d="M6 11l6-6 6 6" />
+  </svg>
+)
 export const IconMic = (p: IconProps) => (
   <svg {...base(p.size, p.className, p.style)}>
     <rect x="9" y="3" width="6" height="12" rx="3" /><path d="M5 11a7 7 0 0 0 14 0" />
     <path d="M12 18v3" />
+  </svg>
+)
+export const IconHeadset = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M4 13a8 8 0 0 1 16 0" />
+    <rect x="3" y="13" width="4.5" height="7" rx="2" />
+    <rect x="16.5" y="13" width="4.5" height="7" rx="2" />
   </svg>
 )
 export const IconStop = (p: IconProps) => (
@@ -148,6 +162,12 @@ export const IconChat = (p: IconProps) => (
 )
 export const IconArrowRight = (p: IconProps) => (
   <svg {...base(p.size, p.className, p.style)}><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+)
+export const IconTrendingUp = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M3 17l6-6 4 4 8-8" />
+    <path d="M15 7h6v6" />
+  </svg>
 )
 export const IconFilter = (p: IconProps) => (
   <svg {...base(p.size, p.className, p.style)}><path d="M4 6h16M7 12h10M10 18h4" /></svg>
@@ -309,5 +329,29 @@ export const IconCompare = (p: IconProps) => (
     <rect x="15" y="5" width="6" height="8" rx="1.5" />
     <path d="M6 20v-6M6 16.5l-2 2M6 16.5l2 2" />
     <path d="M18 20v-6M18 16.5l-2 2M18 16.5l2 2" />
+  </svg>
+)
+export const IconCopy = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)} strokeWidth={2}>
+    <rect x="9" y="9" width="11" height="11" rx="2" />
+    <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+  </svg>
+)
+export const IconKeyboard = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <rect x="3" y="7" width="18" height="10" rx="2" />
+    <path d="M7 11h.01M11 11h.01M15 11h.01M17 11h.01M7 14h10" />
+  </svg>
+)
+export const IconXClose = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M6 6l12 12M18 6L6 18" />
+  </svg>
+)
+export const IconDots = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
+    <circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none" />
   </svg>
 )

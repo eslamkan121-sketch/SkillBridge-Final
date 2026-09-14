@@ -12,6 +12,7 @@ import type {
   RoleMatchBreakdown,
   TargetRoleMatchBreakdown,
 } from '../lib/types'
+import { humanizeTopicLabel } from '../lib/topicLabels'
 
 export type MatchBreakdownKind = 'target-role' | 'role' | 'job'
 
@@ -57,7 +58,7 @@ function TargetRoleView({ data }: { data: TargetRoleMatchBreakdown }) {
         <tbody>
           {data.requirements.map((r, i) => (
             <tr key={r.skill_id || i}>
-              <td>{r.skill_name}</td>
+              <td>{humanizeTopicLabel(r.skill_name)}</td>
               <td>{r.required_level || '—'}</td>
               <td>{r.student_level || '—'}</td>
               <td><EvidenceBadge value={r.evidence} /></td>
@@ -75,7 +76,7 @@ function TargetRoleView({ data }: { data: TargetRoleMatchBreakdown }) {
         <Pts label="Displayed match" points={data.displayed_percent} final />
       </div>
       {data.missing_data.length > 0 && (
-        <p className="mxb-note">Missing skills: {data.missing_data.join(', ')}.</p>
+        <p className="mxb-note">Missing skills: {data.missing_data.map((m) => humanizeTopicLabel(m)).join(', ')}.</p>
       )}
       <p className="mxb-next">{data.next_action}</p>
     </>
@@ -100,7 +101,7 @@ function RoleView({ data }: { data: RoleMatchBreakdown }) {
           {data.requirements.map((r, i) => (
             <tr key={`${r.name}-${i}`}>
               <td>
-                {r.name}
+{humanizeTopicLabel(r.name)}
                 {r.is_discovery && <span className="mxb-disc">discovery</span>}
               </td>
               <td>{r.essential ? (r.required_level || 'required') : 'optional'}</td>
@@ -122,10 +123,10 @@ function RoleView({ data }: { data: RoleMatchBreakdown }) {
         <Pts label="Displayed match" points={data.displayed_percent} final />
       </div>
       {data.verified_matches.length > 0 && (
-        <p className="mxb-note">Verified matches: {data.verified_matches.join(', ')}.</p>
+        <p className="mxb-note">Verified matches: {data.verified_matches.map((m) => humanizeTopicLabel(m)).join(', ')}.</p>
       )}
       {data.missing_key_skills.length > 0 && (
-        <p className="mxb-note">Skill gap: {data.missing_key_skills.join(' · ')}</p>
+        <p className="mxb-note">Skill gap: {data.missing_key_skills.map((m) => humanizeTopicLabel(m)).join(' · ')}</p>
       )}
       <p className="mxb-next">{data.next_action}</p>
     </>
@@ -164,7 +165,7 @@ function JobView({ data }: { data: JobMatchBreakdown }) {
         </span>
       </div>
       {data.verified_skill_hits.length > 0 && (
-        <p className="mxb-note">Verified skill hits: {data.verified_skill_hits.join(', ')}.</p>
+        <p className="mxb-note">Verified skill hits: {data.verified_skill_hits.map((m) => humanizeTopicLabel(m)).join(', ')}.</p>
       )}
       <p className="mxb-note">{data.evidence_note}</p>
       <p className="mxb-next">{data.next_action}</p>

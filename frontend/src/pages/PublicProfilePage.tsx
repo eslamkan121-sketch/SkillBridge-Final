@@ -90,7 +90,7 @@ export default function PublicProfilePage({ studentId }: { studentId: number }) 
             </div>
             <div className="divider" />
             <div className="p-foot">
-              <IconShield size={13} style={{ color: 'var(--coral)' }} />
+              <IconShield size={13} style={{ color: 'var(--sb-indigo)' }} />
               <span>Issued by SkillBridge · verified through the assessment loop · contact the student to learn more.</span>
             </div>
           </div>

@@ -34,7 +34,7 @@ def test_migration_0011_on_fresh_db(tmp_path):
     try:
         database.init_db()
         applied = [m["migration_id"] for m in database.applied_migrations()]
-        assert applied[-1] == "0012_tutor_memory"
+        assert applied[-1] == "0013_tutor_conversations"
         tables = {r["name"] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
         assert "copilot_onboarding" in tables and "copilot_config" in tables
@@ -68,7 +68,7 @@ def test_migration_0011_upgrades_pre_0011_db_and_rekeys_rows(tmp_path):
     database.set_db_for_test(conn)
     try:
         pre = [m for m in database.MIGRATIONS
-               if m["id"] not in ("0011_mentor_keys", "0012_tutor_memory")]
+               if m["id"] not in ("0011_mentor_keys", "0012_tutor_memory", "0013_tutor_conversations")]
         database.run_migrations(conn=conn, migrations=pre)
         for i, (choice, voice) in enumerate([
             ("navigator", "nova"),
@@ -88,7 +88,7 @@ def test_migration_0011_upgrades_pre_0011_db_and_rekeys_rows(tmp_path):
         conn.commit()
 
         pending = database.run_migrations()
-        assert pending == ["0011_mentor_keys", "0012_tutor_memory"]
+        assert pending == ["0011_mentor_keys", "0012_tutor_memory", "0013_tutor_conversations"]
 
         # Legacy rows are re-keyed deterministically AND the display names are
         # refreshed so the old archetype names never surface again.
@@ -127,7 +127,7 @@ def test_migration_0011_backs_out_on_failure(tmp_path):
         tables = {r["name"] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
         assert "oops" not in tables and "copilot_onboarding" not in tables
-        assert database.run_migrations()[-1] == "0012_tutor_memory"
+        assert database.run_migrations()[-1] == "0013_tutor_conversations"
     finally:
         database.set_db_for_test()
         conn.close()

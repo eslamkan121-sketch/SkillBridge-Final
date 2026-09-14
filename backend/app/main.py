@@ -1223,41 +1223,102 @@ def api_get_career_roadmap(student_id: int, request: Request):
 
 # ------------------------------------------------------------------ AI tutor
 
-@app.get("/api/students/{student_id}/tutor")
-def api_tutor_history(student_id: int, request: Request, skill_id: int = None, tutor_id: str = None):
-    """Conversation history for a student, scoped to one tutor conversation.
+def _conversation_id_from(body: dict | None):
+    if not body or body.get("conversation_id") in (None, ""):
+        return None
+    try:
+        conversation_id = int(body.get("conversation_id"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="conversation_id must be an integer")
+    if conversation_id <= 0:
+        raise HTTPException(status_code=400, detail="conversation_id must be positive")
+    return conversation_id
 
-    Supply ``tutor_id`` (nova/axel/sage/vex) to read that tutor's own thread.
+
+def _validate_tutor_id(raw, *, field="tutor"):
+    if raw is None:
+        return None
+    tutor_id = str(raw).strip().lower()
+    if tutor_id not in copilot.ALLOWED_TUTOR_IDS:
+        raise HTTPException(status_code=400,
+                            detail=f"Unknown {field} (allowed: nova, axel, sage, vex)")
+    return tutor_id
+
+
+@app.get("/api/students/{student_id}/tutor")
+def api_tutor_history(student_id: int, request: Request, skill_id: int = None,
+                      tutor_id: str = None, conversation_id: int = None):
+    """Conversation history for a student.
+
+    Phase 4A callers should pass ``conversation_id``. The older tutor-scoped
+    path remains available for compatibility.
     """
     user = _current_user(request)
     _require_roles(user, "Student")
     _own_student(user, student_id)
-    if tutor_id is not None and tutor_id not in copilot.ALLOWED_TUTOR_IDS:
-        raise HTTPException(status_code=400,
-                            detail="Unknown tutor (allowed: nova, axel, sage, vex)")
-    return models.list_tutor_messages(student_id, tutor_id=tutor_id, skill_id=skill_id)
+    tutor_id = _validate_tutor_id(tutor_id, field="tutor") if tutor_id is not None else None
+    if conversation_id is not None:
+        conversation = models.get_tutor_conversation(student_id, conversation_id)
+        if not conversation or (tutor_id and conversation["tutor_id"] != tutor_id):
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        tutor_id = conversation["tutor_id"]
+    return models.list_tutor_messages(
+        student_id,
+        tutor_id=tutor_id,
+        skill_id=skill_id,
+        conversation_id=conversation_id,
+    )
+
+
+@app.get("/api/students/{student_id}/tutor/conversations")
+def api_tutor_conversations(student_id: int, request: Request, include_empty: bool = False):
+    """Conversation history list for the chat sidebar/history drawer."""
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    return {"conversations": models.list_tutor_conversations(student_id, include_empty=include_empty)}
+
+
+@app.post("/api/students/{student_id}/tutor/conversations")
+def api_create_tutor_conversation(student_id: int, request: Request, body: dict = None):
+    """Create an empty conversation without clearing any existing history."""
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    tutor_id = _validate_tutor_id((body or {}).get("tutor_id"), field="tutor")
+    copilot_config = models.get_copilot_config(student_id)
+    tutor_id = tutor_id or (
+        copilot_config["voice_agent_id"] if copilot_config
+        else models.get_tutor_preference(student_id) or "nova"
+    )
+    conversation = models.create_tutor_conversation(student_id, tutor_id)
+    return {"conversation": conversation}
 
 
 @app.delete("/api/students/{student_id}/tutor")
 def api_tutor_new_chat(student_id: int, request: Request, body: dict = None):
-    """Start a fresh conversation: clears ONLY the selected tutor's chat.
+    """Clear messages from the selected conversation only.
 
-    Other tutors' conversations, the tutor preference, mode and language are all
-    untouched. When no ``tutor_id`` is given, the current preferred tutor is used.
+    Older clients may omit ``conversation_id`` and still clear the selected
+    tutor's legacy thread. Tutor preference, mode, language and trusted
+    SkillBridge state are untouched.
     """
     user = _current_user(request)
     _require_roles(user, "Student")
     _own_student(user, student_id)
-    tutor_id = None
-    if body and body.get("tutor_id") is not None:
-        tutor_id = str(body.get("tutor_id")).strip().lower()
-        if tutor_id not in copilot.ALLOWED_TUTOR_IDS:
-            raise HTTPException(status_code=400,
-                                detail="Unknown tutor (allowed: nova, axel, sage, vex)")
+    tutor_id = _validate_tutor_id((body or {}).get("tutor_id"), field="tutor")
+    conversation_id = _conversation_id_from(body)
+    if conversation_id is not None:
+        conversation = models.get_tutor_conversation(student_id, conversation_id)
+        if not conversation or (tutor_id and conversation["tutor_id"] != tutor_id):
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        tutor_id = conversation["tutor_id"]
     tutor_id = tutor_id or models.get_tutor_preference(student_id) or "nova"
-    models.clear_tutor_messages(student_id, tutor_id)
-    tutor_memory.clear_memory(student_id, tutor_id)
-    return {"cleared": True, "tutor_id": tutor_id}
+    cleared = models.clear_tutor_messages(student_id, tutor_id, conversation_id=conversation_id)
+    if not cleared:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    tutor_memory.clear_memory(student_id, tutor_id, conversation_id=conversation_id)
+    return {"cleared": True, "tutor_id": tutor_id, "conversation_id": conversation_id}
 
 
 @app.post("/api/students/{student_id}/tutor")
@@ -1288,20 +1349,33 @@ def api_tutor_chat(student_id: int, request: Request, body: dict):
     )
     skill_name = skill["name"] if skill else None
     role = student.get("target_role") if student else None
-    body_tutor = body.get("tutor_id")
-    if body_tutor is not None:
-        body_tutor = str(body_tutor).strip().lower()
-        if body_tutor not in copilot.ALLOWED_TUTOR_IDS:
-            raise HTTPException(status_code=400,
-                                detail="Unknown tutor persona (allowed: nova, axel, sage, vex)")
+    body_tutor = _validate_tutor_id(body.get("tutor_id"), field="tutor persona")
+    conversation_id = _conversation_id_from(body)
+    conversation = None
+    if conversation_id is not None:
+        conversation = models.get_tutor_conversation(student_id, conversation_id)
+        if not conversation or (body_tutor and conversation["tutor_id"] != body_tutor):
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        body_tutor = conversation["tutor_id"]
     # A built copilot (Build-Your-Copilot) pins the voice agent that speaks it and
     # carries the per-user personality/capability config. The personality composes
     # the system prompt; the voice stays a shared agent reference.
     copilot_config = models.get_copilot_config(student_id)
     personality = copilot.personality_for_config(copilot_config)
     tutor_id = body_tutor or models.get_tutor_preference(student_id) or "nova"
-    if copilot_config:
+    if copilot_config and conversation_id is None:
         tutor_id = copilot_config["voice_agent_id"]
+    elif copilot_config and copilot_config["voice_agent_id"] != tutor_id:
+        personality = None
+    conversation = conversation or models.ensure_tutor_conversation(
+        student_id,
+        tutor_id,
+        conversation_id=conversation_id,
+        title_seed=question,
+    )
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    conversation_id = conversation["id"]
     raw_mode = body.get("mode")
     if raw_mode is not None:
         mode = copilot.validate_mode(raw_mode)
@@ -1329,11 +1403,21 @@ def api_tutor_chat(student_id: int, request: Request, body: dict):
         question,
     )
     ctx_text = f"{ctx['label']} context:\n{ctx['context']}\nLanguage: {copilot.language_label(language)}"
-    # Bounded, persona-scoped memory for THIS mentor's thread, built from the
-    # pre-turn history so the inbound message is never double-shown.
-    pre_turn = models.list_tutor_messages(student_id, tutor_id=tutor_id)
-    memory_block = tutor_memory.memory_block_for(student_id, tutor_id, messages=pre_turn)
-    models.add_tutor_message(student_id, tutor_id, skill_id, "user", question)
+    # Bounded memory for THIS mentor conversation, built from the pre-turn
+    # history so the inbound message is never double-shown.
+    pre_turn = models.list_tutor_messages(
+        student_id,
+        tutor_id=tutor_id,
+        conversation_id=conversation_id,
+    )
+    memory_block = tutor_memory.memory_block_for(
+        student_id,
+        tutor_id,
+        messages=pre_turn,
+        conversation_id=conversation_id,
+    )
+    models.add_tutor_message(student_id, tutor_id, skill_id, "user", question,
+                             conversation_id=conversation_id)
     if mode == "interview":
         reply = genai.interview_reply(
             question,
@@ -1356,9 +1440,18 @@ def api_tutor_chat(student_id: int, request: Request, body: dict):
             personality=personality,
             conversation_memory=memory_block,
         )
-    msg = models.add_tutor_message(student_id, tutor_id, skill_id, "assistant", reply)
-    tutor_memory.after_turn(student_id, tutor_id)
-    return {**msg, "reply": reply, "tutor_id": tutor_id, "mode": mode, "language": language}
+    msg = models.add_tutor_message(student_id, tutor_id, skill_id, "assistant", reply,
+                                   conversation_id=conversation_id)
+    tutor_memory.after_turn(student_id, tutor_id, conversation_id=conversation_id)
+    return {
+        **msg,
+        "reply": reply,
+        "tutor_id": tutor_id,
+        "mode": mode,
+        "language": language,
+        "conversation_id": conversation_id,
+        "conversation": models.get_tutor_conversation(student_id, conversation_id),
+    }
 
 
 @app.get("/api/students/{student_id}/tutor/preference")
@@ -3017,6 +3110,31 @@ def api_report_job_link(student_id: int, fingerprint: str, request: Request, bod
         raise HTTPException(status_code=404, detail="Job not found in your feed or tracker")
     report_id, created = models.report_job_link(student_id, job)
     return {"report_id": report_id, "created": created, "fingerprint": fingerprint}
+
+
+# ------------------------------------------------------------------ Phase Q: prepare-for-job readiness
+
+@app.get("/api/students/{student_id}/jobs/recent/{fingerprint}/prepare")
+def api_job_prepare(student_id: int, fingerprint: str, request: Request,
+                    location: str = "", country: str = "", market: str = ""):
+    """Read-only readiness view for a job the student is actually seeing.
+
+    Uses the SAME feed coordinates as the recent-jobs feed (``_student_feed_profile``)
+    and a cache-only ``peek_feed_job`` lookup — it never triggers a feed build.
+    Each required skill resolves against the student's own verified/self-reported
+    records by exact canonical name; ``skill_id`` is a real skills row id or null
+    and unresolvable names are honestly ``no_path``."""
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    student, skills, role, cty, loc, requisites = _student_feed_profile(
+        user, location=location, country=country, market=market)
+    if not student or not student.get("self_reported_skills"):
+        raise HTTPException(status_code=404, detail="No CV yet — nothing to prepare")
+    hit = jobs.peek_feed_job(skills, role, cty, loc, requisites, market, fingerprint)
+    if not hit or not hit.get("found") or hit.get("job") is None:
+        raise HTTPException(status_code=404, detail="Job not found in the current feed")
+    return models.prepare_job_view(student, hit["job"])
 
 
 # ------------------------------------------------------------------ Phase J: explainable role and job matching

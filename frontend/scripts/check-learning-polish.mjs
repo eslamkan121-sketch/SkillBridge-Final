@@ -45,7 +45,7 @@ ok(/def normalize_lesson_practice/.test(lessons) && /= normalize_lesson_practice
    'lessons.py: normalize_lesson extends the existing practice normalization')
 ok(/\.lesson-example-content pre \{/.test(css) && /white-space: pre-wrap/.test(css),
    'index.css: fenced example code keeps its line breaks (white-space preserved)')
-ok(/background: var\(--navy-ink\); color/.test(css),
+ok(/background: var\(--sb-midnight-ink\); color/.test(css),
    'index.css: example code blocks have their own readable dark style')
 
 // ---- 3. practice loading UX (real evaluation runs ~10-30s)

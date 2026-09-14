@@ -8,6 +8,7 @@ import { SkillTag, GapPill } from '../components/widgets'
 import { IconRoles } from '../components/Icons'
 import { ConfirmModal, ToastRegion, useToast } from '../components/ui'
 import MatchBreakdown from '../components/MatchBreakdown'
+import { humanizeTopicLabel } from '../lib/topicLabels'
 
 const LEVELS = ['Beginner', 'Intermediate', 'Advanced']
 
@@ -359,7 +360,7 @@ function RoleCard({ r, selected, onSelect, selectable, dest, chips }: {
         {chips && chips.length > 0 && chips.map((c) => (
           <span key={c.name} className={`sro3-skill ${c.matched ? 'on' : 'off'}`}>
             {c.matched ? <IconCheck size={11} /> : <span className="sro3-dot" />}
-            {c.name} <span className="lv">{c.level}</span>
+            {humanizeTopicLabel(c.name)} <span className="lv">{c.level}</span>
           </span>
         ))}
         {!chips && r.required_skills.map((s) => (
@@ -413,7 +414,7 @@ function RecommendationCard({ rec, selected, onSelect, busy, saved, onToggleSave
         {(rec.matched_skills || []).slice(0, 12).map((m) => (
           <span key={m.name} className="sro3-skill on">
             <IconCheck size={11} />
-            {m.name}
+{humanizeTopicLabel(m.name)}
             {m.verified ? <span className="lv">✓ verified</span> : <span className="lv">{m.student_level || ''}</span>}
           </span>
         ))}
@@ -498,13 +499,13 @@ function RoleLibraryCard({ r, pct, selected, dest, chips, statusCounts, noCvSkil
       {r.description && <p className="srb-role-desc">{r.description.length > 140 ? `${r.description.slice(0, 137)}…` : r.description}</p>}
       {noCvSkills ? (
         <div className="srb-chiprow">
-          {r.required_skills.slice(0, 5).map((s) => <span className="skill-tag" key={s.name}>{s.name}</span>)}
+          {r.required_skills.slice(0, 5).map((s) => <span className="skill-tag" key={s.name}>{humanizeTopicLabel(s.name)}</span>)}
           {r.required_skills.length > 5 && <span className="muted small">+{r.required_skills.length - 5} more</span>}
         </div>
       ) : (
         <>
           <div className="srb-chiprow">
-            {shown.map((c) => <span className={`srb-schip ${c.matched ? 'have' : ''}`} key={c.name}>{c.name}{c.matched ? ' ✓' : ''}</span>)}
+            {shown.map((c) => <span className={`srb-schip ${c.matched ? 'have' : ''}`} key={c.name}>{humanizeTopicLabel(c.name)}{c.matched ? ' ✓' : ''}</span>)}
             {(chips?.length ?? 0) > shown.length && <span className="muted small">+{(chips?.length ?? 0) - shown.length} more</span>}
           </div>
           <div className="srb-pills">
@@ -593,7 +594,7 @@ function RoleDetailsModal({ role, noCvSkills, profileByName, cvSkillNames, selec
             {rows.map(({ s, status }) => (
               <li key={s.name} className={`srb-skill ${status}`}>
                 <span className="srb-dot" aria-hidden="true" />
-                <span className="srb-skill-name">{s.name} <small>{s.required_level}</small></span>
+                <span className="srb-skill-name">{humanizeTopicLabel(s.name)} <small>{s.required_level}</small></span>
                 <span className="srb-skill-state">
                   {status === 'have' ? '✓ you have this' : status === 'developing' ? '⚠ leveling up' : '○ missing'}
                 </span>
@@ -609,7 +610,7 @@ function RoleDetailsModal({ role, noCvSkills, profileByName, cvSkillNames, selec
                 <button type="button" className="btn btn-sm srb-btn-outline" key={s.name}
                   onClick={() => s.skill_id ? onLearn(s.skill_id) : undefined}
                   disabled={!s.skill_id}>
-                  Learn {s.name}
+                  Learn {humanizeTopicLabel(s.name)}
                 </button>
               ))}
             </div>
@@ -698,7 +699,7 @@ function RoleDetailsDrawer({ role, others, match, noCvSkills, profileByName, evi
         {items.map(({ s, status, ev }) => (
           <li key={s.name} className={`srb-skill ${status}`}>
             <span className="srb-dot" aria-hidden="true" />
-            <span className="srb-skill-name">{s.name} <small>{s.required_level}</small>{s.skill_kind === 'optional' && <small className="rd-kind">optional</small>}</span>
+            <span className="srb-skill-name">{humanizeTopicLabel(s.name)} <small>{s.required_level}</small>{s.skill_kind === 'optional' && <small className="rd-kind">optional</small>}</span>
             <span className={`rd-ev ${ev}`}>{ev === 'verified' ? 'verified' : ev === 'self' ? 'self-report' : 'no evidence'}</span>
             <span className="srb-skill-state">
               {status === 'have' ? '✓ you have this' : status === 'developing' ? '⚠ leveling up' : '○ missing'}
@@ -780,7 +781,7 @@ function RoleDetailsDrawer({ role, others, match, noCvSkills, profileByName, evi
                 <button type="button" className="btn btn-sm srb-btn-outline" key={s.name}
                   onClick={() => s.skill_id ? onLearn(s.skill_id) : undefined}
                   disabled={!s.skill_id}>
-                  Learn {s.name}
+                  Learn {humanizeTopicLabel(s.name)}
                 </button>
               ))}
             </div>
@@ -1009,7 +1010,7 @@ function CompareModal({ roles, matches, profileByName, evidence, scenarioNoteFor
                 <span className="rd-cmp-cell" key={r.id}>
                   <strong>{have.length} of {r.required_skills.length}</strong>
                   <span className="rd-cmp-names">{verified} verified · {self} self-reported</span>
-                  {have.length > 0 && <span className="rd-cmp-names">{have.slice(0, 6).map((s) => s.name).join(' · ')}{have.length > 6 ? '…' : ''}</span>}
+                  {have.length > 0 && <span className="rd-cmp-names">{have.slice(0, 6).map((s) => humanizeTopicLabel(s.name)).join(' · ')}{have.length > 6 ? '…' : ''}</span>}
                 </span>
               )
             })}
@@ -1043,7 +1044,7 @@ function CompareModal({ roles, matches, profileByName, evidence, scenarioNoteFor
               return (
                 <span className="rd-cmp-cell" key={r.id}>
                   {gaps.length === 0 ? <span className="rd-cmp-names">None</span>
-                    : <><strong>{gaps.length} to develop</strong><span className="rd-cmp-names">{gaps.slice(0, 5).map((s) => s.name).join(' · ')}{gaps.length > 5 ? '…' : ''}</span></>}
+                    : <><strong>{gaps.length} to develop</strong><span className="rd-cmp-names">{gaps.slice(0, 5).map((s) => humanizeTopicLabel(s.name)).join(' · ')}{gaps.length > 5 ? '…' : ''}</span></>}
                 </span>
               )
             })}
@@ -2635,7 +2636,7 @@ function CompanyRoles({ company }: { company?: any }) {
               </div>
               <div className="sro3-skill-row">
                 {r.required_skills.map((s) => (
-                  <span className="skill-tag" key={s.skill_id}>{s.name} <span className="lv">{s.required_level}</span></span>
+<span className="skill-tag" key={s.skill_id}>{humanizeTopicLabel(s.name)} <span className="lv">{s.required_level}</span></span>
                 ))}
               </div>
               <RoleMappingPanel role={r} onChanged={refresh} />

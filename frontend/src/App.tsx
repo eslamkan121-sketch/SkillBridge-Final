@@ -16,7 +16,7 @@ import { CopilotPanel } from './components/CopilotPanel'
 import CopilotOnboarding from './components/CopilotOnboarding'
 import CopilotSettingsModal from './components/CopilotSettingsModal'
 
-type Section = 'dashboard' | 'skills' | 'learning' | 'scenarios' | 'assessments' | 'university' | 'copilot'
+type Section = 'dashboard' | 'skills' | 'learning' | 'scenarios' | 'assessments' | 'university'
 
 function avatarInitials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean)
@@ -65,7 +65,7 @@ function Shell() {
 
   const titles: Record<Section, string> = {
     dashboard: 'Dashboard', skills: 'Skills & Roles', learning: 'Learning', scenarios: 'Practice Scenarios',
-    assessments: 'Assessments', university: 'University Dashboard', copilot: 'AI Copilot',
+    assessments: 'Assessments', university: 'University Dashboard',
   }
   React.useEffect(() => {
     document.title = `${titles[section]} · SkillBridge`
@@ -81,7 +81,6 @@ function Shell() {
     { key: 'learning', label: 'Learning', icon: <IconLearning size={18} />, show: role === 'Student' },
     { key: 'scenarios', label: 'Practice', icon: <IconBolt size={18} />, show: role === 'Student' },
     { key: 'assessments', label: 'Assessments', icon: <IconAssessment size={18} />, show: role === 'Student' },
-    { key: 'copilot', label: 'AI Copilot', icon: <IconSparkles size={18} />, show: role === 'Student', href: '/build-your-copilot.html' },
     { key: 'university', label: 'University Dashboard', icon: <IconUniversity size={18} />, show: role === 'University Admin' },
   ]
   const visibleNav = nav.filter((n) => n.show)

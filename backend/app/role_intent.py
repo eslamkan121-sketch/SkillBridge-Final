@@ -115,7 +115,8 @@ _FAMILY_TERMS = {
                  "typescript", "golang", "node", "react", "api", "devops", "cloud",
                  "machine-learning", "ai", "ml", "infrastructure", "web"},
     "data": {"data", "analytics", "database", "sql", "bi", "warehouse", "etl",
-             "machine-learning", "statistics", "datascience", "analytics"},
+             "machine-learning", "statistics", "datascience", "analytics",
+             "geospatial", "gis", "mapping", "surveying", "survey"},
     "design": {"design", "graphic", "visual", "brand", "ui", "ux", "typography",
                "illustrator", "photoshop", "figma", "creative", "product-design"},
     "marketing": {"marketing", "growth", "seo", "sem", "content", "brand", "digital-marketing",
@@ -125,7 +126,7 @@ _FAMILY_TERMS = {
                 "treasury", "forecasting", "budgeting", "investment", "controller",
                 "revenue", "actuarial", "credit", "risk", "compliance"},
     "architecture": {"architecture", "architectural", "bim", "revit", "autocad", "drafting",
-                     "interior-design", "landscape", "urban", "cad", "spatial"},
+                     "interior-design", "interior", "interiors", "landscape", "urban", "cad", "spatial"},
     "clinical": {"clinical", "clinical-research", "clinical-trials", "trial", "pharma",
                  "biospecimen", "crc", "cra", "regulatory", "medical", "study"},
     "legal": {"legal", "paralegal", "law", "litigation", "compliance", "contract",
@@ -242,15 +243,26 @@ def family_of(title):
     family vocabularies; the strongest family wins. Generic tails never decide a
     family, so "Financial Analyst" -> finance (not "analyst"), and "Cybersecurity
     Analyst" -> security (not "analyst"/"data").
+
+    A family is only committed when at least one token is an EXACT member of
+    that family's vocabulary. The loose substring rule ("crypto" inside
+    "cryptography", "services" inside "customer-services") can back-score a
+    family, but on its own it is not career evidence — a single coincidental
+    substring is how titles like "Junior Crypto Analyst & Trader" or "Work From
+    Home Bilingual Client Services Representative" used to land in the security
+    family and pollute cybersecurity feeds. Substring matches still rank
+    *between* families that both show exact membership.
     """
     dom = domain_tokens(title)
     if not dom:
         return ""
     best, best_score = "", 0
     for fam, terms in _FAMILY_TERMS.items():
+        exact = False
         score = 0
         for t in dom:
             if t in terms:
+                exact = True
                 score += 2
             else:
                 for term in terms:
@@ -258,7 +270,7 @@ def family_of(title):
                             and (t in term or term in t)):
                         score += 1
                         break
-        if score > best_score:
+        if exact and score > best_score:
             best, best_score = fam, score
     return best
 

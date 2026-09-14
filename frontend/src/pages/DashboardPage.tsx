@@ -2,18 +2,23 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useApp } from '../AppContext'
 import { api } from '../lib/api'
 import { RELOCATION_MARKETS, marketLabel } from '../lib/markets'
-import type { Analysis, ActivitySummary, ScenarioLibrary, Student, RoleRecord, Candidate, RoleSkillCoverage, RecentJob, RecentJobsResponse, ProviderReport, JobsHealthPayload } from '../lib/types'
+import type { Analysis, ActivitySummary, ScenarioLibrary, Student, RoleRecord, Candidate, RoleSkillCoverage, RecentJob, RecentJobsResponse, ProviderReport, JobsHealthPayload, TrackerResponse } from '../lib/types'
 import { GapPill, SkillTag, LevelBadge, ScoreRing } from '../components/widgets'
 import MatchBreakdown from '../components/MatchBreakdown'
 import JobTrackerPanel from '../components/JobTrackerPanel'
-import { IconArrowRight, IconCheck, IconVerified, IconFlame, IconBolt, IconLeaderboard, IconTrophy, IconExternal, IconShield, IconUpload, IconBookmark } from '../components/Icons'
+import JourneySpine from '../components/JourneySpine'
+import PrepareJobModal from '../components/PrepareJobModal'
+import { humanizeTopicLabel } from '../lib/topicLabels'
+import { IconArrowRight, IconCheck, IconVerified, IconExternal, IconShield, IconUpload, IconBookmark } from '../components/Icons'
 
 // ---------------------------------------------------------------------------
 // Recommended Next Step — documented deterministic priority (first match wins).
 //
 //   P1. No target role / no analysis        -> Skills & Roles (choose a target)
 //   P2. Scenario currently in progress      -> Practice (resume it)
-//   P3. First non-strong required skill:
+//   P3. First non-strong required skill,
+//       preferring one with existing (gap) evidence over an unrelated missing
+//       requirement — the journey points at the gaps that matter next:
 //         - has a matching, not-yet-completed scenario  -> Practice that skill
 //         - otherwise                                    -> Learning that skill
 //   P4. All required skills strong but one is still
@@ -41,7 +46,7 @@ function nextStep(analysis: Analysis | undefined, lib: ScenarioLibrary | null, r
   if (inProgress) return { action: 'scenarios', label: 'Resume your practice session', roleTitle }
   const gaps = analysis.skill_gaps || []
   const nonStrong = gaps.filter((g) => g.status !== 'strong')
-  const target = nonStrong.find((g) => g.status === 'missing') || nonStrong[0]
+  const target = nonStrong.find((g) => g.status === 'gap') || nonStrong.find((g) => g.status === 'missing') || nonStrong[0]
   if (target) {
     const skillCard = cards.find((c) =>
       (c.skills || []).some((s) => s.toLowerCase() === (target.skill_name || '').toLowerCase()) && c.status !== 'completed')
@@ -169,12 +174,10 @@ function JobsCard({ student, onSaved, onNavigate }: { student?: Student; onSaved
     applyCopilot({ page: 'jobs', skillId: null, competency: null, jobTitle: j.title, jobUrl: j.url || null })
   }
 
-  const prepareJob = (j: RecentJob) => {
-    applyCopilot({ page: 'jobs', skillId: null, competency: null, jobTitle: j.title, jobUrl: j.apply_url || j.url || null })
-    // Jobs do not invent a "correct" skill to study.  The Skills hub preserves
-    // the learner's chosen role and lets them select a real gap to work on.
-    onNavigate?.('skills')
-  }
+  // Phase Q (D4): Prepare opens the grounded readiness dialog; focus returns to
+  // the clicked button when it closes. The old "hop to the Skills hub" gone.
+  const [prep, setPrep] = useState<RecentJob | null>(null)
+  const prepBtnRef = useRef<HTMLButtonElement | null>(null)
 
   const reportLink = async (j: RecentJob) => {
     if (!me?.student?.id || !j.fingerprint) return
@@ -391,7 +394,7 @@ function JobsCard({ student, onSaved, onNavigate }: { student?: Student; onSaved
                         {savingFp === j.fingerprint ? 'Saving…'
                           : savedFps.has(j.fingerprint) ? 'Saved · tracked' : 'Save to tracker'}
                       </button>
-                      <button type="button" className="btn btn-sm btn-secondary" onClick={() => prepareJob(j)}>Prepare</button>
+                      <button type="button" className="btn btn-sm btn-secondary" onClick={(e) => { prepBtnRef.current = e.currentTarget; setPrep(j) }}>Prepare</button>
                       <button type="button" className="btn btn-sm btn-secondary" disabled={reportedFps.has(j.fingerprint)} onClick={() => reportLink(j)}>{reportedFps.has(j.fingerprint) ? 'Link reported' : 'Report link'}</button>
                     </div>
                     <MatchBreakdown kind="job" pct={pct}
@@ -429,6 +432,14 @@ function JobsCard({ student, onSaved, onNavigate }: { student?: Student; onSaved
         <div className="empty">No recent roles available right now.</div>
       )}
       {healthOpen && <div className="jobn-modal-backdrop" onMouseDown={() => setHealthOpen(false)}><div className="jobn-health" role="dialog" aria-modal="true" aria-label="Job provider status" onKeyDown={(e) => { if (e.key === 'Escape') setHealthOpen(false) }} onMouseDown={(e) => e.stopPropagation()} tabIndex={-1}><div className="flex between"><h3>Provider status</h3><button type="button" className="btn btn-sm btn-secondary" autoFocus onClick={() => setHealthOpen(false)}>Close</button></div>{health?.jobs ? <><p className="small muted">Last build: {health.jobs.last_build_at || 'not built yet'}</p><p className="small muted">Cache: {health.jobs.cache?.hits || 0} hits · {health.jobs.cache?.misses || 0} misses</p><div className="stack">{Object.entries(health.jobs.providers_health || {}).map(([name, state]) => <div key={name} className="resource"><strong>{name}</strong><span className="small muted">{state}{health.jobs?.last_error_by_provider?.[name] ? ` · ${health.jobs.last_error_by_provider[name]}` : ''}</span></div>)}</div></> : <p className="small muted">Loading provider status…</p>}</div></div>}
+      {prep && student ? (
+        <PrepareJobModal
+          student={student}
+          job={prep}
+          onClose={() => { setPrep(null); prepBtnRef.current?.focus() }}
+          onNavigate={onNavigate}
+        />
+      ) : null}
     </div>
   )
 }
@@ -448,6 +459,9 @@ function StudentDashboard({ student, analysis, onNavigate }: { student?: Student
   const [shareOn, setShareOn] = useState(!!student?.share_public)
   const [copied, setCopied] = useState('')
   const [scenarioLib, setScenarioLib] = useState<ScenarioLibrary | null>(null)
+  const [tracker, setTracker] = useState<TrackerResponse | null>(null)
+  const jobsRef = useRef<HTMLDivElement>(null)
+  const trackerRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     applyCopilot({ page: 'dashboard', skillId: null, competency: null, jobTitle: null, jobUrl: null })
   }, [])
@@ -459,6 +473,9 @@ function StudentDashboard({ student, analysis, onNavigate }: { student?: Student
   useEffect(() => {
     if (student?.id) api.scenarios(student.id).then(setScenarioLib).catch(() => {})
   }, [student?.id])
+  useEffect(() => {
+    if (student?.id) api.jobTracker(student.id).then(setTracker).catch(() => {})
+  }, [student?.id, trackerTick])
   useEffect(() => setShareOn(!!student?.share_public), [student?.share_public])
   if (!student) return <div className="empty">No student profile linked to this account.</div>
 
@@ -467,7 +484,19 @@ function StudentDashboard({ student, analysis, onNavigate }: { student?: Student
   const needsPractice = gaps.filter((g) => g.status === 'gap').length
   const missingCount = gaps.filter((g) => g.status === 'missing').length
   const gapCount = gaps.filter((g) => g.status !== 'strong').length
-  const xpPct = activity ? Math.min(100, (activity.xp_into_level / activity.xp_per_level) * 100) : 0
+  const ns = nextStep(analysis, scenarioLib, analysis?.role_title || '')
+  const verifiedCount = student.verified_skills.length
+
+  const focusSpot = (el: HTMLDivElement | null) => {
+    if (!el || typeof el.scrollIntoView !== 'function') return
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    el.classList.add('jny-spotlight')
+    window.setTimeout(() => el.classList.remove('jny-spotlight'), 1800)
+  }
+  const onFocus = (target: 'find' | 'track') => {
+    if (target === 'find') { focusSpot(jobsRef.current); focusSpot(trackerRef.current) }
+    else focusSpot(trackerRef.current)
+  }
 
   const hasSkills = student.self_reported_skills.length > 0 || student.verified_skills.length > 0
 
@@ -526,33 +555,28 @@ function StudentDashboard({ student, analysis, onNavigate }: { student?: Student
           )}
         </div>
         {activity && (
-          <div className="activity-card card mt" style={{ marginTop: 18 }}>
-            <div className="act-head">
-              <h3 style={{ margin: 0 }}>My Learning Activity</h3>
-              <span className="act-lb">
-                Level {activity?.level ?? '–'}
-                <span className="act-level-bar"><span style={{ width: `${xpPct}%` }} /></span>
-                <span className="small muted">{activity ? `${activity.xp_into_level}/${activity.xp_per_level} XP` : ''}</span>
-              </span>
-            </div>
-            <div className="act-grid">
-              <div className="act-tile">
-                <div className="act-ico coral"><IconFlame size={20} /></div>
-                <div><strong>{activity?.streak_days ?? '–'}-day streak</strong><small className="muted">Keep a login streak going</small></div>
-              </div>
-              <div className="act-tile">
-                <div className="act-ico amber"><IconBolt size={20} /></div>
-                <div><strong>{activity?.xp ?? '–'} XP</strong><small className="muted">{activity?.active_days ?? 0} active days</small></div>
-              </div>
-              <div className="act-tile">
-                <div className="act-ico green"><IconTrophy size={20} /></div>
-                <div><strong>{activity?.verified_skills ?? 0} verified</strong><small className="muted">{activity?.assessments_taken ?? 0} assessments taken</small></div>
-              </div>
-            </div>
-          </div>
+          <LearningActivityMini activity={activity} />
         )}
-        <JobsCard student={student} onSaved={() => setTrackerTick((n) => n + 1)} onNavigate={onNavigate} />
-        <JobTrackerPanel student={student} refreshKey={trackerTick} />
+        <JourneySpine
+          analysis={false}
+          roleTitle={''}
+          gapCount={0}
+          verifiedCount={verifiedCount}
+          hasCv={hasSkills}
+          scenarioCount={0}
+          trackerCount={tracker?.items?.length || 0}
+          interviewCount={(tracker?.items || []).filter((i) => i.stage === 'interview' || i.stage === 'offer').length}
+          nextLabel={ns.label}
+          nextAction={ns.action}
+          onGo={go}
+          onFocus={onFocus}
+        />
+        <div ref={jobsRef} className="jny-board" data-dash-board="jobs">
+          <JobsCard student={student} onSaved={() => setTrackerTick((n) => n + 1)} onNavigate={onNavigate} />
+        </div>
+        <div ref={trackerRef} className="jny-board" data-dash-board="tracker">
+          <JobTrackerPanel student={student} refreshKey={trackerTick} />
+        </div>
       </div>
     )
   }
@@ -583,6 +607,21 @@ function StudentDashboard({ student, analysis, onNavigate }: { student?: Student
           onRequest={() => api.targetRoleMatchBreakdown(student.id)} />
       )}
 
+      <JourneySpine
+        analysis={true}
+        roleTitle={analysis.role_title}
+        gapCount={gapCount}
+        verifiedCount={verifiedCount}
+        hasCv={hasSkills}
+        scenarioCount={scenarioLib?.scenarios?.length || 0}
+        trackerCount={tracker?.items?.length || 0}
+        interviewCount={(tracker?.items || []).filter((i) => i.stage === 'interview' || i.stage === 'offer').length}
+        nextLabel={ns.label}
+        nextAction={ns.action}
+        onGo={go}
+        onFocus={onFocus}
+      />
+
       <div className="insight-grid">
         <div className="insight-card">
           <span className="label">Verified Skills</span>
@@ -599,16 +638,21 @@ function StudentDashboard({ student, analysis, onNavigate }: { student?: Student
         </div>
         <div className="insight-card">
           <span className="label">Recommended Next Step</span>
-          <strong className="next-step-label">{nextStep(analysis, scenarioLib, analysis.role_title).label}</strong>
+          <strong className="next-step-label">{ns.label}</strong>
           <small>{gapCount === 0 ? 'Career ready' : `${gapCount} skill gap${gapCount === 1 ? '' : 's'} to close`}</small>
-          <NextStepAction step={nextStep(analysis, scenarioLib, analysis.role_title)} go={go} roleTitle={analysis.role_title} />
+          <NextStepAction step={ns} go={go} roleTitle={analysis.role_title} />
+          {ns.action === null && gapCount === 0 && (
+            <button type="button" className="btn btn-sm dash-next-go" onClick={() => onFocus('find')}>
+              Find your match &amp; apply <IconArrowRight size={13} />
+            </button>
+          )}
         </div>
       </div>
 
       <div className="grid grid-2">
         <div className="card">
           <h3>Skill Gap Map</h3>
-          <p className="card-sub">{strong} covered · {gapCount} to improve — the single score above is the same number these rows add up to.</p>
+          <p className="card-sub">{strong} covered · {gapCount} to improve — the single score above is the same number these rows add up to. Levels come from your CV / practice evidence: a row marked verified is the only one confirmed by a passed assessment.</p>
           <div className="legend">
             <span className="item"><GapPill status="strong" /> Strong</span>
             <span className="item"><GapPill status="gap" /> Gap</span>
@@ -621,7 +665,7 @@ function StudentDashboard({ student, analysis, onNavigate }: { student?: Student
               gaps.map((g) => (
                 <div className="skill-row" key={g.skill_id}>
                   <div>
-                    <div className="sr-name">{g.skill_name}</div>
+                    <div className="sr-name">{humanizeTopicLabel(g.skill_name)}</div>
                     <div className="sr-cat">{g.category}</div>
                   </div>
                   <div className="sr-right">
@@ -639,7 +683,7 @@ function StudentDashboard({ student, analysis, onNavigate }: { student?: Student
           <p className="card-sub">One row per skill — verified status always reflects your best evidence.</p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {skillRows.map((s) => (
-              <SkillTag key={`${s.name}-${s.verified}`} name={s.name} level={s.level} verified={s.verified} />
+              <SkillTag key={`${s.name}-${s.verified}`} name={humanizeTopicLabel(s.name)} level={s.level} verified={s.verified} />
             ))}
             {skillRows.length === 0 && (
               <div className="stack" style={{ width: '100%', gap: 12 }}>
@@ -699,44 +743,29 @@ function StudentDashboard({ student, analysis, onNavigate }: { student?: Student
         </div>
       </div>
 
-      <div className="activity-card card mt" style={{ marginTop: 18 }}>
-        <div className="act-head">
-          <h3 style={{ margin: 0 }}>My Learning Activity</h3>
-          <span className="act-lb">
-            Level {activity?.level ?? '–'}
-            <span className="act-level-bar"><span style={{ width: `${xpPct}%` }} /></span>
-            <span className="small muted">{activity ? `${activity.xp_into_level}/${activity.xp_per_level} XP` : ''}</span>
-          </span>
-        </div>
-        <div className="act-grid">
-          <div className="act-tile">
-            <div className="act-ico coral"><IconFlame size={20} /></div>
-            <div><strong>{activity?.streak_days ?? '–'}-day streak</strong><small className="muted">Keep a login streak going</small></div>
-          </div>
-          <div className="act-tile">
-            <div className="act-ico amber"><IconBolt size={20} /></div>
-            <div><strong>{activity?.xp ?? '–'} XP</strong><small className="muted">{activity?.active_days ?? 0} active days</small></div>
-          </div>
-          <div className="act-tile">
-            <div className="act-ico green"><IconTrophy size={20} /></div>
-            <div><strong>{activity?.verified_skills ?? 0} verified</strong><small className="muted">{activity?.assessments_taken ?? 0} assessments taken</small></div>
-          </div>
-        </div>
-        <div className="act-badges">
-          {(activity?.badges || []).filter((b) => b.earned).slice(0, 6).map((b) => (
-            <span className="badge-chip earned" key={b.code} title={b.desc}>{b.name}</span>
-          ))}
-          {(activity?.badges || []).filter((b) => !b.earned).slice(0, 3).map((b) => (
-            <span className="badge-chip locked" key={b.code} title={b.hint || b.desc}>{b.name}</span>
-          ))}
-        </div>
-        <div className="act-note small muted">
-          <IconLeaderboard size={13} /> {activity?.leaderboard?.message || 'Cohort leaderboard'}
-        </div>
-      </div>
+      <LearningActivityMini activity={activity} />
 
-      <JobsCard student={student} onSaved={() => setTrackerTick((n) => n + 1)} onNavigate={onNavigate} />
-      <JobTrackerPanel student={student} refreshKey={trackerTick} />
+      <div ref={jobsRef} className="jny-board" data-dash-board="jobs">
+        <JobsCard student={student} onSaved={() => setTrackerTick((n) => n + 1)} onNavigate={onNavigate} />
+      </div>
+      <div ref={trackerRef} className="jny-board" data-dash-board="tracker">
+        <JobTrackerPanel student={student} refreshKey={trackerTick} />
+      </div>
+    </div>
+  )
+}
+
+function LearningActivityMini({ activity }: { activity: ActivitySummary | null }) {
+  if (!activity) return null
+  return (
+    <div className="activity-card card mt" style={{ marginTop: 18 }}>
+      <div className="act-head" style={{ alignItems: 'center' }}>
+        <h3 style={{ margin: 0, fontSize: 15 }}>My Learning Activity</h3>
+        <span className="act-mini small muted">
+          <IconVerified size={14} style={{ verticalAlign: -2, marginRight: 4 }} />
+          {activity.verified_skills ?? 0} verified skills · {activity.assessments_taken ?? 0} assessments · {activity.active_days ?? 0} active days
+        </span>
+      </div>
     </div>
   )
 }

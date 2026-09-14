@@ -1,8 +1,9 @@
-// Step 4.5 — frontend source contract guard (driven by pytest, like
+// Step 4.5 / Phase 4A — frontend source contract guard (driven by pytest, like
 // check-tutor-language.mjs). Verifies the actual browser-side code keeps the
-// Step 4.5 FINAL CORRECTION contracts: per-tutor conversations, New Chat,
+// Step 4.5 FINAL CORRECTION contracts plus Phase 4A conversation UX:
+// conversation-id chat history, nondestructive New Chat,
 // interview isolation, profile Back to Chat, expand/collapse overlay, chat
-// voice (tutor TTS), microphone input, one-per-avatar Mock Interview, and the
+// voice (tutor TTS), microphone input, composer Mock Interview, and the
 // dedicated assessment exam flow (no readiness gate, Copilot hidden while the
 // assessment runs, exit finalization). Fails the run if any contract regresses.
 
@@ -23,11 +24,15 @@ const css = read('frontend/src/index.css')
 const i18n = read('frontend/src/lib/tutorI18n.ts')
 
 // ---- api.ts
-ok(/tutorHistory: \(studentId: number, tutorId\?: string\) =>/.test(api),
-   'api.ts: tutorHistory accepts an optional tutorId')
-ok(/tutor_id=\$\{encodeURIComponent\(tutorId\)\}/.test(api),
-   'api.ts: tutorHistory sends the tutor_id query param')
-ok(/clearTutorChat: \(studentId: number, tutorId: string\) =>/.test(api),
+ok(/tutorConversations: \(studentId: number/.test(api),
+   'api.ts: tutorConversations lists saved chat history')
+ok(/newTutorConversation: \(studentId: number, tutorId: string\)/.test(api),
+   'api.ts: newTutorConversation creates a nondestructive chat')
+ok(/tutorHistory: \(studentId: number, tutorId\?: string, conversationId\?: number \| null\)/.test(api),
+   'api.ts: tutorHistory accepts tutorId plus conversationId')
+ok(/qs\.set\('conversation_id', String\(conversationId\)\)/.test(api),
+   'api.ts: tutorHistory sends the conversation_id query param')
+ok(/clearTutorChat: \(studentId: number, tutorId: string, conversationId\?: number \| null\)/.test(api),
    'api.ts: clearTutorChat exists')
 ok(/method: 'DELETE'/.test(api), 'api.ts: clearTutorChat uses DELETE')
 ok(/tutorTts: \(studentId: number, tutor: string, text: string\) =>/.test(api),
@@ -37,6 +42,8 @@ ok(/tutorId\?: string \| null/.test(api),
    'api.ts: tutorSend accepts the selected tutorId')
 ok(/tutor_id: opts\.tutorId \?\? null/.test(api),
    'api.ts: tutorSend sends tutor_id with each message')
+ok(/conversation_id: opts\.conversationId \?\? null/.test(api),
+   'api.ts: tutorSend sends conversation_id with each message')
 ok(/finalizeAssessment: \(studentId: number, body: any\) =>/.test(api),
    'api.ts: finalizeAssessment exists')
 ok(/assessments\/finalize/.test(api), 'api.ts: finalizeAssessment targets /assessments/finalize')
@@ -44,16 +51,25 @@ ok(/assessments\/finalize/.test(api), 'api.ts: finalizeAssessment targets /asses
 // ---- types.ts
 ok(/tutor_id\?: string \| null/.test(types),
    'types.ts: TutorMessage carries an optional tutor_id')
+ok(/conversation_id\?: number \| null/.test(types),
+   'types.ts: TutorMessage carries an optional conversation_id')
+ok(/interface TutorConversation/.test(types),
+   'types.ts: TutorConversation is defined')
 
 // ---- CopilotPanel
-ok(/Record<TutorId, TutorMessage\[\]>/.test(panel),
-   'CopilotPanel: conversations are stored per tutor')
+ok(/Record<number, TutorMessage\[\]>/.test(panel),
+   'CopilotPanel: normal chat messages are stored per conversation')
+ok(/activeConversationId/.test(panel),
+   'CopilotPanel: active conversation id is tracked')
+ok(/history-drawer/.test(panel),
+   'CopilotPanel: conversation history drawer is rendered')
 ok(/interviewThreads/.test(panel), 'CopilotPanel: interview threads are stored per tutor')
 ok(/interviewLocked = .*starting.*active/.test(panel),
    'CopilotPanel: interview pin state derives from starting/active phases')
 ok(!/TutorSelector/.test(panel) && /interviewLocked/.test(panel),
-   'CopilotPanel: no in-panel tutor switch exists, so the interview tutor is pinned (stronger than disabled)')
+   'CopilotPanel: no avatar-strip tutor switch exists, and the interview tutor is pinned')
 ok(/api\.clearTutorChat/.test(panel), 'CopilotPanel: conversation reset calls clearTutorChat')
+ok(/api\.newTutorConversation/.test(panel), 'CopilotPanel: New Chat creates a new conversation instead of clearing')
 ok(/copilot-expanded/.test(panel), 'CopilotPanel: expand/collapse toggles the overlay class')
 ok(/api\.tutorTts/.test(panel), 'CopilotPanel: reply voice uses api.tutorTts')
 ok(/tutorId,/.test(panel), 'CopilotPanel: selected tutorId is sent with tutor messages')
@@ -86,9 +102,12 @@ ok(!/<span>\{speakingKey === `i-\$\{item\.id\}` \? ui\.stopSpeak : ui\.speak\}<\
 ok(!/<span>\{speakingKey === `m-\$\{message\.id\}` \? ui\.stopSpeak : ui\.speak\}<\/span>/.test(panel),
    'CopilotPanel: reply voice button is icon-only — no visible Speak/Stop text')
 
-// ---- Mock Interview lives inside every avatar (single primary CTA in the panel)
-ok(/phase === 'idle'/.test(panel), 'CopilotPanel: Mock Interview CTA is shown when no interview is running')
+// ---- Mock Interview lives in the composer tools menu
+ok(/toolActions/.test(panel) && /ui\.mockInterviewAction/.test(panel),
+   'CopilotPanel: Mock Interview is exposed from the composer tools menu')
 ok(/startInterview/.test(panel), 'CopilotPanel: interview starts from the panel')
+ok(!/copilot-interview-hero/.test(panel),
+   'CopilotPanel: Mock Interview is not a persistent chat card')
 ok(!/Use Vex|Vex \(recommended\)|\(recommended\)/.test(panel),
    'CopilotPanel: no Vex-only recommendation is shown for other avatars')
 
@@ -128,11 +147,14 @@ ok(/copilot-expanded/.test(css), 'index.css: expanded overlay styles exist')
 ok(/copilot-msg-voice/.test(css), 'index.css: chat voice button styles exist')
 ok(/copilot-pin-note/.test(css), 'index.css: interview pinned-note styles exist')
 ok(/copilot-mic/.test(css), 'index.css: microphone control styles exist')
+ok(/history-drawer/.test(css), 'index.css: conversation history drawer styles exist')
+ok(/composer-tools-menu/.test(css), 'index.css: composer tools menu styles exist')
+ok(/chat-clear-modal/.test(css), 'index.css: clear-chat modal styles exist')
 ok(/copilot-open \{ max-height/.test(css),
    'index.css: the open panel is height-bounded so controls are never clipped')
 ok(/\.copilot-body \{ .*overflow-y: auto/.test(css),
    'index.css: the panel body scrolls internally')
-for (const key of ['newChat', 'newChatConfirm', 'clearChat', 'clearChatConfirm', 'cancel', 'clear', 'expand', 'collapse', 'backToChat', 'speak', 'stopSpeak', 'interviewPinned', 'micAria', 'micListeningAria', 'voiceUnavailable']) {
+for (const key of ['newChat', 'newChatConfirm', 'history', 'chatHistory', 'changeMentor', 'clearChat', 'clearChatTitle', 'clearChatConfirm', 'cancel', 'clear', 'expand', 'collapse', 'backToChat', 'speak', 'stopSpeak', 'interviewPinned', 'micAria', 'micListeningAria', 'voiceUnavailable', 'toolsAria', 'toolsMenu', 'mockInterviewAction']) {
   ok(new RegExp(`\\b${key}:`).test(i18n), `tutorI18n: "${key}" string defined`)
 }
 

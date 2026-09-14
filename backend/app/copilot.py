@@ -193,10 +193,11 @@ def personality_for_config(config):
     """TUTOR_PERSONAS-shaped personality dict from a stored copilot config.
 
     This is the additive ``personality`` override passed to
-    ``genai.tutor_reply``: when present, the composed system prompt describes
-    the mentor (e.g. "You are Nova") instead of the voice agent's own fixed
-    persona, so personality/capability follow the per-user config while the
-    voice stays a shared agent reference. ``None`` keeps current behavior.
+    ``genai.tutor_reply``: it is layered ON TOP of the voice agent's fixed
+    persona (base mentor + optional user customization = final persona), so
+    personality/capability follow the per-user config while the base mentor's
+    identity and teaching strategy stay intact and the voice stays a shared
+    agent reference. ``None`` keeps current behavior.
     """
     if not config:
         return None

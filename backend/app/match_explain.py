@@ -33,8 +33,6 @@ ROLE_MATCH_VERSION = "role-match-v1"
 JOB_MATCH_FORMULA = "job-match"
 JOB_MATCH_VERSION = "job-match-v1"
 
-_LEVEL_SCORE = {"Beginner": 1, "Intermediate": 2, "Advanced": 3}
-
 
 class MatchExplainError(Exception):
     """Raised by the breakdown builders when a request cannot be satisfied or
@@ -90,10 +88,11 @@ def target_role_match_breakdown(student):
     """Decompose the Dashboard's ``analysis.match_score`` for the student's
     current target role.
 
-    Reuses ``matching.categorize`` for the per-skill rows and re-runs the exact
-    ``job_match_score`` loop shape (equal weight per required skill; full
-    credit at/above requirement, partial credit by progress, zero when missing)
-    so the recomputed total must equal the displayed percent. Raises
+    Reuses ``matching.categorize`` for the per-skill rows and the SAME
+    per-requirement credit helper ``job_match_score`` uses (equal weight per
+    required skill; full credit at/above requirement, partial credit by
+    progress, reduced credit for adjacent-name evidence, zero when missing) so
+    the recomputed total must equal the displayed percent. Raises
     ``MatchExplainError`` on parity failure or a missing target role.
     """
     role = student.get("target_role") if student else None
@@ -107,12 +106,8 @@ def target_role_match_breakdown(student):
     detail = []
     for r in rows:
         student_level = r["student_level"]
-        if student_level is None:
-            contribution = 0.0
-        else:
-            sv = _LEVEL_SCORE[student_level]
-            rv = _LEVEL_SCORE[r["required_level"]]
-            contribution = 1.0 if sv >= rv else sv / rv
+        contribution = matching.requirement_credit(
+            student_level, r["required_level"], r.get("matched_by") or "id")
         earned += contribution
         detail.append({
             "skill_id": r["skill_id"],
@@ -121,6 +116,8 @@ def target_role_match_breakdown(student):
             "required_level": r["required_level"],
             "student_level": student_level,
             "status": r["status"],
+            "matched_by": r.get("matched_by"),
+            "matched_skill": r.get("matched_skill"),
             "evidence": "none" if student_level is None else _evidence_of(r["verified"]),
             "contribution_points": round(contribution, 3),
             "max_points": 1.0,

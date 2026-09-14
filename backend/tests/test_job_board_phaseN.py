@@ -21,7 +21,7 @@ def test_migration_0008_creates_private_idempotent_link_reports(tmp_path):
     database.set_db_for_test(conn)
     try:
         database.init_db()
-        assert database.applied_migrations()[-1]["migration_id"] == "0012_tutor_memory"
+        assert database.applied_migrations()[-1]["migration_id"] == "0013_tutor_conversations"
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(job_link_reports)")}
         assert {"student_id", "fingerprint", "url", "reported_at"} <= columns
         unique_indexes = [row for row in conn.execute("PRAGMA index_list(job_link_reports)") if row["unique"]]

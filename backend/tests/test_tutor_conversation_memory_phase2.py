@@ -95,7 +95,8 @@ def test_migration_0012_on_fresh_db(tmp_path):
     try:
         database.init_db()
         applied = [m["migration_id"] for m in database.applied_migrations()]
-        assert applied[-1] == "0012_tutor_memory"
+        assert applied[-1] == "0013_tutor_conversations"
+        assert "0012_tutor_memory" in applied
         tables = {r["name"] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
         assert "tutor_conversation_memory" in tables
@@ -117,7 +118,8 @@ def test_migration_0012_upgrades_pre_0012_db_and_preserves_messages(tmp_path):
     conn.execute("PRAGMA foreign_keys = ON")
     database.set_db_for_test(conn)
     try:
-        pre = [m for m in database.MIGRATIONS if m["id"] != "0012_tutor_memory"]
+        pre = [m for m in database.MIGRATIONS
+               if m["id"] not in ("0012_tutor_memory", "0013_tutor_conversations")]
         database.run_migrations(conn=conn, migrations=pre)
         conn.execute("INSERT INTO students (email, name) VALUES ('mem@student.edu', 'Mem')")
         sid = conn.execute("SELECT id FROM students WHERE email='mem@student.edu'").fetchone()["id"]
@@ -129,7 +131,7 @@ def test_migration_0012_upgrades_pre_0012_db_and_preserves_messages(tmp_path):
             "SELECT name FROM sqlite_master WHERE type='table'")}
 
         pending = database.run_migrations()
-        assert pending == ["0012_tutor_memory"]
+        assert pending == ["0012_tutor_memory", "0013_tutor_conversations"]
         kept = conn.execute("SELECT COUNT(*) n FROM tutor_messages WHERE student_id=?",
                             (sid,)).fetchone()["n"]
         assert kept == 3
@@ -194,7 +196,7 @@ def test_switching_back_to_nova_restores_nova_context(client, student_id, auth_h
 
     _set_pref(client, student_id, h, {"tutor_id": "nova"})
     captured = _capture_complete(monkeypatch)
-    _chat(client, student_id, h, "What was I confused about?")
+    _chat(client, student_id, h, "What did you mean?")
     user = captured["user"]
 
     assert "Conversation memory" in user
@@ -214,7 +216,7 @@ def test_sage_and_vex_histories_stay_independent(client, student_id, auth_header
 
     _set_pref(client, student_id, h, {"tutor_id": "sage"})
     captured = _capture_complete(monkeypatch)
-    _chat(client, student_id, h, "why?")
+    _chat(client, student_id, h, "What did you mean?")
     assert "critical thinking" in captured["user"]
 
 
@@ -342,7 +344,10 @@ def test_general_question_gets_no_career_pollution(client, student_id, auth_head
 
     assert "Context route: GENERAL" in user
     assert "Trusted SkillBridge context: omitted for this standalone general turn." in user
-    assert "Conversation memory" in user  # the thread memory is still available
+    # A standalone general turn that names no deictic follow-up carries NO
+    # memory block: memory is exactly where a prior career/role exchange could
+    # hand the target role to the model for a closing CTA (Phase 1C gate).
+    assert "Conversation memory" not in user
     assert "Trusted target role" not in user
     assert "Trusted current skill" not in user
 
@@ -388,7 +393,7 @@ def test_bounded_history_recent_window_plus_digest(client, student_id, auth_head
     _chat(client, student_id, h, "A turn that triggers compaction.")
 
     captured = _capture_complete(monkeypatch)
-    _chat(client, student_id, h, "The observed inbound question.")
+    _chat(client, student_id, h, "Tell me more.")
     user = captured["user"]
 
     assert "Recent conversation with this mentor" in user

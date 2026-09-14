@@ -352,7 +352,9 @@ def seed():
         c.executescript("""
             DELETE FROM google_registrations; DELETE FROM password_resets;
             DELETE FROM email_verifications;
-            DELETE FROM sessions; DELETE FROM auth_sessions; DELETE FROM assessment_attempts; DELETE FROM tutor_messages; DELETE FROM tutor_conversation_memory;
+            DELETE FROM sessions; DELETE FROM auth_sessions; DELETE FROM assessment_attempts;
+            DELETE FROM tutor_conversation_memory_threads; DELETE FROM tutor_messages;
+            DELETE FROM tutor_conversations; DELETE FROM tutor_conversation_memory;
             DELETE FROM copilot_config; DELETE FROM copilot_onboarding; DELETE FROM tutor_preferences;
             DELETE FROM learning_practice_attempts; DELETE FROM scenario_attempts; DELETE FROM saved_roles;
             DELETE FROM job_link_reports; DELETE FROM role_view_events; DELETE FROM tracker_stage_history; DELETE FROM student_job_tracker;

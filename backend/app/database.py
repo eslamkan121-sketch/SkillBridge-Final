@@ -6,6 +6,7 @@ in-memory databases for unit tests.
 """
 import datetime as dt
 import os
+import re
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -870,6 +871,186 @@ def _migration_0012_tutor_memory(conn):
                  "ON tutor_conversation_memory(student_id)")
 
 
+def _phase4a_conversation_title(content: str | None) -> str:
+    text = re.sub(r"\s+", " ", (content or "").strip())
+    if not text:
+        return "New conversation"
+    if len(text) <= 56:
+        return text
+    clipped = text[:56].rsplit(" ", 1)[0].strip()
+    return f"{clipped or text[:56].strip()}..."
+
+
+def _phase4a_default_tutor(conn, student_id: int) -> str:
+    row = conn.execute(
+        """
+        SELECT tutor_id
+        FROM tutor_preferences
+        WHERE student_id = ?
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """,
+        (student_id,),
+    ).fetchone()
+    return (row["tutor_id"] if row and row["tutor_id"] else "nova")
+
+
+def _migration_0013_tutor_conversations(conn):
+    """Phase 4A - real tutor conversation threads.
+
+    Adds first-class conversation records while preserving existing Phase 2
+    tutor-scoped storage. Legacy rows are grouped into one restored conversation
+    per student/mentor, and old compacted memory is copied into the new
+    conversation-scoped memory table.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tutor_conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+            tutor_id TEXT NOT NULL CHECK(tutor_id IN ('nova','axel','sage','vex')),
+            title TEXT NOT NULL DEFAULT 'New conversation',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+
+    tutor_message_columns = [r["name"] for r in conn.execute("PRAGMA table_info(tutor_messages)").fetchall()]
+    if "conversation_id" not in tutor_message_columns:
+        conn.execute(
+            "ALTER TABLE tutor_messages "
+            "ADD COLUMN conversation_id INTEGER REFERENCES tutor_conversations(id) ON DELETE SET NULL"
+        )
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tutor_conversations_student_updated "
+        "ON tutor_conversations(student_id, updated_at DESC, id DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tutor_conversations_student_tutor "
+        "ON tutor_conversations(student_id, tutor_id, updated_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tutor_messages_conversation "
+        "ON tutor_messages(conversation_id, id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tutor_conversation_memory_threads (
+            conversation_id INTEGER PRIMARY KEY REFERENCES tutor_conversations(id) ON DELETE CASCADE,
+            student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+            tutor_id TEXT NOT NULL CHECK(tutor_id IN ('nova','axel','sage','vex')),
+            summary TEXT NOT NULL DEFAULT '',
+            last_compacted_id INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tutor_memory_threads_student_tutor "
+        "ON tutor_conversation_memory_threads(student_id, tutor_id)"
+    )
+
+    legacy_rows = conn.execute(
+        """
+        SELECT id, student_id, tutor_id, role, content, created_at
+        FROM tutor_messages
+        WHERE conversation_id IS NULL
+        ORDER BY student_id, COALESCE(tutor_id, ''), id
+        """
+    ).fetchall()
+    grouped: dict[tuple[int, str], list[sqlite3.Row]] = {}
+    for row in legacy_rows:
+        tutor_id = row["tutor_id"] or _phase4a_default_tutor(conn, row["student_id"])
+        grouped.setdefault((row["student_id"], tutor_id), []).append(row)
+
+    for (student_id, tutor_id), messages in grouped.items():
+        first_user = next((m for m in messages if m["role"] == "user"), messages[0])
+        title = _phase4a_conversation_title(first_user["content"])
+        created_at = messages[0]["created_at"] or dt.datetime.utcnow().isoformat()
+        updated_at = messages[-1]["created_at"] or created_at
+        cursor = conn.execute(
+            """
+            INSERT INTO tutor_conversations (student_id, tutor_id, title, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (student_id, tutor_id, title, created_at, updated_at),
+        )
+        conversation_id = cursor.lastrowid
+        message_ids = [m["id"] for m in messages]
+        placeholders = ",".join("?" for _ in message_ids)
+        conn.execute(
+            f"""
+            UPDATE tutor_messages
+            SET tutor_id = COALESCE(tutor_id, ?), conversation_id = ?
+            WHERE id IN ({placeholders})
+            """,
+            [tutor_id, conversation_id, *message_ids],
+        )
+
+    memory_rows = conn.execute(
+        """
+        SELECT student_id, tutor_id, summary, last_compacted_id, updated_at
+        FROM tutor_conversation_memory
+        """
+    ).fetchall()
+    for row in memory_rows:
+        conv = conn.execute(
+            """
+            SELECT id
+            FROM tutor_conversations
+            WHERE student_id = ? AND tutor_id = ?
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 1
+            """,
+            (row["student_id"], row["tutor_id"]),
+        ).fetchone()
+        if conv:
+            conversation_id = conv["id"]
+        else:
+            cursor = conn.execute(
+                """
+                INSERT INTO tutor_conversations (student_id, tutor_id, title, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    row["student_id"],
+                    row["tutor_id"],
+                    "Restored conversation",
+                    row["updated_at"],
+                    row["updated_at"],
+                ),
+            )
+            conversation_id = cursor.lastrowid
+        conn.execute(
+            """
+            INSERT INTO tutor_conversation_memory_threads (
+                conversation_id,
+                student_id,
+                tutor_id,
+                summary,
+                last_compacted_id,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(conversation_id) DO UPDATE SET
+                summary = excluded.summary,
+                last_compacted_id = excluded.last_compacted_id,
+                updated_at = excluded.updated_at
+            """,
+            (
+                conversation_id,
+                row["student_id"],
+                row["tutor_id"],
+                row["summary"],
+                row["last_compacted_id"],
+                row["updated_at"],
+            ),
+        )
+
+
 MIGRATIONS = [
     {"id": "0001_baseline_implied_schema", "apply": _migration_0001_baseline},
     {"id": "0002_auth_sessions", "apply": _migration_0002_auth_sessions},
@@ -883,6 +1064,7 @@ MIGRATIONS = [
     {"id": "0010_copilot_onboarding", "apply": _migration_0010_copilot_onboarding},
     {"id": "0011_mentor_keys", "apply": _migration_0011_mentor_keys},
     {"id": "0012_tutor_memory", "apply": _migration_0012_tutor_memory},
+    {"id": "0013_tutor_conversations", "apply": _migration_0013_tutor_conversations},
 ]
 
 

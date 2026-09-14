@@ -49,7 +49,7 @@ def test_migration_0006_on_fresh_db(tmp_path):
         # Later additive migrations may exist; this test owns the Phase K
         # tables, not the global migration tail.
         assert "0007_role_view_events" in applied
-        assert applied[-1] == "0012_tutor_memory"
+        assert applied[-1] == "0013_tutor_conversations"
         tables = {r["name"] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
         assert "student_job_tracker" in tables and "tracker_stage_history" in tables
@@ -71,7 +71,7 @@ def test_migration_0006_upgrades_pre_0006_db_and_keeps_rows(tmp_path):
     database.set_db_for_test(conn)
     try:
         database.init_db()
-        assert database.applied_migrations()[-1]["migration_id"] == "0012_tutor_memory"
+        assert database.applied_migrations()[-1]["migration_id"] == "0013_tutor_conversations"
         counts_before = {r["name"]: conn.execute(f"SELECT COUNT(*) n FROM {r['name']}").fetchone()["n"]
                          for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 

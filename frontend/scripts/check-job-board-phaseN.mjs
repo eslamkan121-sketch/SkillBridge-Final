@@ -4,6 +4,7 @@ import { readProject } from './path-helpers.mjs'
 const problems = []
 const ok = (condition, message) => { if (!condition) problems.push(message) }
 const dash = readProject('frontend/src/pages/DashboardPage.tsx')
+const prep = readProject('frontend/src/components/PrepareJobModal.tsx')
 const api = readProject('frontend/src/lib/api.ts')
 const types = readProject('frontend/src/lib/types.ts')
 const main = readProject('backend/app/main.py')
@@ -24,7 +25,8 @@ ok(dash.includes('jobn-filterbar') && dash.includes('pagedJobs') && dash.include
 ok(dash.includes('Provider status') && dash.includes('jobsHealth'), 'provider-status drawer exists')
 ok(dash.includes('rel="noopener noreferrer"'), 'external application links are safely isolated')
 ok(dash.includes('Report link') && dash.includes('reportDeadJobLink'), 'per-job link reporting is visible')
-ok(dash.includes("onNavigate?.('skills')"), 'Prepare action moves to the real Skills hub')
+ok(dash.includes('<PrepareJobModal') && dash.includes('setPrep(j)'), 'Prepare action renders the grounded readiness dialog')
+ok(prep.includes("go('skills'") || prep.includes("onNavigate?.('skills'"), 'the readiness dialog routes to the real Skills hub')
 for (const selector of ['.jobn-filterbar', '.jobn-pages', '.jobn-modal-backdrop', '.jobn-health']) {
   ok(css.includes(selector), `responsive style exists for ${selector}`)
 }

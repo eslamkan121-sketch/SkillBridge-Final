@@ -463,13 +463,13 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
 
         <article className="lp-stat-card">
           <div className="lp-stat-top">
-            <span className="lp-stat-icon coral"><IconBolt size={18} /></span>
+            <span className="lp-stat-icon brand"><IconBolt size={18} /></span>
             <div>
               <p className="lp-stat-label">Current streak</p>
               <p className="lp-stat-value">{activity ? <>{activity.streak_days} <small>days</small></> : '\u2014'}</p>
             </div>
           </div>
-          <div className="progress-track on-light"><div className="progress-fill" style={{ width: `${streakGoalPct}%`, background: 'var(--sb-coral)' }} /></div>
+          <div className="progress-track on-light"><div className="progress-fill" style={{ width: `${streakGoalPct}%`, background: 'var(--sb-indigo)' }} /></div>
           <p className="lp-stat-sub">{activity && activity.active_days > 0 ? `${activity.active_days} active days · 30-day goal` : 'from your activity · 30-day goal'}</p>
         </article>
 
@@ -1920,7 +1920,7 @@ function CareerRoadmapCard({ studentId, roleTitle }: { studentId: number; roleTi
                         : []
                     ).map((deliverable, i) => (
                       <div className="cr-deliverable" key={i}>
-                        <span className="rm-checkbox" style={{ background: 'var(--navy)', borderColor: 'var(--navy)' }}>{i + 1}</span>
+                        <span className="rm-checkbox" style={{ background: 'var(--sb-midnight)', borderColor: 'var(--sb-midnight)' }}>{i + 1}</span>
                         <div className="md-body"><SafeMarkdown>{deliverable}</SafeMarkdown></div>
                       </div>
                     ))}

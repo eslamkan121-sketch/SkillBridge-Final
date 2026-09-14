@@ -1,6 +1,7 @@
 # Python
 __pycache__/
 *.py[cod]
+*.pyc
 .venv/
 .venv-*/
 .pytest_cache/
@@ -21,11 +22,16 @@ temp/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+node_modules/
+dist/
 *.tsbuildinfo
 
 # Env / secrets
 .env
 .env.*
+*.env
+env
+env/
 /env
 !.env.example
 

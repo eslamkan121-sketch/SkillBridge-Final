@@ -550,6 +550,40 @@ def test_job_breakdown_warms_cold_cache_and_404s_fresh(feed):
     _assert_exact_total(b)
 
 
+def test_job_visible_row_explains_across_different_feed_limit(feed):
+    """A row the student sees in the limit-N feed must still explain itself when
+    the breakdown locates at a different limit slice — the Dashboard feed asks
+    for 16 rows while the job-breakdown locator defaulted to 10, and the smaller
+    slice's own rebuild can omit the very job the student is looking at. The
+    locator must reuse the same-profile larger entry (no rebuild) so a visible
+    row never 404s."""
+    feed["jobs"] = [
+        _listing(title="Data Analyst", company="Acme Analytics"),
+        _listing(title="Data Analyst", company="Beta Bytes"),
+    ]
+    student = _data_student()
+    skills, role, reqs = match_explain._student_feed_inputs(student)
+    big = jobs.recent_jobs(skills=skills, role=role, country="Egypt",
+                           location="Cairo", role_requisites=reqs,
+                           market_country="", limit=16, _sync=True)
+    assert [j["company"] for j in big["jobs"]] == ["Acme Analytics", "Beta Bytes"]
+    target = big["jobs"][1]
+
+    # provider variance: the smaller-limit rebuild would serve only row one.
+    feed["jobs"] = [_listing(title="Data Analyst", company="Acme Analytics")]
+
+    before = feed["calls"]
+    b = _breakdown(student, target["fingerprint"])
+    assert feed["calls"] == before, \
+        "locate must reuse the same-profile limit-16 entry, never rebuild"
+    assert b["job"]["company"] == "Beta Bytes"
+    _assert_exact_total(b)
+
+    peek = jobs.peek_feed_job(skills, role, "Egypt", "Cairo", reqs, "",
+                              target["fingerprint"], limit=10)
+    assert peek is not None and peek["found"] is True
+
+
 def test_job_no_cv_profile_is_honest_404():
     student = _data_student(self_reported_skills=[])
     with pytest.raises(match_explain.MatchExplainError) as ei:

@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react'
+import { useApp } from '../AppContext'
 import { api } from '../lib/api'
 import { JOB_STAGES } from '../lib/types'
 import type { Student, TrackedJob, TrackerResponse, JobStage } from '../lib/types'
-import { IconBookmark, IconTrash, IconLock } from './Icons'
+import { IconBookmark, IconTrash, IconLock, IconShield, IconBolt } from './Icons'
 
 const STAGE_LABEL: Record<JobStage, string> = {
   saved: 'Saved',
@@ -39,6 +40,7 @@ function groupItems(items: TrackedJob[]): Record<'active' | 'done' | 'archived',
 }
 
 export default function JobTrackerPanel({ student, refreshKey }: { student?: Student; refreshKey?: number }) {
+  const { applyCopilot, startInterview, setMode } = useApp()
   const [data, setData] = useState<TrackerResponse | null>(null)
   const [err, setErr] = useState('')
   const [drafts, setDrafts] = useState<Record<number, { note: string; interview_date: string; application_deadline: string }>>({})
@@ -87,6 +89,21 @@ export default function JobTrackerPanel({ student, refreshKey }: { student?: Stu
       setRowErr((r) => ({ ...r, [trackerId]: e.message || String(e) }))
     } finally {
       setDeleting(null)
+    }
+  }
+
+  // Phase Q (D5): interview-stage rows bridge to the EXISTING Mock Interview
+  // session (practice only — never auto-starts a real process, never sends
+  // data outside the app). Reuses AppContext.startInterview; mode goes to the
+  // live session 'interview' state, never a persisted preference.
+  const interviewPrep = async (it: TrackedJob) => {
+    setRowErr((r) => ({ ...r, [it.id]: '' }))
+    try {
+      applyCopilot({ page: 'mock_interview', skillId: null, competency: null, jobTitle: it.title, jobUrl: it.apply_url || it.url || null })
+      setMode('interview')
+      await startInterview(null)
+    } catch (e: any) {
+      setRowErr((r) => ({ ...r, [it.id]: e.message || String(e) }))
     }
   }
 
@@ -167,8 +184,23 @@ export default function JobTrackerPanel({ student, refreshKey }: { student?: Stu
               Save details
             </button>
             {it.stage !== 'archived_or_expired' ? (
-              <button type="button" className="btn btn-sm btn-ghost" disabled={busyRow} onClick={() => archive(it.id)}>
-                Archive
+              <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              disabled={busyRow}
+              onClick={() => archive(it.id)}
+            >
+              Archive
+            </button>
+            ) : null}
+            {it.stage === 'interview' ? (
+              <button
+                type="button"
+                className="btn btn-sm jt-prep"
+                disabled={busyRow}
+                onClick={() => void interviewPrep(it)}
+              >
+                <IconBolt size={13} /> Prepare with a mock interview
               </button>
             ) : null}
             {it.stage === 'saved' ? (
@@ -181,6 +213,19 @@ export default function JobTrackerPanel({ student, refreshKey }: { student?: Stu
                 <IconTrash size={13} /> Remove saved
               </button>
             ) : null}
+            {/* Phase Q (D6): shareable-evidence chip — only links the student's
+                OWN public profile when sharing is enabled; never auto-publishes. */}
+            {!!student?.share_public && student.verified_skills.length > 0 && (
+              <a
+                className="btn btn-sm jt-share"
+                href={`${window.location.origin}/p/${student.id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Only verified skills are shown on your public profile — never self-reported claims."
+              >
+                <IconShield size={13} /> Share your verified profile
+              </a>
+            )}
           </div>
         </div>
 

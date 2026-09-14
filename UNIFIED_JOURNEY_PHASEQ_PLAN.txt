@@ -1,0 +1,221 @@
+UNIFIED_JOURNEY_PHASEQ_PLAN.txt — Phase Q: UNIFIED LEARNING-TO-APPLICATION JOURNEY
+Guide: repo AGENTS.md (Phase Q line), TEAM_HANDOFF_CURRENT_STATUS.md ("What remains" Q)
+Supersedes: none (additive; recomposes the existing Dashboard journey loop + Phase K/N pieces)
+STATUS: PENDING APPROVAL
+
+IMPLEMENTATION NOTE (once approved): turn the Dashboard into a single, honest
+"verified skill loop → application" spine: a derived journey header (Learn →
+Verify → Practice → Find → Track), a real hand-off from the "career ready"
+dead-end into the jobs board + tracker, a grounded per-job "Prepare for this job"
+modal that compares the JOB's own required_skills against the student's real
+profile (deep-linking only to real DB skill ids), an interview-prep deep link
+from tracker rows that reach the interview stage, and a shareable-evidence chip
+on tracked jobs. One small read-only backend endpoint (+ focused tests), the
+rest is additive frontend composition. No new Section, no new provider, no
+notifications, no auto-stages.
+
+-------------------------------------------------------------------------------
+GOAL (Phase Q spec, as read from the handoff)
+-------------------------------------------------------------------------------
+"Unified learning-to-application journey." A student should be able to follow a
+single, honest spine from "build evidence" → "close gaps" → "find matched jobs"
+→ "apply + track" without the loop dead-ending or hopping to a generic page.
+Required properties:
+  * A journey readout derived ONLY from real payloads (target-role analysis,
+    verified/self-reported skills, scenario library, Phase-K tracker counts) —
+    never a fabricated readiness number.
+  * When the student is career-ready (all required skills strong & verified),
+    the journey hands off to the real match feed + application tracker instead
+    of showing a no-action dead-end.
+  * "Prepare for this job" compares the JOB LISTING'S OWN required_skills
+    (real field from jobs.py normalization) against the student's profile; a
+    deep link to Learning/Practice/Assessments exists ONLY when the skill
+    resolves to a real DB skill id. Unresolvable names are honestly labeled
+    "no SkillBridge path yet", never fabricated as gaps.
+  * A tracker row that reaches stage `interview` offers the EXISTING Mock
+    Interview (practice only). Tracker rows carry a shareable-evidence token
+    only when the student has already enabled share_public — never auto-publishes.
+  * Hard NEVERs: never invent skills/jobs/readiness; never auto-apply or auto-
+    move a tracker stage; never claim an interview/application outcome; never
+    show an employer-facing artifact the student didn't share.
+
+-------------------------------------------------------------------------------
+GROUND TRUTH (verified inventory — single source of truth for this plan)
+-------------------------------------------------------------------------------
+- Journey loop today: CV/self-reported skills (upload POST /api/students/{id}/cv,
+  api.ts:136-150) → target role (GET/PUT student, models.py:1154-1166) →
+  analysis + match ring (DashboardPage.tsx:562-584, ScoreRing) → Recommended
+  Next Step (nextStep, DashboardPage.tsx:35-55) routes among learning /
+  scenarios / assessments with focus {skillId, roleTitle} via App.tsx navigate
+  (:99-108); P5 "All requirements met — career ready" returns action:null
+  (:53-54) → NO action button → the loop dead-ends BEFORE jobs.
+- Jobs board = JobsCard (DashboardPage.tsx:92-434), embedded in the Dashboard
+  (both branches :554-555, :738-739). Feed row RecentJob (types.ts:502-539)
+  carries title/company/match_pct/match_reason/fingerprint/apply_url/
+  listing_status/work_type/seniority/location_tier + required_skills
+  (string[] — REAL recognized names from jobs.py `_extract_required_skills`
+  :487+, `_SKILL_TERMS` :446-484).
+- "Prepare for this job" today (DashboardPage.tsx:172-177): applyCopilot({page:
+  'jobs', jobTitle, jobUrl}) then onNavigate('skills') — generic Skills hub,
+  per-job gaps never computed (Phase N D4 honesty rule).
+- Tracker (Phase K): POST /api/students/{id}/jobs/saved (main.py:2933),
+  GET/PATCH/DELETE tracker (main.py:2907/2961/2979); 10 stages exact (types.ts:
+  581-583); JOB_TRACKER_TRANSITIONS allow-list models.py:321-333; stage changes
+  only via explicit api.updateTrackerItem PATCH (JobTrackerPanel.tsx:117-127);
+  app→interview is a legal transition. Tracker is PRIVATE (AGENTS.md Phase K
+  out-of-slice: never shared/synced/emailed).
+- Interview prep: AppContext exposes startInterview(skillId|null)
+  (AppContext.tsx:175-190, list 175-190) + applyCopilot(patch) (:127-129);
+  Mock Interview endpoints POST /api/students/{id}/interview (main.py:1653)
+  + /interview/voice + /interview/tts. Practice only — never a real application.
+- Sharing: share_public toggle (DashboardPage.tsx:485-493) → api.updateStudent
+  ({share_public}); public profile /p/{id} (App.tsx:270-272); per-skill share
+  chips /p/{id}#skill-{n} (DashboardPage.tsx:481, 688-696).
+- Skill-name→id resolution: server-side `models.get_skill_by_name` (used by
+  scenarios._follow_up), `recommendations.normalise_name`/`_key` vocabulary;
+  NOT every career-skill term exists as a `skills` row (e.g. "Typography",
+  "Wireframing") — resolution must be honest (null id when absent).
+- Journey sections (App.tsx:19): dashboard|skills|learning|scenarios|
+  assessments|university|copilot. NO jobs Section (Phase N out-of-slice: board
+  stays on the Dashboard). navigate() is hub-rooted (:99-108).
+- Notifications: none anywhere (bell is a "Coming soon" placeholder
+  App.tsx:194-203); no events feed in the DB (migrations end 0012).
+- No backend student→job "prepare" data exists; match breakdown (Phase J) is
+  sum-of-lines only — not a skill-per-training comparison.
+
+-------------------------------------------------------------------------------
+DECISIONS (additive, honest, backward-compatible)
+-------------------------------------------------------------------------------
+D1. "UNIFIED" = DASHBOARD-EMBEDDED JOURNEY SPINE, NOT A NEW SECTION. Rationale:
+    Phase N deliberately kept the board on the Dashboard; a new "My Journey"
+    Section would fork the same content across two pages and add a full nav +
+    breadcrumb + regression surface for marginal benefit. The spine recomposes
+    the EXISTING cards on the Dashboard into one readable sequence, which is
+    the "unified journey" the handoff asks for. (Alternative — a dedicated
+    Section consolidating gap map + board + tracker — is recorded in
+    OUT OF-SLICE as a follow-up candidate, not built now.)
+D2. JOURNEY PHASE IS DERIVED, CLIENT-SIDE, NEARLY-ZERO-CHANGE. A pure
+    presentational header computes an honest stage from data the Dashboard
+    already has:
+      - no target / no analysis     → "1 · Build evidence" (CTA → Skills hub)
+      - analysis, gaps remain       → "2 · Close the gaps" (Next Step CTA)
+      - gaps closed, gaps verified  → "3 · Ready for opportunities" (→ jobs)
+      - stage reached interview etc → "4 · Find, apply & track" (→ tracker)
+    Each of the five steps (Learn / Verify / Practice / Find / Track) shows a
+    real status chip + CTA to the real section. Phase labels are human copy
+    over derived booleans — the RULES are: nothing new computed, no readiness
+    percentage invented (match ring stays the only number).
+D3. CAREER-READY HAND-OFF (fixes the P5 dead-end). When nextStep returns
+    action:null ("All requirements met — career ready"), the journey step card +
+    Recommended-Next card render a "Find your match & apply" Go that scrolls to
+    the JobsCard (+) and highlights the tracker. Honest: it hands off to the
+    real feed; it never claims any hiring outcome. The Go is a scroll/focus
+    action, not a new route.
+D4. GROUNDED "PREPARE FOR THIS JOB" (replaces the generic Skills hub hop).
+    New read-only backend endpoint (cheap, uses the CURRENT feed row, no
+    recompute, no cache-key fork):
+      GET /api/students/{id}/jobs/recent/{fingerprint}/prepare
+      (owner-gated _own_student; 404 when the fingerprint is not in the
+      student's current feed — jobs.peek_feed_job, same locate semantics as
+      the Phase K save endpoint main.py:2933).
+    Response:
+      { job: {title, company, location_label, match_pct, apply_url,
+               listing_status, provider},
+        skills: [{name,        // job.required_skills real name
+                  skill_id,    // REAL DB id via normalise_name resolution,
+                               // or null when no skills row exists
+                  status,      // verified | self_reported | gap | no_path
+                  student_level?, verified_at?}] }
+    `status` derives: name matches a verified skill → verified; else matches a
+    self-reported skill → self_reported; else resolves to a skills row → gap
+    (deep-linkable); else → no_path (skill_id null, honest "no SkillBridge
+    learning path for this exact skill yet" — deep link falls back to the
+    Skills hub). The UI is a dialog (role=dialog, Escape/backdrop, focus
+    return): per-skill row with evidence badge + a "Review in Learning" /
+    "Practice" / "Verify" deep link ONLY when skill_id is real; the job's own
+    Apply link (live rows only, target=_blank rel=noopener) + a "share your
+    verified-skill profile" chip when share_public is on. NEVER fabricates a
+    missing skill or a skill_id.
+D5. INTERVIEW-READY PREP (bridge tracker → Mock Interview). In JobTrackerPanel,
+    a row whose stage is `interview` gains "Prepare with a mock interview →
+    " calling the EXISTING AppContext.startInterview() with applyCopilot job
+    context (job title/url). Practice only, never auto-starts, never sends
+    anything outside the app, reuses the existing interview session.
+D6. SHAREABLE-EVIDENCE CHIP ON TRACKED JOBS. A tracker row shows a "Share your
+    verified profile" affordance ONLY when student.share_public is 1, linking
+    to the existing /p/{id} public profile (+) or #skill-{n} for a verified
+    skill belonging to the row. Never auto-publishes; no new public data.
+D7. TINY BACKEND SURFACE. Exactly ONE new endpoint (D4) + models helper
+    (prepare_job_view or equivalent) + tests. Everything else is frontend
+    composition over existing endpoints. Migration: NONE (read-only).
+D8. SECOND CONSUMER SAFETY (checked, not changed): SkillsRolesPage role-drawer
+    "Available jobs" keeps reading api.recentJobs; MatchBreakdown and the Phase
+    K tracker routes are untouched; JobsCard row actions change only the
+    Prepare button (D4). The Phase N checker's negative guards remain true.
+
+-------------------------------------------------------------------------------
+IMPLEMENTATION ORDER
+-------------------------------------------------------------------------------
+1. Backend: models helper to resolve a list of skill names against the `skills`
+   table + a student's verified/self_reported sets (normalise_name resolution,
+   never fuzzy-guessed). main.py route GET .../jobs/recent/{fingerprint}/prepare
+   (peek_feed_job locate → 404 honest; builds {job, skills[]}). Tests:
+   backend/tests/test_unified_journey_phaseQ.py — locate/404, per-skill status
+   derivation (verified/self_reported/gap/no_path), skill_id real-or-null,
+   no-path never deep-linkable, owner/401/403 matrix, additive (no feed/cache/
+   breakdown touched), empty required_skills → empty skills list, snapshots
+   never written. No migration; migration-count assertions untouched.
+2. Frontend types + api: JobPreparePayload/JobPrepareSkill types in types.ts;
+   api.prepareJob(studentId, fingerprint) hitting exactly the new route.
+3. Journey spine header component (frontend/src/pages/DashboardPage.tsx +
+   a small presentational JourneySpine that both Dashboards branches mount):
+   derived stage + 5 steps with status chips + CTAs (D2). Uses existing
+   student/analysis/scenarioLib/tracker payloads only.
+4. Career-ready hand-off: extend NextStep with a `jobs` action equivalent and
+   render the "Find your match & apply" action for P5 (D3) that focuses the
+   JobsCard/tracker.
+5. Prepare-for-job modal (new component, reuses the established modal pattern):
+   per-row Prepare button now opens it, fetches api.prepareJob on first open
+   (fired ref), renders skill rows with evidence badges + real-id deep links
+   + honest no-path rows + live Apply link + share chip (D4, D6).
+6. JobTrackerPanel: interview-prep action (D5) + shareable-evidence chip (D6).
+7. index.css: Phase Q block (.jny-*, .jprep-*, .jt-prep/.jt-share, responsive
+   640px) + focus ring for the scrolled-to board.
+8. Checker: frontend/scripts/check-unified-journey-phaseQ.mjs + runtime wrapper
+   test backend/tests/test_runtime_unified_journey_phaseQ_frontend.py (negative
+   guards: prepare modal fetches ONLY api.prepareJob; deep links only when
+   skill_id; no auto stage writes (no api.updateTrackerItem outside the panel's
+   existing explicit save); no readiness numbers beyond the match ring; journey
+   copies never invent verbs; interview prep only via AppContext.startInterview;
+   share chip gated on share_public; no new Section/routes string checked).
+9. CI: npx tsc --noEmit + vite build + all frontend checkers + full backend
+   suite (expect delta = new suite; zero regressions).
+10. Docs: AGENTS.md Phase Q section + README "Unified learning-to-application
+    journey (Phase Q)" + this plan STATUS -> COMPLETE.
+
+-------------------------------------------------------------------------------
+HONESTY INVARIANTS (locked by checker + tests)
+-------------------------------------------------------------------------------
+- Readiness is a derived LABEL, never a new score: the journey header reuses
+  analysis.match_score / verified counts / tracker counts verbatim.
+- Per-job skill statuses come ONLY from the /prepare payload; a skill name with
+  no skills row renders "no SkillBridge path yet", never a fake gap or fake id.
+- Deep links exist ONLY when skill_id is a real DB id.
+- Career-ready hand-off navigates to the real feed/tracker; no outcome claims.
+- Interview prep reuses the existing Mock Interview (practice), never auto-
+  starts and never sends data outside the app.
+- Tracker stages still change ONLY via the existing explicit PATCH; the board
+  never auto-marks applied (Phase N rule preserved).
+- The shareable-evidence chip appears only when share_public=1; it only links
+  the student's own existing public profile.
+- All additions additive: SkillsRolesPage drawer, MatchBreakdown, Phase K
+  routes, feed health, and Phase N checkers stay green unchanged.
+
+OUT OF-SLICE (documented): no new Section ("My Journey") — recorded as a
+follow-up candidate; no notifications/events feed (bell stays "Coming soon";
+an in-app alert store is a separate feature and a later phase); no resume/CV
+per-job tailoring; no auto-apply or integration with external application
+processes (application happens on the employer's apply_url — the tracker only
+marks the student's own workflow); no salary figures; no changes to the job
+feed, providers, cache, or Phase G/J match internals; no company/university
+visibility into the journey or tracker.

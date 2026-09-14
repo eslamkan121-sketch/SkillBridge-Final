@@ -1,14 +1,13 @@
-// Phase 2 persona-specific conversation memory — frontend source-contract guard.
+// Phase 2 / Phase 4A persona-specific conversation memory — frontend source-contract guard.
 //
-// The backend now gives each mentor (nova/axel/sage/vex) its OWN bounded
-// conversation memory. For that to be visible and controllable, the real
-// frontend request path must be strictly per-tutor:
+// The backend still supports Phase 2 per-mentor memory for legacy callers, and
+// Phase 4A adds first-class conversation rows. The real frontend request path
+// must therefore carry both the active tutor id and the active conversation id:
 //
-//   1. history is loaded per tutor (tutor_id query param),
-//   2. every send carries the ACTIVE tutor_id so the thread lands on that
-//      mentor's memory (never a different one),
-//   3. New Chat / Clear Chat deletes by the current tutor_id ONLY — which is
-//      exactly what lets the backend clear *that mentor's* memory row.
+//   1. history is loaded by conversation_id (with tutor_id for validation),
+//   2. every send carries the ACTIVE tutor_id and conversation_id,
+//   3. New Chat creates a new conversation and does not delete the old one,
+//   4. Clear Chat deletes the current conversation's messages and memory only.
 //
 // Negative guards: the SPA never keeps a second conversation store in
 // localStorage for tutor chat (the backend is the source of truth), and the
@@ -23,34 +22,41 @@ const panel = readProject('frontend/src/components/CopilotPanel.tsx')
 
 const failures = []
 
-// 1. Per-tutor history: the query scopes by tutor_id.
-if (!api.includes('`/api/students/${studentId}/tutor${tutorId ? `?tutor_id=${encodeURIComponent(tutorId)}` : \'\'}`')) {
-  failures.push('api.tutorHistory must scope the request by tutor_id')
+// 1. Conversation history: the query scopes by conversation_id.
+if (!api.includes("qs.set('conversation_id', String(conversationId))")) {
+  failures.push('api.tutorHistory must scope the request by conversation_id')
 }
 
-// 2. Per-tutor clear: DELETE with the explicit tutor_id body (the backend clears
-//    only that mentor's messages AND conversation memory).
-if (!api.includes('clearTutorChat: (studentId: number, tutorId: string)') ||
+// 2. Conversation clear: DELETE with explicit tutor_id and conversation_id.
+if (!api.includes('clearTutorChat: (studentId: number, tutorId: string, conversationId?: number | null)') ||
     !api.includes('DELETE') ||
-    !api.includes('tutor_id: tutorId')) {
-  failures.push('api.clearTutorChat must DELETE with a per-tutor { tutor_id } body')
+    !api.includes('tutor_id: tutorId') ||
+    !api.includes('conversation_id: conversationId ?? null')) {
+  failures.push('api.clearTutorChat must DELETE with { tutor_id, conversation_id }')
 }
 
-// 3. Per-tutor send: the POST body carries the active tutor id.
-if (!api.includes("tutor_id: opts.tutorId ?? null")) {
-  failures.push('api.tutorSend must send tutor_id from opts.tutorId')
+// 3. Conversation send: the POST body carries the active tutor id and chat id.
+if (!api.includes("tutor_id: opts.tutorId ?? null") ||
+    !api.includes("conversation_id: opts.conversationId ?? null")) {
+  failures.push('api.tutorSend must send tutor_id and conversation_id')
 }
 
-// 4. CopilotPanel holds a per-tutor cache and loads it only for the ACTIVE tutor.
-if (!panel.includes('if (chats[tutorId]) return')) {
-  failures.push('CopilotPanel must cache per tutor (chats[tutorId]) so switch-back restores the same thread')
+// 4. CopilotPanel holds a conversation cache and restores the ACTIVE chat.
+if (!panel.includes('activeConversationId')) {
+  failures.push('CopilotPanel must track activeConversationId')
 }
-if (!panel.includes('api.tutorHistory(studentId, tutorId)')) {
-  failures.push('CopilotPanel must load history for the active tutorId')
+if (!panel.includes('Record<number, TutorMessage[]>')) {
+  failures.push('CopilotPanel must cache messages by conversation id')
+}
+if (!/api\.tutorHistory\(studentId, .*activeConversationId/.test(panel)) {
+  failures.push('CopilotPanel must load history for the active conversation id')
+}
+if (!panel.includes('api.newTutorConversation')) {
+  failures.push('CopilotPanel New Chat must create a fresh conversation')
 }
 
-// 5. New Chat / Clear Chat clears the CURRENT tutor only.
-const clearCall = 'await api.clearTutorChat(studentId, tutorId)'
+// 5. Clear Chat clears the CURRENT conversation only.
+const clearCall = 'await api.clearTutorChat(studentId, tutorId, conversationId)'
 if (!panel.includes(clearCall)) {
   failures.push(`CopilotPanel Clear Chat must call ${JSON.stringify(clearCall)}`)
 }
@@ -65,15 +71,18 @@ if (panel.includes('localStorage') && /chat|thread|tutor_conversation|messages/.
   failures.push('CopilotPanel must NOT persist tutor conversations to localStorage (backend is source of truth)')
 }
 
-// 7. Negative guard: the send call passes the same active `tutorId` variable
-//    into api.tutorSend — there is no other tutor selection at the send site.
+// 7. Negative guard: the send call passes the active `tutorId` variable and
+//    the active conversation id into api.tutorSend.
 const sendStart = panel.indexOf('api.tutorSend(studentId, text, {')
 if (sendStart === -1) {
   failures.push('CopilotPanel no longer calls api.tutorSend(studentId, text, { ... })')
 } else {
-  const sendBlock = panel.slice(sendStart, sendStart + 420)
+  const sendBlock = panel.slice(sendStart, sendStart + 520)
   if (!/\btutorId\b/.test(sendBlock) || /tutorId: ['"]/.test(sendBlock) && !/tutorId\b.*(?!['"])\s*\n/.test(sendBlock)) {
     failures.push('CopilotPanel send must pass the active tutorId variable (not a hard-coded mentor id)')
+  }
+  if (!/\bconversationId\b/.test(sendBlock)) {
+    failures.push('CopilotPanel send must pass the active conversation id')
   }
 }
 
@@ -81,4 +90,4 @@ if (failures.length) {
   console.error('check-tutor-memory-phase2: FAILED\n  ' + failures.join('\n  '))
   process.exit(1)
 }
-console.log('check-tutor-memory-phase2: ok — per-tutor history / send / clear stays wired to the backend memory')
+console.log('check-tutor-memory-phase2: ok - tutor + conversation history / send / clear stays wired to backend memory')

@@ -143,45 +143,82 @@ def build_chunk_digest(messages):
     return "\n".join(lines)
 
 
-def memory_summary(student_id, tutor_id):
-    """Stored digest for one (student, mentor), or '' when none exists yet."""
+def memory_summary(student_id, tutor_id, conversation_id=None):
+    """Stored digest for one chat boundary, or '' when none exists yet.
+
+    Phase 4A callers pass ``conversation_id`` so memory follows exactly one
+    conversation. Older Phase 2 callers omit it and continue to use the
+    per-(student, mentor) compatibility row.
+    """
     with get_cursor() as c:
-        row = c.execute(
-            "SELECT summary FROM tutor_conversation_memory WHERE student_id=? AND tutor_id=?",
-            (student_id, tutor_id),
-        ).fetchone()
+        if conversation_id is not None:
+            row = c.execute(
+                """
+                SELECT summary
+                FROM tutor_conversation_memory_threads
+                WHERE conversation_id=? AND student_id=? AND tutor_id=?
+                """,
+                (conversation_id, student_id, tutor_id),
+            ).fetchone()
+        else:
+            row = c.execute(
+                "SELECT summary FROM tutor_conversation_memory WHERE student_id=? AND tutor_id=?",
+                (student_id, tutor_id),
+            ).fetchone()
     return row["summary"] if row else ""
 
 
-def _write_memory(student_id, tutor_id, summary, last_compacted_id):
+def _write_memory(student_id, tutor_id, summary, last_compacted_id, conversation_id=None):
     with get_cursor() as c:
-        c.execute(
-            """INSERT INTO tutor_conversation_memory
-               (student_id, tutor_id, summary, last_compacted_id)
-               VALUES (?,?,?,?)
-               ON CONFLICT(student_id, tutor_id) DO UPDATE SET
-                 summary=excluded.summary,
-                 last_compacted_id=excluded.last_compacted_id,
-                 updated_at=datetime('now')""",
-            (student_id, tutor_id, summary, last_compacted_id),
-        )
+        if conversation_id is not None:
+            c.execute(
+                """INSERT INTO tutor_conversation_memory_threads
+                   (conversation_id, student_id, tutor_id, summary, last_compacted_id)
+                   VALUES (?,?,?,?,?)
+                   ON CONFLICT(conversation_id) DO UPDATE SET
+                     summary=excluded.summary,
+                     last_compacted_id=excluded.last_compacted_id,
+                     updated_at=datetime('now')""",
+                (conversation_id, student_id, tutor_id, summary, last_compacted_id),
+            )
+        else:
+            c.execute(
+                """INSERT INTO tutor_conversation_memory
+                   (student_id, tutor_id, summary, last_compacted_id)
+                   VALUES (?,?,?,?)
+                   ON CONFLICT(student_id, tutor_id) DO UPDATE SET
+                     summary=excluded.summary,
+                     last_compacted_id=excluded.last_compacted_id,
+                     updated_at=datetime('now')""",
+                (student_id, tutor_id, summary, last_compacted_id),
+            )
 
 
-def clear_memory(student_id, tutor_id):
-    """Delete a single (student, mentor) memory row (used by New/Clear Chat).
+def clear_memory(student_id, tutor_id, conversation_id=None):
+    """Delete conversation memory for one chat boundary.
 
-    Clears ONLY that mentor's conversational memory and summary — never other
-    mentors' threads, and never trusted SkillBridge state.
+    Clears only the selected conversation when ``conversation_id`` is supplied.
+    The old per-mentor path remains for legacy New/Clear Chat behavior. Trusted
+    SkillBridge state is never touched.
     """
     with get_cursor() as c:
-        c.execute(
-            "DELETE FROM tutor_conversation_memory WHERE student_id=? AND tutor_id=?",
-            (student_id, tutor_id),
-        )
+        if conversation_id is not None:
+            c.execute(
+                """
+                DELETE FROM tutor_conversation_memory_threads
+                WHERE conversation_id=? AND student_id=? AND tutor_id=?
+                """,
+                (conversation_id, student_id, tutor_id),
+            )
+        else:
+            c.execute(
+                "DELETE FROM tutor_conversation_memory WHERE student_id=? AND tutor_id=?",
+                (student_id, tutor_id),
+            )
     return True
 
 
-def after_turn(student_id, tutor_id):
+def after_turn(student_id, tutor_id, conversation_id=None):
     """Fold any messages that just dropped out of the recent window.
 
     Called AFTER the assistant reply is stored. Messages newer than the stored
@@ -189,16 +226,30 @@ def after_turn(student_id, tutor_id):
     the digest once; the watermark is advanced so compaction is idempotent.
     A deterministic fallback is guaranteed — no provider is ever required.
     """
-    messages = models.list_tutor_messages(student_id, tutor_id=tutor_id)
+    messages = models.list_tutor_messages(
+        student_id,
+        tutor_id=tutor_id,
+        conversation_id=conversation_id,
+    )
     if len(messages) <= RECENT_WINDOW:
         return None
     overflow = messages[: len(messages) - RECENT_WINDOW]
     with get_cursor() as c:
-        row = c.execute(
-            "SELECT summary, last_compacted_id FROM tutor_conversation_memory "
-            "WHERE student_id=? AND tutor_id=?",
-            (student_id, tutor_id),
-        ).fetchone()
+        if conversation_id is not None:
+            row = c.execute(
+                """
+                SELECT summary, last_compacted_id
+                FROM tutor_conversation_memory_threads
+                WHERE conversation_id=? AND student_id=? AND tutor_id=?
+                """,
+                (conversation_id, student_id, tutor_id),
+            ).fetchone()
+        else:
+            row = c.execute(
+                "SELECT summary, last_compacted_id FROM tutor_conversation_memory "
+                "WHERE student_id=? AND tutor_id=?",
+                (student_id, tutor_id),
+            ).fetchone()
     previous = row["summary"] if row else ""
     watermark = row["last_compacted_id"] if row else 0
     to_fold = [m for m in overflow if m["id"] > watermark]
@@ -210,11 +261,13 @@ def after_turn(student_id, tutor_id):
     combined = (previous.strip() + "\n" + digest).strip() if previous.strip() else digest
     if len(combined) > SUMMARY_CHAR_CAP:
         combined = "…earlier details truncated to keep memory bounded…\n" + combined[-SUMMARY_CHAR_CAP:]
-    _write_memory(student_id, tutor_id, combined, to_fold[-1]["id"])
+    _write_memory(student_id, tutor_id, combined, to_fold[-1]["id"], conversation_id=conversation_id)
+    if conversation_id is not None:
+        _write_memory(student_id, tutor_id, combined, to_fold[-1]["id"])
     return combined
 
 
-def memory_block_for(student_id, tutor_id, messages=None):
+def memory_block_for(student_id, tutor_id, messages=None, conversation_id=None):
     """The bounded memory block for one mentor's next prompt turn, or None.
 
     ``messages`` is the thread BEFORE the inbound turn (main passes the current
@@ -225,8 +278,12 @@ def memory_block_for(student_id, tutor_id, messages=None):
     turn's prompt stays byte-identical to the pre-memory behavior.
     """
     if messages is None:
-        messages = models.list_tutor_messages(student_id, tutor_id=tutor_id)
-    summary = memory_summary(student_id, tutor_id)
+        messages = models.list_tutor_messages(
+            student_id,
+            tutor_id=tutor_id,
+            conversation_id=conversation_id,
+        )
+    summary = memory_summary(student_id, tutor_id, conversation_id=conversation_id)
     recent = messages[-RECENT_WINDOW:]
     if not summary and not recent:
         return None

@@ -90,7 +90,7 @@ def test_migration_0005_on_fresh_db(tmp_path):
     try:
         database.init_db()
         applied = [m["migration_id"] for m in database.applied_migrations()]
-        assert applied[-1] == "0012_tutor_memory"
+        assert applied[-1] == "0013_tutor_conversations"
         assert {"canonical_role_id", "canonical_mapping_updated_at"} <= _conn_columns(conn, "roles")
         tables = {r["name"] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}

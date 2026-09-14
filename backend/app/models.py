@@ -5,6 +5,7 @@ they can be unit tested in isolation.
 """
 from .database import get_cursor, MAX_ROLE_VIEW_EVENTS
 from . import role_intent
+from . import skill_registry
 import contextlib
 import datetime as dt
 import json
@@ -1135,6 +1136,72 @@ def student_verified(cur, student_id):
         WHERE v.student_id=? ORDER BY s.name""", (student_id,)).fetchall()]
 
 
+# ------------------------------------------------------------------ Phase Q: prepare-for-job skill readiness
+
+def _skill_lookup_key(name):
+    """Exact-only canonical lookup key for a skill name (never fuzzy)."""
+    canon, _ = skill_registry.normalise_name(name)
+    return ((canon or "").strip() or (name or "").strip()).lower()
+
+
+def prepare_job_view(student, job):
+    """Readiness view for a surfaced feed job the student is considering.
+
+    Pure data mapping over the student's OWN verified + self-reported skill
+    rows and the job's ``required_skills`` names. Resolution is explicit
+    canonical-name lookup against the ``skills`` table — ``skill_id`` is a REAL
+    skills row id or null, a name with no skills row is honestly ``no_path``
+    (never a guessed gap), and student skill rows are never fabricated."""
+    required = [str(n).strip() for n in (job.get("required_skills") or []) if str(n).strip()]
+    verified = student.get("verified_skills") or []
+    reported = student.get("self_reported_skills") or []
+    vmap, rmap = {}, {}
+    for v in verified:
+        vmap.setdefault(_skill_lookup_key(v.get("name")), v)
+    for r in reported:
+        rmap.setdefault(_skill_lookup_key(r.get("name")), r)
+
+    skills = []
+    for name in required:
+        canon, _ = skill_registry.normalise_name(name)
+        lookup = (canon or name).strip()
+        key = lookup.lower()
+        db_row = get_skill_by_name(lookup) if lookup else None
+        matched = vmap.get(key) or rmap.get(key)
+        if key in vmap:
+            status = "verified"
+        elif key in rmap:
+            status = "self_reported"
+        elif db_row:
+            status = "gap"
+        else:
+            status = "no_path"
+        item = {
+            "name": name,
+            "skill_id": (db_row["id"] if db_row and db_row.get("id")
+                         else matched.get("skill_id") if matched else None),
+            "status": status,
+        }
+        if matched:
+            item["student_level"] = matched.get("level")
+            if matched.get("verified_at"):
+                item["verified_at"] = matched["verified_at"]
+        skills.append(item)
+
+    return {
+        "job": {
+            "title": job.get("title") or "",
+            "company": job.get("company") or "",
+            "location_label": job.get("location_label"),
+            "match_pct": job.get("match_pct"),
+            "apply_url": job.get("apply_url") or "",
+            "listing_status": job.get("listing_status"),
+            "provider": job.get("provider"),
+        },
+        "skills": skills,
+    }
+
+
 def role_from_id(cur, role_id):
     r = cur.execute("SELECT * FROM roles WHERE id=?", (role_id,)).fetchone()
     if not r:
@@ -1292,24 +1359,193 @@ def upsert_career_roadmap(student_id, role_id, roadmap):
 
 # ---------------------------------------------------------------- tutor
 
-def add_tutor_message(student_id, tutor_id, skill_id, role, content):
+VALID_TUTOR_IDS = ("nova", "axel", "sage", "vex")
+
+
+def _conversation_title(content):
+    text = re.sub(r"\s+", " ", (content or "").strip())
+    if not text:
+        return "New conversation"
+    if len(text) <= 56:
+        return text
+    clipped = text[:56].rsplit(" ", 1)[0].strip()
+    return f"{clipped or text[:56].strip()}..."
+
+
+def _conversation_payload(row, message_count=None, last_message_at=None, preview=None):
+    data = _row(row)
+    if not data:
+        return None
+    if message_count is not None:
+        data["message_count"] = int(message_count or 0)
+    if last_message_at is not None:
+        data["last_message_at"] = last_message_at
+    if preview is not None:
+        data["preview"] = preview
+    return data
+
+
+def create_tutor_conversation(student_id, tutor_id, title=None):
+    if tutor_id not in VALID_TUTOR_IDS:
+        raise ValueError("invalid_tutor")
     with get_cursor() as c:
-        cur = c.execute("INSERT INTO tutor_messages (student_id, tutor_id, skill_id, role, content) VALUES (?,?,?,?,?)",
-                        (student_id, tutor_id, skill_id, role, content))
+        cur = c.execute(
+            """
+            INSERT INTO tutor_conversations (student_id, tutor_id, title)
+            VALUES (?, ?, ?)
+            """,
+            (student_id, tutor_id, _conversation_title(title)),
+        )
+        row = c.execute("SELECT * FROM tutor_conversations WHERE id=?", (cur.lastrowid,)).fetchone()
+        return _conversation_payload(row, message_count=0, preview="")
+
+
+def get_tutor_conversation(student_id, conversation_id):
+    with get_cursor() as c:
+        row = c.execute(
+            """
+            SELECT
+                tc.*,
+                COUNT(tm.id) AS message_count,
+                MAX(tm.created_at) AS last_message_at,
+                (
+                    SELECT content
+                    FROM tutor_messages tm2
+                    WHERE tm2.conversation_id = tc.id
+                    ORDER BY tm2.id DESC
+                    LIMIT 1
+                ) AS preview
+            FROM tutor_conversations tc
+            LEFT JOIN tutor_messages tm ON tm.conversation_id = tc.id
+            WHERE tc.student_id = ? AND tc.id = ?
+            GROUP BY tc.id
+            """,
+            (student_id, conversation_id),
+        ).fetchone()
+        if not row:
+            return None
+        return _conversation_payload(
+            row,
+            message_count=row["message_count"],
+            last_message_at=row["last_message_at"],
+            preview=row["preview"] or "",
+        )
+
+
+def list_tutor_conversations(student_id, include_empty=False):
+    with get_cursor() as c:
+        rows = c.execute(
+            """
+            SELECT
+                tc.*,
+                COUNT(tm.id) AS message_count,
+                MAX(tm.created_at) AS last_message_at,
+                (
+                    SELECT content
+                    FROM tutor_messages tm2
+                    WHERE tm2.conversation_id = tc.id
+                    ORDER BY tm2.id DESC
+                    LIMIT 1
+                ) AS preview
+            FROM tutor_conversations tc
+            LEFT JOIN tutor_messages tm ON tm.conversation_id = tc.id
+            WHERE tc.student_id = ?
+            GROUP BY tc.id
+            HAVING ? = 1 OR COUNT(tm.id) > 0
+            ORDER BY COALESCE(MAX(tm.created_at), tc.updated_at) DESC, tc.id DESC
+            """,
+            (student_id, 1 if include_empty else 0),
+        ).fetchall()
+        return [
+            _conversation_payload(
+                r,
+                message_count=r["message_count"],
+                last_message_at=r["last_message_at"],
+                preview=r["preview"] or "",
+            )
+            for r in rows
+        ]
+
+
+def ensure_tutor_conversation(student_id, tutor_id, conversation_id=None, title_seed=None):
+    if conversation_id is not None:
+        conversation = get_tutor_conversation(student_id, conversation_id)
+        if not conversation:
+            return None
+        if tutor_id and conversation["tutor_id"] != tutor_id:
+            return None
+        return conversation
+    if tutor_id not in VALID_TUTOR_IDS:
+        raise ValueError("invalid_tutor")
+    with get_cursor() as c:
+        row = c.execute(
+            """
+            SELECT *
+            FROM tutor_conversations
+            WHERE student_id = ? AND tutor_id = ?
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 1
+            """,
+            (student_id, tutor_id),
+        ).fetchone()
+        if row:
+            return _conversation_payload(row)
+    return create_tutor_conversation(student_id, tutor_id, title_seed)
+
+
+def add_tutor_message(student_id, tutor_id, skill_id, role, content, conversation_id=None):
+    conversation = None
+    if conversation_id is not None:
+        conversation = get_tutor_conversation(student_id, conversation_id)
+        if not conversation:
+            raise ValueError("conversation_not_found")
+        if tutor_id and conversation["tutor_id"] != tutor_id:
+            raise ValueError("conversation_tutor_mismatch")
+        tutor_id = conversation["tutor_id"]
+    elif tutor_id:
+        conversation = ensure_tutor_conversation(student_id, tutor_id, title_seed=content if role == "user" else None)
+        conversation_id = conversation["id"] if conversation else None
+
+    with get_cursor() as c:
+        cur = c.execute(
+            """
+            INSERT INTO tutor_messages (student_id, tutor_id, skill_id, role, content, conversation_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (student_id, tutor_id, skill_id, role, content, conversation_id),
+        )
+        if conversation_id is not None:
+            if role == "user" and (not conversation or conversation.get("title") == "New conversation"):
+                c.execute(
+                    """
+                    UPDATE tutor_conversations
+                    SET title = ?, updated_at = datetime('now')
+                    WHERE id = ? AND student_id = ?
+                    """,
+                    (_conversation_title(content), conversation_id, student_id),
+                )
+            else:
+                c.execute(
+                    "UPDATE tutor_conversations SET updated_at = datetime('now') WHERE id = ? AND student_id = ?",
+                    (conversation_id, student_id),
+                )
         return _row(c.execute("SELECT * FROM tutor_messages WHERE id=?", (cur.lastrowid,)).fetchone())
 
 
-def list_tutor_messages(student_id, tutor_id=None, skill_id=None):
-    """Messages for one student, optionally scoped to a conversation owner.
+def list_tutor_messages(student_id, tutor_id=None, skill_id=None, conversation_id=None):
+    """Messages for one student, optionally scoped to a real conversation.
 
-    ``tutor_id`` is the conversation owner (nova/axel/sage/vex). Legacy rows
-    written before tutor separation have ``tutor_id`` NULL and are treated as
-    belonging to whichever tutor is viewing them, so existing history stays
-    readable. ``skill_id`` remains an optional extra scope.
+    ``conversation_id`` is the Phase 4A primary chat boundary. Without it, the
+    older tutor-scoped behavior remains available for legacy callers and tests:
+    rows written before tutor separation have ``tutor_id`` NULL and are treated
+    as belonging to whichever tutor is viewing them.
     """
     with get_cursor() as c:
         base, params = "SELECT * FROM tutor_messages WHERE student_id=?", [student_id]
-        if tutor_id:
+        if conversation_id is not None:
+            base += " AND conversation_id=?"
+            params.append(conversation_id)
+        elif tutor_id:
             base += " AND (tutor_id=? OR tutor_id IS NULL)"
             params.append(tutor_id)
         if skill_id:
@@ -1320,14 +1556,33 @@ def list_tutor_messages(student_id, tutor_id=None, skill_id=None):
         return [_row(r) for r in rows]
 
 
-def clear_tutor_messages(student_id, tutor_id):
-    """Start a fresh conversation for ONE tutor only.
-
-    Removes that tutor's messages (and legacy NULL-owner rows, which pre-date
-    tutor separation and belong to the single shared conversation) without
-    touching any other tutor's history.
-    """
+def clear_tutor_messages(student_id, tutor_id, conversation_id=None):
+    """Clear only the requested conversation, with legacy tutor-level fallback."""
     with get_cursor() as c:
+        if conversation_id is not None:
+            row = c.execute(
+                """
+                SELECT id
+                FROM tutor_conversations
+                WHERE student_id = ? AND id = ? AND tutor_id = ?
+                """,
+                (student_id, conversation_id, tutor_id),
+            ).fetchone()
+            if not row:
+                return False
+            c.execute("DELETE FROM tutor_messages WHERE student_id=? AND conversation_id=?",
+                      (student_id, conversation_id))
+            c.execute("DELETE FROM tutor_conversation_memory_threads WHERE conversation_id=?",
+                      (conversation_id,))
+            c.execute(
+                """
+                UPDATE tutor_conversations
+                SET title = 'New conversation', updated_at = datetime('now')
+                WHERE student_id = ? AND id = ?
+                """,
+                (student_id, conversation_id),
+            )
+            return True
         c.execute("DELETE FROM tutor_messages WHERE student_id=? AND (tutor_id=? OR tutor_id IS NULL)",
                   (student_id, tutor_id))
         return True

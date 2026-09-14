@@ -324,9 +324,22 @@ export interface TutorMessage {
   id: number
   skill_id: number | null
   tutor_id?: string | null
+  conversation_id?: number | null
   role: 'user' | 'assistant'
   content: string
   created_at: string
+}
+
+export interface TutorConversation {
+  id: number
+  student_id: number
+  tutor_id: string
+  title: string
+  created_at: string
+  updated_at: string
+  message_count?: number
+  last_message_at?: string | null
+  preview?: string | null
 }
 
 export interface InterviewReply {
@@ -627,6 +640,31 @@ export interface SaveJobRequest {
   location?: string
   country?: string
   market?: string
+}
+
+// ---- Phase Q: prepare-for-job readiness (backend prepare_job_view) ----
+
+export type JobPrepareSkillStatus = 'verified' | 'self_reported' | 'gap' | 'no_path'
+
+export interface JobPrepareSkill {
+  name: string
+  skill_id: number | null
+  status: JobPrepareSkillStatus
+  student_level?: string
+  verified_at?: string
+}
+
+export interface JobPreparePayload {
+  job: {
+    title: string
+    company: string
+    location_label?: string | null
+    match_pct?: number | null
+    apply_url: string
+    listing_status?: string | null
+    provider?: string | null
+  }
+  skills: JobPrepareSkill[]
 }
 
 export interface EscoOccupation {

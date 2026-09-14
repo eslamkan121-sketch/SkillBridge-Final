@@ -150,7 +150,11 @@ def test_followup_another_example_answers_directly_without_restarting(
     low = reply.lower()
 
     assert "another example" in low
-    assert "docker" in low and "volume" in low
+    # The follow-up resolves the SAME Docker-volumes topic from memory and
+    # answers directly with the new example — it does not re-name the topic or
+    # restate the first explanation.
+    assert "volume" in low and "containers" in low
+    assert "persistent storage" not in low
     _assert_no_mentor_reintro(reply)
     _assert_no_internal_terms(reply)
 

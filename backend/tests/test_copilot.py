@@ -388,7 +388,10 @@ def test_tutor_reply_fallback_without_keys(monkeypatch):
     reply = genai.tutor_reply("How should I approach practicing SQL?",
                               "Studying at Aston University", "SQL", "Data Engineer")
     assert reply and "**" not in reply
-    assert "SQL" in reply
+    # Plain SQL is not in the curated offline general-knowledge base (only
+    # "SQL injection" is), so the design's honest route is the limitation reply,
+    # never a fabricated career template that happens to echo the topic name.
+    assert "reliably offline" in reply
     assert len(reply) < 800  # concise by default — no course dump
 
 

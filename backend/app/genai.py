@@ -1415,13 +1415,35 @@ _INTERNAL_REPLY_LINE = re.compile(
 _RAW_MEDIA_PLACEHOLDER_LINE = re.compile(
     r"^\s*(?:"
     r"\*\*?\s*\[?svg\]?\s*\*\*?"
-    r"|\[svg\](?:\.\w+)?"
+    r"|\[svg(?:\.\w+)?\]"
     r"|(?:<|&lt;)svg(?:/)?(?:>|&gt;)"
     r"|!\[[^\]]*\]\([^)]*\)"
     r"|:?\s*svg\s*(?:diagram|graphic|image|placeholder)"
     r"|(?:diagram|image|graphic)\s*(?:placeholder)?\s*;\s*\*\*?svg\*\*?|"
     r"h(?:ttp|ttps)://[^\s]*(?:\.svg)(?:\?[^\s]*)?"
     r")\s*[.;:!؟]*\s*$",
+    re.IGNORECASE,
+)
+
+
+# A provider may also append a diagram/image stub AFTER real prose instead of
+# emitting it as its own line (e.g. "Useful explanation here. **svg**" or
+# "Here is the idea **svg**"). `_APPENDED_MEDIA_PLACEHOLDER_AT_END` matches
+# such a stub ONLY when it sits at the very end of a line (allowing trailing
+# punctuation/whitespace). The strip helper then drops it, while preserving
+# prose that legitimately discusses the SVG format: a stub is only removed when
+# the token is the lowercase artifact spelling OR the prose before it already
+# ends with terminal punctuation, so "It renders best as an **SVG**" stays.
+_APPENDED_MEDIA_PLACEHOLDER_AT_END = re.compile(
+    r"(?P<stub>(?:"
+    r"\*{1,3}\s*\[?svg\]?\s*\*{1,3}"
+    r"|\[svg(?:\.\w+)?\]"
+    r"|(?:<|&lt;)svg(?:/)?(?:>|&gt;)"
+    r"|!\[[^\]]*\]\([^)]*\)"
+    r"|:?\s*svg\s*(?:diagram|graphic|image|placeholder)"
+    r"|(?:diagram|image|graphic)\s*(?:placeholder)?\s*;\s*\*{1,3}?svg\*{1,3}?"
+    r"|h(?:ttp|ttps)://[^\s]*(?:\.svg)(?:\?[^\s]*)?"
+    r"))[.;:!؟\s\-]*$",
     re.IGNORECASE,
 )
 
@@ -1472,6 +1494,33 @@ def _scrub_visible_internal_terms(text):
     for pattern, replacement in _VISIBLE_INTERNAL_REPLACEMENTS:
         cleaned = pattern.sub(replacement, cleaned)
     return cleaned
+
+
+def _strip_appended_media_placeholder(text):
+    """Drop media-placeholder stubs that a provider appends AFTER real prose
+    (e.g. "Useful explanation here. **svg**"). Each line is trimmed of trailing
+    stub tokens (bounded loop for chained stubs); whole-stub lines are handled
+    by `_RAW_MEDIA_PLACEHOLDER_LINE` earlier in the pipeline."""
+    lines = str(text or "").splitlines()
+    rebuilt = []
+    for line in lines:
+        for _ in range(4):
+            match = _APPENDED_MEDIA_PLACEHOLDER_AT_END.search(line)
+            if not match:
+                break
+            head = line[: match.start("stub")].rstrip()
+            if not head:
+                break
+            token = match.group("stub")
+            is_lowercase_artifact = "svg" in token
+            prose_terminated = bool(
+                re.search(r"[.!?؟]\s*$", head)
+            )
+            if not (is_lowercase_artifact or prose_terminated):
+                break
+            line = head
+        rebuilt.append(line)
+    return "\n".join(rebuilt).strip()
 
 
 def _trim_automatic_closing(text):
@@ -1628,6 +1677,7 @@ def _clean_visible_reply(text, persona_id=None, language=None):
             continue
         kept.append(line)
     cleaned = "\n".join(kept).strip()
+    cleaned = _strip_appended_media_placeholder(cleaned)
     cleaned = _scrub_visible_internal_terms(cleaned)
     cleaned = _trim_automatic_closing(cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
@@ -1843,6 +1893,7 @@ _GENERAL_TOPIC_PATTERNS = [
     ("linear algebra", re.compile(r"linear\s+algebra|الجبر\s*الخطي", re.I)),
     ("sky blue", re.compile(r"sky\s*blue|السماء\s*زرقا?|ليه\s*السماء\s*زرقا?|ليش\s*السماء|لون\s*السماء\s*(?:أزرق|ازرق)", re.I)),
     ("penetration testing", re.compile(r"penetration\s+test(?:ing)?|pentest|اختبار\s*الاختراق|اختبارات\s*الاختراق", re.I)),
+    ("recursion", re.compile(r"\brecursi(?:on|ve|ons?)\b|التكرار\s*(?:الذاتي)?|الاستدعاء\s*(?:الذاتي)?|استدعاء\s*ذاتي", re.I)),
 ]
 
 _GENERAL_KNOWLEDGE = {
@@ -1875,6 +1926,34 @@ _GENERAL_KNOWLEDGE = {
             "tradeoff": "النقطة المهمة: النباتات بتلتقط جزء صغير بس من طاقة الشمس، عشان كده السلاسل الغذائية محتاجة كتلة نباتية كبيرة.",
             "question": "تحب نتابع إيه اللي بيحصل للجلوكوز بعدها — تنفس، نموّ، ولا تخزين؟",
             "challenge": "عرّف البناء الضوئي في جملة واحدة واذكر المدخلين الأساسيين والناتج الجانبي.",
+        },
+    },
+    "recursion": {
+        "en": {
+            "plain": (
+                "Recursion is a way to solve a problem by having a function call itself on a smaller "
+                "version of the same problem, until it reaches a simple base case that ends the calls."
+            ),
+            "analogy": "Think of nested boxes: to open the biggest box you first open a smaller one inside it, and the smallest box is the base case that stops the sequence.",
+            "example": "`raise_to_power(x, n)` returns 1 when `n == 0`; otherwise it returns `x * raise_to_power(x, n - 1)` — each call shrinks `n` by 1 until it hits the base case.",
+            "practice": "Make it yours: write a recursive `factorial(n)` that returns 1 for `n <= 1` and `n * factorial(n - 1)` otherwise, then trace `factorial(4)` by hand as 4·3·2·1.",
+            "tradeoff": "Recursion is easy to read because it mirrors the problem itself, but each level costs one extra call frame — an iterative loop usually uses less memory and can be faster on very deep problems.",
+            "question": "Want to compare recursion with iteration, or trace a recursive function together?",
+            "challenge": "Give the base case and the recursive step that compute `sum_first(n) = 1 + 2 + ... + n`, then say how many calls `sum_first(4)` makes altogether.",
+            "example_2": "A `countdown(n)` that prints `n` then calls `countdown(n - 1)` until `n == 0` shows the same shape clearly — without that base case it would call itself forever.",
+        },
+        "ar": {
+            "plain": (
+                "الـ recursion هي لما الدالة تحل مشكلة باستدعاء نفسها على نسخة أصغر من نفس المشكلة، "
+                "ولحد ما توصل لحالة أساسية بسيطة (base case) بتوقف الاستدعاءات."
+            ),
+            "analogy": "اعتبرها زي الصناديق المتداخلة: عشان تفتح الصندوق الكبير بتحتاج تفتح صندوق أصغر جواه، وأصغر صندوق هو الـ base case اللي بينهي السلسلة.",
+            "example": "`raise_to_power(x, n)` بترجع 1 لما `n == 0`؛ غير كده بترجع `x * raise_to_power(x, n - 1)` — كل استدعاء بيقلّل `n` بواحد لحد ما يوصل للحالة الأساسية.",
+            "practice": "خلّيها بتاعتك: اكتب دالة recursive اسمها `factorial(n)` بترجع 1 لما `n <= 1` وبغير كده `n * factorial(n - 1)`، وبعدين تتبع `factorial(4)` على الورق: 4·3·2·1.",
+            "tradeoff": "الـ recursion سهلة القراءة لأنها بتبيّن شكل المشكلة نفسها، بس كل مستوى بيكلف استدعاء إضافي — حلقة iteration أحياناً أوفر في الذاكرة وأسرع في المشاكل العميقة.",
+            "question": "تحب نقارن الـ recursion ب الـ iteration، ولا نتنفّذ دالة recursive سوا؟",
+            "challenge": "اكتب الـ base case والخطوة الـ recursive اللي بيحسبوا `sum_first(n) = 1 + 2 + ... + n`، وبعدين قول `sum_first(4)` بتعمل كام استدعاء في الإجمال.",
+            "example_2": "`countdown(n)` بتطبع `n` وبعدين بتستدعي `countdown(n - 1)` لحد ما `n == 0` بتبيّن نفس الفكرة بوضوح — من غير الـ base case دي هتفضل تستدعي نفسها للأبد.",
         },
     },
     "newton's second law": {
@@ -2370,6 +2449,87 @@ _FOLLOWUP_REFERENCE = re.compile(
     re.IGNORECASE,
 )
 
+# Explicit confusion: the student says the current explanation lost them. This
+# is its own thread reference — the topic is resolved from THIS mentor's memory
+# (like a deictic follow-up) and the reply changes teaching STRATEGY per
+# persona instead of repeating the default shape.
+_CONFUSION_REFERENCE = re.compile(
+    r"\bi(?:'m|\\ am)\s+confused\b|\bi\s+am\s+confused\b|still\s+confused\b|"
+    r"\b(?:got|am|was)\s+confused\b|confus(?:es|ed|ing)\s+me\b|confused\s+about\b|"
+    r"\bdon'?t\s+understand\b|\bdo\s+not\s+understand\b|\bcan'?t\s+(?:grasp|follow|get|see)\b|"
+    r"\bnot\s+(?:getting|grasping|following)\b|over\s*my\s*head\b|"
+    r"\bمش\s*فاهم\b|\bمش\s*فاهمة\b|\bمش\s*فاهمني\b|\bمش\s*فاهمه\b|"
+    r"\bفاهمش\b|فاهمهاش\b|مفهمتش\b|فاهمتش\b|ما\s*فهمتش\b|"
+    r"\bمش\s*واضح\b|\bمش\s*واضحة\b|\bواضحش\b|\bمش\s*مستوعب\b|\bمش\s*مستوعبة\b|"
+    r"\bمش\s*مفهوم\b|\bمش\s*مفهومة\b|\bمش\s*مقتنع\b|\bمتلخبط\b|\bمش\s*قادر\s*(?:أفهم|افهم)\b|"
+    r"\bلسه\s*مش\s*فاهم\b|\bلسه\s*مش\s*فاهمة\b|\bلسه\s*مش\s*واضح\b|\bلسه\s*مش\s*واضحة\b|"
+    r"\bلسه\s*مش\s*مستوعب\b|\bلسا\s*مش\s*فاهم\b|\bلسى\s*مش\s*فاهم\b",
+    re.IGNORECASE,
+)
+
+# Deterministic response-length adaptation. The persona decks below reshape the
+# SAME grounded content into a shorter / simpler / longer / deeper reply. The
+# detection is word-based and explicit (spec: deterministic rules, not prompt
+# mood). "simple" phrases double as thread references ("explain that simpler"),
+# so a length request with no named topic resolves from the mentor's memory.
+_LENGTH_SHORT_REFERENCE = re.compile(
+    r"\bshort\s*answer\b|\bin\s*short\b|\bkeep\s*it\s*short\b|\bbrief(?:ly)?\b|\bconcise(?:ly)?\b|"
+    r"\b(?:tl;?dr|tldr)\b|\bsummar(?:y|ize)\b|\bin\s*one\s+sentence\b|\bjust\s+the\s+(?:main|core|key|gist)\b|"
+    r"\bباختصار\b|\bاختصار\b|\bمختصر\b|\bمختصرة\b|\bخلاصة\b|\bصوري?\s*قصيرة\b|\bجملة\s*واحدة\b|"
+    r"\b(?:ال)?إجابة\s*قصيرة\b|\b(?:ال)?اجابة\s*قصيرة\b|"
+    r"\bعاوز(?:ني)?\s*(?:ال)?إجابة\s*قصيرة\b|\bعايز(?:ني)?\s*(?:ال)?إجابة\s*قصيرة\b",
+    re.IGNORECASE,
+)
+
+_LENGTH_SIMPLE_REFERENCE = re.compile(
+    r"\b(?:keep|make)\s+it\s+simple\b|\bsimplify\b|\bsimplified\b|\bsimply\b|"
+    r"(?<!in a )simple(?:r|st)?\b|"
+    r"\block\s*(?:it\s*)?(?:down|easy)\b|\beasy(?:ier)?\b|"
+    r"\bplain\s*(?:words?|terms?|language)?\b|\bno\s+jargon\b|\blower\s+(?:the\s+)?jargon\b|\beli5\b|"
+    r"\bببساطة\b|\bأبسط\b|\bابسط\b|\bأسهل\b|\bاسهل\b|\bأبسط\s*صورة\b|\bبشكل\s*أبسط\b|\bبلغة\s*بسيطة\b|"
+    r"\bبصيغة\s*(?:أسهل|أبسط)\b|\bكلام\s*أبسط\b",
+    re.IGNORECASE,
+)
+
+_LENGTH_MORE_REFERENCE = re.compile(
+    r"\b(?:please\s+)?(?:explain|tell|elaborate|expand)\s+(?:more|further|on|on\s+(?:it|that))\b|"
+    r"\bmore\s+(?:detail|details|depth|info|information|explanation)\b|\bexpand\b|\belaborate\b|"
+    r"\bin\s+(?:more\s+)?detail\b|\bgives?\s+me\s+more\b|\bmore\b.*\bexplain\b|"
+    r"\bمزيد\s*(?:من)?\s*(?:تفاصيل|شرح|توضيح)\b|\bبالتفصيل\b|\bبتفصيل\b|\bكلام\s*أكتر\b|"
+    r"\bأكتر\s*تفاصيل\b|\bأكتر\b|زودني?|زيّدني?|وضح\s*أكتر\b",
+    re.IGNORECASE,
+)
+
+_LENGTH_DEEP_REFERENCE = re.compile(
+    r"\bgo(?:es)?\s+deep(?:er)?\b|\bdeep\s*dive\b|\bin\s+depth\b|\bmore\s+depth\b|"
+    r"\bin\s+deeper\s+detail\b|\bdo\s+the\s+theory\b|\bthrough\s+the\s+mechanics\b|"
+    r"\bبالتعمق\b|\bأعمق\b|\bبعمق\b|\bفي\s*العمق\b|\bبكل\s*التفاصيل\b|\bغوص\s*أعمق\b",
+    re.IGNORECASE,
+)
+
+
+def _detect_length_request(question):
+    """Deterministic length intent: 'short' | 'deep' | 'more' | 'simple' | None.
+
+    Explicit size words win over softer ones: a terse 'short answer' claim beats
+    a trailing 'simpler', and 'go deeper' beats 'more detail'. Returns None for
+    ordinary turns so the default persona deck is untouched.
+    """
+    q = str(question or "")
+    if _LENGTH_SHORT_REFERENCE.search(q):
+        return "short"
+    if _LENGTH_DEEP_REFERENCE.search(q):
+        return "deep"
+    if _LENGTH_MORE_REFERENCE.search(q):
+        return "more"
+    if _LENGTH_SIMPLE_REFERENCE.search(q):
+        return "simple"
+    return None
+
+
+def _is_confusion_request(question):
+    return bool(_CONFUSION_REFERENCE.search(str(question or "")))
+
 # Explicit request to connect the topic to the student's own career/role. Only
 # such a turn may mention the trusted target role in a fallback reply — a plain
 # general question never does.
@@ -2391,13 +2551,16 @@ _MEMORY_TOPICS_LINE = re.compile(r"^Topics discussed:\s*(.+)$", re.MULTILINE)
 def _followup_topic_from_memory(question, conversation_memory, skill_name=None, language=None):
     """Resolve a deictic follow-up's topic from the mentor's own memory block.
 
-    Returns a topic string only when (a) the question really is a follow-up AND
+    Returns a topic string only when (a) the question really is a follow-up
+    (or a confusion/length-request that refers back to the same thread) AND
     (b) a previous user turn in THIS mentor's memory resolves to a GROUNDED
     topic (so the fallback can honestly re-explain it). Returns None otherwise
     — an unresolved follow-up goes to the honest limitation reply, never to a
     fabricated topic.
     """
-    if not _FOLLOWUP_REFERENCE.search(str(question or "")):
+    if not (_FOLLOWUP_REFERENCE.search(str(question or ""))
+            or _is_confusion_request(question)
+            or _detect_length_request(question)):
         return None
     text = str(conversation_memory or "")
     # Scan the mentor's own thread newest-first. The LAST student line may
@@ -2481,54 +2644,564 @@ _PERSONA_FALLBACK_AR = {
 
 # Follow-up variants of the deterministic personas: when a student asks a
 # deictic follow-up ("another example", "re-explain", "مثال تاني") the reply
-# re-teaches the SAME resolved topic with a SECOND, distinct example
-# (``example_2``) instead of repeating the first one. These are role-neutral:
-# a follow-up to a general topic never pulls the target role in.
+# answers DIRECTLY with a SECOND, distinct example (``example_2``). It never
+# restates the full first explanation (``plain``) and never re-emits the
+# topic's stock closing question (``question``/``challenge``) — otherwise a
+# consecutive follow-up would repeat the identical automatic closing from the
+# immediately previous mentor reply. These are role-neutral: a follow-up to a
+# general topic never pulls the target role in.
 _PERSONA_FOLLOWUP_EN = {
     "nova": (
-        "{plain}\n\n"
-        "Another example: {example_2}\n\n"
-        "{question}"
+        "Another example: {example_2}"
     ),
     "axel": (
-        "Short version: {plain}\n\n"
-        "Here is a different concrete angle: {example_2}\n\n"
-        "Try {practice} and tell me what happened."
+        "Here is a different concrete angle: {example_2}."
     ),
     "sage": (
-        "Let's reason through it again. {plain}\n\n"
-        "{tradeoff}\n\n"
         "Another example worth holding onto: {example_2}"
     ),
     "vex": (
-        "Be precise: {plain}\n\n"
-        "{challenge}\n\n"
         "For contrast, a second concrete example: {example_2}."
     ),
 }
 
 _PERSONA_FOLLOWUP_AR = {
     "nova": (
+        "مثال تاني: {example_2}"
+    ),
+    "axel": (
+        "شوف مثال عملي مختلف: {example_2}."
+    ),
+    "sage": (
+        "ومثال تاني يستاهل تتشبث بيه: {example_2}"
+    ),
+    "vex": (
+        "وعلى النقيض، مثال عملي تاني: {example_2}."
+    ),
+}
+
+# --- Length adaptation decks ------------------------------------------------
+# Persona-normal structure differences: the SAME grounded topic is reframed to
+# match the explicit length request. Every deck references only fields that
+# already exist in every _GENERAL_KNOWLEDGE entry (plain / analogy / example /
+# example_2 / practice / tradeoff / question / challenge). No career context,
+# no persona self-intro, no mentor re-introduction, no stock CTA.
+
+_LENGTH_SHORT_EN = {
+    "nova": "Quick take: {plain}",
+    "axel": "Bottom line: {plain}",
+    "sage": "In short: {plain}",
+    "vex": "Precisely: {plain}",
+}
+_LENGTH_SHORT_AR = {
+    "nova": "الخلاصة: {plain}",
+    "axel": "الخلاصة: {plain}",
+    "sage": "باختصار: {plain}",
+    "vex": "بدقة: {plain}",
+}
+
+_LENGTH_SIMPLE_EN = {
+    "nova": "Let me make that simpler.\n\n{analogy}\n\n{plain}",
+    "axel": "Make it concrete.\n\n{practice}\n\n{plain}",
+    "sage": "Let me reframe the same idea.\n\n{analogy}\n\n{plain}",
+    "vex": "Plainly: {plain}",
+}
+_LENGTH_SIMPLE_AR = {
+    "nova": "خلّيني أوضحها أبسط.\n\n{analogy}\n\n{plain}",
+    "axel": "خلّيها عملية.\n\n{practice}\n\n{plain}",
+    "sage": "خلّيني أعيد صياغتها بمنظور مختلف.\n\n{analogy}\n\n{plain}",
+    "vex": "بوضوح: {plain}",
+}
+
+_LENGTH_MORE_EN = {
+    "nova": (
         "{plain}\n\n"
-        "مثال تاني: {example_2}\n\n"
+        "{analogy}\n\n"
+        "{example} {example_2} {question}"
+    ),
+    "axel": (
+        "Short version: {plain}\n\n"
+        "{practice}\n\n"
+        "Another angle: {example_2}.\n\n"
+        "Send me what happened and I will help you tighten the next run."
+    ),
+    "sage": (
+        "Let's reason it through. {plain}\n\n"
+        "{tradeoff}\n\n"
+        "A second comparison: {example_2}.\n\n"
         "{question}"
+    ),
+    "vex": (
+        "Be precise: {plain}\n\n"
+        "{challenge}\n\n"
+        "For contrast, probe this: {example_2}.\n\n"
+        "Now answer it with specifics. Vague definitions do not count."
+    ),
+}
+_LENGTH_MORE_AR = {
+    "nova": (
+        "{plain}\n\n"
+        "{analogy}\n\n"
+        "{example} {example_2} {question}"
     ),
     "axel": (
         "المختصر: {plain}\n\n"
-        "شوف مثال عملي مختلف: {example_2}\n\n"
-        "جرّب {practice} وقولي اللي ظهر معاك."
+        "{practice}\n\n"
+        "شوف زاوية مختلفة: {example_2}.\n\n"
+        "ابعتلي اللي ظهر معاك وهنظبط الخطوة اللي بعدها."
     ),
     "sage": (
-        "خلّينا نفكر فيها تاني. {plain}\n\n"
+        "خلّينا نفكر فيها بهدوء. {plain}\n\n"
         "{tradeoff}\n\n"
-        "ومثال تاني يستاهل تتشبث بيه: {example_2}"
+        "ومثال تاني للمقارنة: {example_2}.\n\n"
+        "{question}"
     ),
     "vex": (
         "كن دقيق: {plain}\n\n"
         "{challenge}\n\n"
-        "وعلى النقيض، مثال عملي تاني: {example_2}."
+        "وعلى النقيض، شوف المثال التاني ده: {example_2}.\n\n"
+        "جاوب بتفاصيل واضحة. الكلام العام مش إجابة."
     ),
 }
+
+_LENGTH_DEEP_EN = {
+    "nova": (
+        "{plain}\n\n"
+        "{analogy}\n\n"
+        "The why: {tradeoff}\n\n"
+        "{example}\n\n"
+        "{question}"
+    ),
+    "axel": (
+        "Short version: {plain}\n\n"
+        "{practice}\n\n"
+        "Why this matters: {tradeoff}\n\n"
+        "{challenge}"
+    ),
+    "sage": (
+        "Let's reason it through. {plain}\n\n"
+        "{tradeoff}\n\n"
+        "Going deeper: {analogy}\n\n"
+        "{question}"
+    ),
+    "vex": (
+        "Precisely: {plain}\n\n"
+        "Tradeoff: {tradeoff}\n\n"
+        "Now defend the edge case: {challenge}\n\n"
+        "Vague definitions do not count."
+    ),
+}
+_LENGTH_DEEP_AR = {
+    "nova": (
+        "{plain}\n\n"
+        "{analogy}\n\n"
+        "ليه ده مهم: {tradeoff}\n\n"
+        "{example}\n\n"
+        "{question}"
+    ),
+    "axel": (
+        "المختصر: {plain}\n\n"
+        "{practice}\n\n"
+        "ليه الموضوع ده مهم: {tradeoff}\n\n"
+        "{challenge}"
+    ),
+    "sage": (
+        "خلّينا نفكر فيها بهدوء. {plain}\n\n"
+        "{tradeoff}\n\n"
+        "في العمق: {analogy}\n\n"
+        "{question}"
+    ),
+    "vex": (
+        "كن دقيق: {plain}\n\n"
+        "Tradeoff: {tradeoff}\n\n"
+        "وصّللي الحد الحاد للحاجة دي: {challenge}\n\n"
+        "الكلام العام مش إجابة."
+    ),
+}
+
+# --- Confusion adaptation decks ---------------------------------------------
+# Each persona changes its TEACHING STRATEGY when the student says they're
+# confused — not a layout tweak but an actual shift in approach. No template
+# below names the mentor, asks "Would you like me to…?", or offers stock
+# career context. The topic is always resolved from the mentor's own memory
+# (same thread) and the reply ends on a focused, persona-shaped check-in.
+
+_PERSONA_CONFUSED_EN = {
+    "nova": (
+        "Let me shrink it to the smallest step.\n\n"
+        "{analogy}\n\n"
+        "{plain}\n\n"
+        "Does that step make sense to you?"
+    ),
+    "axel": (
+        "Let's make it tactile.\n\n"
+        "Try this first:\n{practice}\n\n"
+        "{plain}\n\n"
+        "Run that first action and tell me what you see."
+    ),
+    "sage": (
+        "Let me shift the comparison.\n\n"
+        "{analogy}\n\n"
+        "{plain}\n\n"
+        "Where exactly does it slip for you — the idea, or the example?"
+    ),
+    "vex": (
+        "Pin down the unclear part.\n\n"
+        "{plain}\n\n"
+        "Which piece loses you — the definition, or the example?\n"
+        "Answer that precisely and we'll fix what breaks."
+    ),
+}
+_PERSONA_CONFUSED_AR = {
+    "nova": (
+        "خلّيني أوزّعها على أصغر خطوة.\n\n"
+        "{analogy}\n\n"
+        "{plain}\n\n"
+        "الخطوة دي واضحة ليك؟"
+    ),
+    "axel": (
+        "خلّينا نخليها عملية إكتر.\n\n"
+        "جرّب الأول:\n{practice}\n\n"
+        "{plain}\n\n"
+        "نفّذ الخطوة الأولانية وقولي إيه اللي ظهرلك."
+    ),
+    "sage": (
+        "خلّيني أغير التشبيه.\n\n"
+        "{analogy}\n\n"
+        "{plain}\n\n"
+        "إيه بالظبط اللي بيضيع معاك — الفكرة ولا المثال؟"
+    ),
+    "vex": (
+        "حدّد الجزء اللي مش واضح.\n\n"
+        "{plain}\n\n"
+        "أي جملة بتضيع معاك — التعريف ولا المثال؟\n"
+        "جاوب بدقة وهنصلّح اللي واقع."
+    ),
+}
+
+# The auto-created second example is only a relabelled copy of ``example`` (the
+# mirror prefix) — never a genuinely new device, so it must never count as
+# avoiding repetition.
+_EXAMPLE2_MIRROR_PREFIX = "One more angle on it: "
+
+# --- Vex dry-wit on confidently wrong technical answers -------------------
+# When a student makes a clearly wrong statement of fact (not a question, not
+# confused, not hedged), Vex may open with ONE brief dry line before the real
+# correction.  Detection is deterministic and scoped to EN fallback only.
+
+_CONFIDENT_ASSERTION = re.compile(
+    r"\b(?:is|are|was|does|means?|equals?|works?)\b", re.I
+)
+_HEDGE = re.compile(
+    r"(?:\b(?:i think|i believe|maybe|probably|not sure|perhaps|could be)\b"
+    r"|\?)",
+    re.I,
+)
+_CONFUSION_MARKER = _CONFUSION_REFERENCE  # reuse the existing confusion regex
+
+_VEX_MISCONCEPTIONS = [
+    (
+        re.compile(
+            r"(?:recursion|recursive).*(?:forever|infinite|endless|keep going|never stop|no end)",
+            re.I,
+        ),
+        "Calling itself forever is certainly one way to meet the stack limit.",
+    ),
+    (
+        re.compile(
+            r"(?:loop|iteration|iterative|for |while ).*(?:forever|infinite|endless|never stop|always)",
+            re.I,
+        ),
+        "A loop that runs forever is an ambitious way to heat your CPU.",
+    ),
+    (
+        re.compile(
+            r"(?:recursion|recursive).*(?:without|no|never|skip|missing|don't have|lack).*(?:base case|terminat|stop cond|anchor)",
+            re.I,
+        ),
+        "Recursion without a base case is an ambitious way to crash your program.",
+    ),
+    (
+        re.compile(
+            r"(?:recursion|recursive).*(?:always|faster|better|easier|prefer|should use|best way|best approach)",
+            re.I,
+        ),
+        "Calling recursion always faster is a bold claim the call stack would like to contest.",
+    ),
+    (
+        re.compile(
+            r"(?:variable|var |const |let ).*(?:always|never|is ).*(?:global|local|scope)",
+            re.I,
+        ),
+        "Global by default is certainly a choice the rest of the codebase will remember.",
+    ),
+    (
+        re.compile(
+            r"(?:null|none|undefined|null pointer).*(?:is|means?|equals?|same as).*(?:zero|0|empty|false|nothing)",
+            re.I,
+        ),
+        "Null equals zero is a casual friendship that will break your programme.",
+    ),
+    (
+        re.compile(
+            r"(?:async|await|promise|future).*(?:always|just|means?|is ).*(?:parallel|concurr|simultaneous|faster)",
+            re.I,
+        ),
+        "async means parallel is a popular myth the event loop enjoys disproving.",
+    ),
+    (
+        re.compile(
+            r"(?:private|public|protected).*(?:does not|doesn't|won't|can't|never).*(?:matter|affect|change|impact|security)",
+            re.I,
+        ),
+        "Visibility modifiers not mattering is exactly the sort of thing a pen-tester hopes you believe.",
+    ),
+    (
+        re.compile(
+            r"(?:hash|dict|map|object|hashtable).*(?:always|guaranteed|o\(1\)|constant time|fast)",
+            re.I,
+        ),
+        "Hash tables are always O(1) is the kind of promise that collapses on the worst day.",
+    ),
+    (
+        re.compile(
+            r"(?:exception|error|try|catch|throw).*(?:never|harmless|safe|won't crash|doesn't matter)",
+            re.I,
+        ),
+        "Exceptions never matter is a thesis defence that ends in a traceback.",
+    ),
+]
+
+
+def _detect_confident_wrong_answer(question):
+    """Detect a confidently stated wrong technical answer.
+
+    Returns the dry-wit one-liner string when a misconception is detected,
+    otherwise ``None``.  Scoped to EN only; caller must gate on ``lang``.
+    The check is deliberately conservative: a hedge (``I think``, ``?``) or
+    confusion marker disqualifies the turn.
+    """
+    q = str(question or "").strip()
+    if not q or len(q) < 15:
+        return None
+    if _HEDGE.search(q):
+        return None
+    if _CONFUSION_MARKER.search(q):
+        return None
+    if not _CONFIDENT_ASSERTION.search(q):
+        return None
+    for pattern, line in _VEX_MISCONCEPTIONS:
+        if pattern.search(q):
+            return line
+    return None
+
+
+_CONFUSION_DEVICE_FIELDS = frozenset(
+    {
+        "plain",
+        "analogy",
+        "example",
+        "example_2",
+        "practice",
+        "tradeoff",
+        "challenge",
+        "question",
+    }
+)
+
+# Device pick order per persona for the confusion re-teach (Phase 3.2). The
+# picker returns the first UNUSED device the persona can actually render for
+# the current topic, so a confused student never sees the same analogy, example,
+# exercise, code sample, or wording twice. ``example_2`` counts only when it is
+# hand-authored content; the auto-mirror is treated as ``example``.
+_CONFUSION_DEVICE_PRIORITY = {
+    "nova": ("example_2", "analogy", "practice", "tradeoff", "challenge", "plain"),
+    "axel": ("practice", "example_2", "analogy", "challenge", "tradeoff", "plain"),
+    "sage": ("analogy", "example_2", "tradeoff", "practice", "plain"),
+    "vex": ("example_2", "analogy", "tradeoff", "challenge", "plain"),
+}
+
+_CONFUSION_DEVICE_LABEL_EN = {
+    "plain": "",
+    "analogy": "A different picture:\n",
+    "example": "A different example:\n",
+    "example_2": "A different running example:\n",
+    "practice": "Try this instead:\n",
+    "tradeoff": "Frame it as:\n",
+    "challenge": "Check yourself:\n",
+}
+
+_CONFUSION_DEVICE_LABEL_AR = {
+    "plain": "",
+    "analogy": "تشبيه مختلف:\n",
+    "example": "مثال مختلف:\n",
+    "example_2": "مثال تشغيل مختلف:\n",
+    "practice": "جرّب ده بدل:\n",
+    "tradeoff": "صغها كده:\n",
+    "challenge": "اختبر نفسك:\n",
+}
+
+_SAGE_COMPARE_LINE_EN = "And compare it with: "
+_SAGE_COMPARE_LINE_AR = "وقارنها مع: "
+
+
+# ------------------------------------------------------------------ confusion anti-repetition (Phase 3.2)
+#
+# The Phase 3 confusion decks re-interpolated {analogy} and {plain} — exactly
+# the devices the first explanation just used — which is why a confused student
+# got the same nested-boxes analogy twice. Instead of scanning the 160-char
+# memory excerpts (fragile), we SIMULATE the previous turn's deck from the last
+# student question in THIS mentor's memory: resolve its topic, decide which deck
+# shape it would render (fallback / length / follow-up), and derive the device
+# fields that deck actually used. The confusion picker then avoids every device
+# in that set, so the re-teach materially changes the teaching device.
+
+
+def _deck_device_fields(template):
+    """The device fields a deck template actually renders — the {field} tokens
+    that name teaching devices, never the topic/role placeholders."""
+    if not template:
+        return set()
+    return set(re.findall(r"\{(\w+)\}", template)) & _CONFUSION_DEVICE_FIELDS
+
+
+def _is_distinct_example2(details):
+    """True when ``example_2`` is hand-authored content rather than the
+    auto-mirror of the same example."""
+    example = str(details.get("example") or "").strip()
+    example2 = str(details.get("example_2") or "").strip()
+    if not example or not example2:
+        return False
+    return example2 != (_EXAMPLE2_MIRROR_PREFIX + example)
+
+
+def _devices_used_last_turn(question, conversation_memory, persona_id, lang, details, topic):
+    """The teaching devices the mentor has already used for this topic,
+    accumulated across THIS mentor's memory by simulating each prior student
+    turn's deck shape (fallback / length / follow-up / confusion). Empty on a
+    fresh thread — anti-repetition only kicks in when a previous explanation
+    genuinely exists to avoid. Sequential confusion turns keep advancing
+    through the persona's device priority, so even the third re-teach differs
+    from the second."""
+    memory = str(conversation_memory or "")
+    students = [l.strip() for l in _MEMORY_STUDENT_LINE.findall(memory)]
+    if not students:
+        students = [m.strip(' "') for m in _MEMORY_STUDENT_ASKED.findall(memory)]
+    used = set()
+    pid = persona_id or "nova"
+    for s in students:
+        if not s:
+            continue
+        if _is_confusion_request(s):
+            device = _pick_confusion_device(pid, details, used)
+            key = device
+            if device == "example_2" and not _is_distinct_example2(details):
+                key = "example"
+            used.add(key)
+            continue
+        length = _detect_length_request(s)
+        if length:
+            if str(_topic_from_question(s, None, lang)).strip().lower() != str(topic or "").strip().lower():
+                continue
+            deck_map = {
+                "short": _LENGTH_SHORT_AR if lang == "ar" else _LENGTH_SHORT_EN,
+                "simple": _LENGTH_SIMPLE_AR if lang == "ar" else _LENGTH_SIMPLE_EN,
+                "more": _LENGTH_MORE_AR if lang == "ar" else _LENGTH_MORE_EN,
+                "deep": _LENGTH_DEEP_AR if lang == "ar" else _LENGTH_DEEP_EN,
+            }
+            used |= _deck_device_fields(deck_map.get(length, {}).get(pid))
+            continue
+        if _FOLLOWUP_REFERENCE.search(s):
+            deck = (_PERSONA_FOLLOWUP_AR if lang == "ar" else _PERSONA_FOLLOWUP_EN).get(pid)
+            used |= _deck_device_fields(deck)
+            continue
+        if str(_topic_from_question(s, None, lang)).strip().lower() != str(topic or "").strip().lower():
+            continue
+        deck = (_PERSONA_FALLBACK_AR if lang == "ar" else _PERSONA_FALLBACK_EN).get(pid)
+        used |= _deck_device_fields(deck)
+    return used
+
+
+def _pick_confusion_device(persona_id, details, used):
+    """First unused device the persona can actually render for this topic."""
+    pid = persona_id or "nova"
+    order = _CONFUSION_DEVICE_PRIORITY.get(pid, _CONFUSION_DEVICE_PRIORITY["nova"])
+    for device in order:
+        key = device
+        if device == "example_2" and not _is_distinct_example2(details):
+            key = "example"
+        if key in used:
+            continue
+        if str(details.get(device) or "").strip():
+            return device
+    return "example"
+
+
+def _persona_confusion_reply(persona_id, lang, details, topic, role,
+                             conversation_memory, question):
+    """Confusion re-teach that changes the teaching DEVICE.
+
+    Reads THIS mentor's memory to detect which devices the previous explanation
+    used and picks a different device per persona priority, wrapped in the
+    persona's own re-teach frame. Keeps the Phase 3 pinned openers ("Let me
+    shrink it to the smallest step." / "Let's make it tactile." / "Let me shift
+    the comparison." / "Pin down the unclear part.") so the strategy change
+    stays recognizable per mentor.
+    """
+    used = _devices_used_last_turn(question, conversation_memory, persona_id, lang, details, topic)
+    device = _pick_confusion_device(persona_id, details, used)
+    labels = _CONFUSION_DEVICE_LABEL_AR if lang == "ar" else _CONFUSION_DEVICE_LABEL_EN
+    dev_text = str(details.get(device) or "").strip()
+    dev_line = (labels.get(device, "") + dev_text) if dev_text else ""
+    pid = persona_id or "nova"
+    if lang == "ar":
+        if pid == "nova":
+            return (
+                "خلّيني أوزّعها على أصغر خطوة.\n\n"
+                + dev_line
+                + "\n\nخدها بسهولة — هنمشي خطوة خطوة.\n\nالخطوة دي واضحة ليك؟"
+            )
+        if pid == "axel":
+            return (
+                "خلّينا نخليها عملية إكتر.\n\n"
+                + "جرّب الأول:\n" + dev_line
+                + "\n\nنفّذ الخطوة الأولانية وقولي إيه اللي ظهرلك."
+            )
+        if pid == "sage":
+            body = "خلّيني أغير التشبيه.\n\n" + dev_line
+            if device != "example_2" and _is_distinct_example2(details):
+                body = body + "\n\n" + _SAGE_COMPARE_LINE_AR + str(details.get("example_2")).strip()
+            return body + "\n\nإيه بالظبط اللي بيضيع معاك — الفكرة ولا المثال؟"
+        return (
+            "حدّد الجزء اللي مش واضح.\n\n"
+            + dev_line
+            + "\nأي جملة بتضيع معاك — التعريف ولا المثال؟\n"
+            "جاوب بدقة وهنصلّح اللي واقع."
+        )
+    if pid == "nova":
+        return (
+            "Let me shrink it to the smallest step.\n\n"
+            + dev_line
+            + "\n\nNo problem — let's take it one small step at a time 🙂.\n\n"
+            "Does that step make sense to you?"
+        )
+    if pid == "axel":
+        return (
+            "Let's make it tactile.\n\n"
+            + "New move 🎯 — try this first:\n" + dev_line
+            + "\n\nRun that first action and tell me what you see."
+        )
+    if pid == "sage":
+        body = "Let me shift the comparison.\n\n" + dev_line
+        if device != "example_2" and _is_distinct_example2(details):
+            body = body + "\n\n" + _SAGE_COMPARE_LINE_EN + str(details.get("example_2")).strip()
+        return body + "\n\nWhere exactly does it slip for you — the idea, or the example?"
+    return (
+        "Pin down the unclear part.\n\n"
+        + dev_line
+        + "\nWhich piece loses you — the definition, or the example?\n"
+        "Answer that precisely and we'll fix what breaks."
+    )
 
 
 # ------------------------------------------------------------------ question intent routing
@@ -3073,8 +3746,11 @@ _TRUST_FALLBACK_AR = {
 
 # General-knowledge limitation: an arbitrary general question that is NOT in the
 # curated offline knowledge base and has no trusted skill mapping. With no GenAI
-# provider configured we refuse to substitute unrelated career-topic text; we say
-# so honestly and redirect to what we CAN help with.
+# provider configured we refuse to substitute unrelated career-topic text; we
+# say so honestly with a plain provider-availability statement. The wording
+# never tells the student to "connect to the direct assistant" (there is no such
+# user-facing concept) and never claims the mentor itself is offline — the
+# limitation is always cast as provider availability.
 _LIMITATION_EN = {
     "nova": (
         "That question isn't one I can answer reliably offline just now, so I "
@@ -3099,21 +3775,20 @@ _LIMITATION_EN = {
 
 _LIMITATION_AR = {
     "nova": (
-        "السؤال ده مش من اللي أقدر أجاوبه بدقة وأنا غير متصل حالياً، فمش "
-        "هختلق إجابة. جرّب تسأل تاني بعد لحظة، أو وصّلني بالمساعد المباشر."
+        "مزوّد الذكاء الاصطناعي مش بيرد بشكل موثوق دلوقتي، فمش هختلق إجابة. "
+        "جرّب نفس السؤال تاني بعد لحظة."
     ),
     "axel": (
-        "إجابة مباشرة: ده بره اللي أقدر أعتمد عليه وأنا غير متصل، فمش هزوّر. "
-        "جرّب تاني بعد شوية."
+        "إجابة مباشرة: مزوّد الذكاء الاصطناعي مش بيرد بشكل موثوق دلوقتي، "
+        "فمش هزوّر. جرّب تاني بعد لحظة."
     ),
     "sage": (
-        "تأمل صادق: أفضل أقول إن مفيش عندي إجابة موثوقة على أقول حاجة على "
-        "مزاجي. السؤال ده مش من اللي أقدر أجاوب عليه بدقة غير متصل دلوقتي. "
-        "جرّب تاني بعد لحظة."
+        "تأمل صادق: مزوّد الذكاء الاصطناعي مش بيرد بشكل موثوق دلوقتي، "
+        "فمش هبدّع. جرّب تاني بعد لحظة."
     ),
     "vex": (
-        "إجابة دقيقة: لن أجامِل. السؤال ده محتاج مصدر مش متاح ليا حالياً، "
-        "فمفيش إجابة قابلة للدفاع عنها. جرّب تاني بعد لحظة."
+        "إجابة دقيقة: مزوّد الذكاء الاصطناعي مش بيرد بشكل موثوق دلوقتي، "
+        "فلن أختلق إجابة. جرّب تاني بعد لحظة."
     ),
 }
 
@@ -3366,7 +4041,12 @@ def _tutor_fallback(question, skill_name, target_role, student_context, tutor_id
         return _trust_fallback(persona_id, lang)
     topic = _topic_from_question(q, skill_name, lang)
     resolved = str(topic).strip().lower() != _placeholder_topic(lang).lower()
-    is_followup = bool(_FOLLOWUP_REFERENCE.search(q))
+    length_request = _detect_length_request(q)
+    confused = _is_confusion_request(q)
+    # A deictic follow-up, a confusion statement, and a length request all
+    # refer back to the running thread and must resolve their topic from THIS
+    # mentor's own conversation memory.
+    is_followup = bool(_FOLLOWUP_REFERENCE.search(q)) or confused or bool(length_request)
     if not resolved and is_followup and conversation_memory:
         # A deictic follow-up names no topic itself; pull it from THIS mentor's
         # memory so "another example of what you just explained" re-explains the
@@ -3418,18 +4098,34 @@ def _tutor_fallback(question, skill_name, target_role, student_context, tutor_id
                 "your profile precisely."
             )
         details["plain"] = details["plain"] + note
-    if is_followup and "example" in details and "example_2" not in details:
-        # A second distinct example is preferred; when the curated entry has
-        # only one, honestly restate it as an additional angle rather than
-        # fabricate content.
-        details["example_2"] = "One more angle on it: " + details["example"]
-    if is_followup and "example_2" in details:
+    # Guarantee a second example is always available so follow-up, length and
+    # confusion decks can reference it without conditional logic.
+    if "example" in details and "example_2" not in details:
+        details["example_2"] = _EXAMPLE2_MIRROR_PREFIX + details["example"]
+    if confused:
+        return _persona_confusion_reply(
+            persona_id, lang, details, topic, target_role, conversation_memory, q
+        )
+    if length_request == "short":
+        templates = _LENGTH_SHORT_AR if lang == "ar" else _LENGTH_SHORT_EN
+    elif length_request == "simple":
+        templates = _LENGTH_SIMPLE_AR if lang == "ar" else _LENGTH_SIMPLE_EN
+    elif length_request == "more":
+        templates = _LENGTH_MORE_AR if lang == "ar" else _LENGTH_MORE_EN
+    elif length_request == "deep":
+        templates = _LENGTH_DEEP_AR if lang == "ar" else _LENGTH_DEEP_EN
+    elif is_followup and "example_2" in details:
         templates = _PERSONA_FOLLOWUP_AR if lang == "ar" else _PERSONA_FOLLOWUP_EN
     else:
         templates = _PERSONA_FALLBACK_AR if lang == "ar" else _PERSONA_FALLBACK_EN
     role = target_role or ("your target role" if lang == "en" else "وظيفتك المستهدفة")
     template = templates.get(persona_id, templates["nova"])
-    return template.format(topic=topic, role=role, **details)
+    reply = template.format(topic=topic, role=role, **details)
+    if persona_id == "vex" and lang == "en":
+        dry_wit = _detect_confident_wrong_answer(q)
+        if dry_wit:
+            reply = dry_wit + "\n\n" + reply
+    return reply
 
 
 def _direct_arithmetic_answer(question, language="en"):
@@ -3568,16 +4264,19 @@ def tutor_reply(question, student_context=None, skill_name=None, target_role=Non
     (``interview`` mode is handled separately via ``interview_reply``).
 
     ``personality`` (Build-Your-Copilot) is an optional dict shaped like a
-    ``TUTOR_PERSONAS`` entry. When provided it REPLACES the fixed persona as
-    the identity block in the system prompt — the per-user copilot personality
-    composes the prompt while ``tutor_id`` keeps selecting the voice agent /
-    persona for fallbacks and message ownership. When ``None`` (no copilot
-    configured) the behavior is byte-identical to the fixed personas.
+    ``TUTOR_PERSONAS`` entry. It is LAYERED ON TOP of the fixed mentor selected
+    by ``tutor_id`` (base mentor + optional user customization = final persona):
+    the base mentor's identity and teaching strategy always stay in the system
+    prompt, and ``personality`` only adds an additive modifier block for the
+    display name, tone, style, and traits (Nova + "more concise" is a concise
+    Nova — never an unrelated assistant). When ``None`` (no copilot configured)
+    the behavior is byte-identical to the fixed personas.
 
     Prompt assembly (Smart Tutor Personas v2): BASE_ASSISTANT_RULES + the
-    selected PERSONA identity/behavior + TRUSTED_CONTEXT (the ``student_context``
-    argument) + CURRENT_MODE. Only the selected persona is described so one
-    persona can never leak another's name/origin/specialty.
+    selected PERSONA identity/behavior + the persona's PROVIDER teaching
+    strategy (+ per-turn confusion/length directives) + TRUSTED_CONTEXT (the
+    ``student_context`` argument) + CURRENT_MODE. Only the selected persona is
+    described so one persona can never leak another's name/origin/specialty.
     """
     lang = _normalized_lang(language)
     direct = _direct_arithmetic_answer(question, lang)
@@ -3600,20 +4299,30 @@ def tutor_reply(question, student_context=None, skill_name=None, target_role=Non
         question, skill_name=skill_name, target_role=target_role, mode=mode,
         student_context=student_context,
     )
-    persona_line = ""
-    identity = None
-    if personality and personality.get("name"):
-        identity = personality
-    elif persona:
-        identity = persona
-    if identity:
-        persona_line = _persona_line_image(identity)
+    base_identity = persona
+    if personality and personality.get("name") and base_identity is None:
+        # No fixed mentor for this tutor_id (defensive): fall back to the
+        # personality dict so the prompt is never left without an identity.
+        base_identity = personality
+    persona_line = _persona_line_image(base_identity) if base_identity else ""
+    if persona and personality and personality.get("name"):
+        # Base mentor + additive user customization. The personality can only
+        # MODIFY tone/pacing — the base identity and teaching strategy stay.
+        persona_line = persona_line + _persona_modifier_line(personality, base=persona)
     lang_lock = _language_lock(lang)
     rules = GENERAL_ASSISTANT_RULES if intent in ("GENERAL", "IDENTITY") else BASE_ASSISTANT_RULES
+    strategy = _provider_strategy_directive(tutor_id)
+    style = _provider_style_directive(tutor_id)
+    confusion_instr = _provider_confusion_directive(tutor_id) if _is_confusion_request(question) else ""
+    length_instr = _provider_length_directive(question)
     system = (
         lang_lock + " "
         + rules
         + persona_line
+        + ((" " + strategy) if strategy else "")
+        + ((" " + style) if style else "")
+        + ((" " + confusion_instr) if confusion_instr else "")
+        + ((" " + length_instr) if length_instr else "")
         + " " + LANG_INSTRUCTIONS.get(lang, LANG_INSTRUCTIONS["en"])
         + " " + _intent_instruction(intent)
         + " " + lang_lock
@@ -3636,9 +4345,14 @@ def tutor_reply(question, student_context=None, skill_name=None, target_role=Non
     # question must never borrow that context — it is exactly how a target role
     # leaked into a general turn's closing CTA ("...something new in Clinical
     # Research."). Memory is therefore attached only when the turn itself
-    # references this thread (a deictic follow-up that must resolve its topic),
-    # and IDENTITY turns never get it (they are answered deterministically).
-    follows_thread = bool(_FOLLOWUP_REFERENCE.search(str(question or "")))
+    # references this thread (a deictic follow-up, a confusion statement, or an
+    # explicit length request that must resolve its topic), and IDENTITY turns
+    # never get it (they are answered deterministically).
+    follows_thread = (
+        bool(_FOLLOWUP_REFERENCE.search(str(question or "")))
+        or _is_confusion_request(question)
+        or bool(_detect_length_request(question))
+    )
     if conversation_memory and (not general_turn or follows_thread):
         memory_rule = (
             "Memory rules: use the conversation memory above ONLY to resolve "
@@ -3793,6 +4507,221 @@ TUTOR_PERSONAS = {
         "style": "Serious, precise and demanding — a disciplined examiner. Be fair but unforgiving of vague answers; require specifics, tradeoffs and numbers, with minimal praise.",
     },
 }
+
+
+# ---------------------------------------------------------------- provider path (Phase 3.1 §6.1)
+#
+# The deterministic fallback decks already make the four mentors structurally
+# distinct. These blocks carry the SAME teaching structures onto the PROVIDER
+# path: they are composed into the system prompt a real GenAI provider sees, so
+# model-backed replies keep the same response structure, explanation strategy,
+# example choice, pacing, challenge level, follow-up type and feedback style —
+# built on teaching BEHAVIOR, not ritual catchphrases. The shared-intelligence
+# floor is untouched: every persona remains able to answer any topic correctly
+# and completely (see BASE_ASSISTANT_RULES / GENERAL_ASSISTANT_RULES).
+PROVIDER_TEACHING_STRATEGIES = {
+    "nova": (
+        "Teaching method (Nova): think of yourself as a patient teacher. Structure every "
+        "explanation as: 1) the concept stated simply, 2) the idea broken into small steps, "
+        "3) a concrete analogy or example the student can picture, then 4) at most one gentle "
+        "check that they understood before moving on. Simplify jargon and define any "
+        "technical term the first time you use it. Prefer explanation before challenge; if "
+        "the student seems confused, slow down and take a smaller step instead of adding new "
+        "ideas."
+    ),
+    "axel": (
+        "Teaching method (Axel): think of yourself as a hands-on coach. Keep the theory "
+        "short and move quickly into action. Structure every reply as: 1) a short no-fluff "
+        "explanation, 2) one concrete example, command, or snippet they can try right away, "
+        "3) a small task, exercise, or mini challenge that locks the idea in, followed by "
+        "direct, actionable feedback. Use short, energetic sentences and keep momentum high. "
+        "If the student explicitly asked only for an explanation, do not force practice on "
+        "them."
+    ),
+    "sage": (
+        "Teaching method (Sage): think of yourself as an analytical mentor. Answer directly "
+        "and correctly FIRST, then explain why it works. Structure every reply as: 1) the "
+        "direct answer, 2) the underlying reasoning, 3) a comparison of alternative "
+        "approaches with their trade-offs, and 4) a thoughtful why/how question when useful. "
+        "Connect the topic to the bigger idea when relevant. Do not make the reply verbose "
+        "or turn every answer into questions alone — always give real substance first."
+    ),
+    "vex": (
+        "Teaching method (Vex): think of yourself as a demanding but professional examiner. "
+        "Be precise and concise. Structure every reply as: 1) a precise, correct explanation "
+        "with the key distinction called out, 2) a challenge or test of the student's "
+        "understanding of that distinction, 3) an honest identification of common weak "
+        "spots, and 4) at most one harder follow-up or knowledge check. Give direct, "
+        "specific, useful feedback. Stay professional — never rude, insulting, hostile, or "
+        "discouraging. You remain in normal tutor chat unless an interview session was "
+        "explicitly started."
+    ),
+}
+
+PROVIDER_CONFUSION_DIRECTIVES = {
+    "nova": (
+        "The student did not understand the previous explanation. Use a materially different "
+        "teaching strategy and do not reuse the previous analogy, example, exercise, code "
+        "sample, or wording. The reply the student just saw is in the conversation memory "
+        "above — read it, identify what you used there, and leave it out. You MUST change your "
+        "strategy, not repeat the previous explanation. Pause, give a NEW simpler analogy and "
+        "even smaller steps about the same topic, and check whether that specific step now "
+        "makes sense."
+    ),
+    "axel": (
+        "The student did not understand the previous explanation. Use a materially different "
+        "teaching strategy and do not reuse the previous analogy, example, exercise, code "
+        "sample, or wording. The reply the student just saw is in the conversation memory "
+        "above — read it, identify what you used there, and leave it out. You MUST change your "
+        "strategy, not repeat the previous explanation. Stop explaining abstractly and "
+        "DEMONSTRATE something concrete the student can run or try right now — a different "
+        "practical demonstration they have not attempted yet — then end with one small action "
+        "for them to do."
+    ),
+    "sage": (
+        "The student did not understand the previous explanation. Use a materially different "
+        "teaching strategy and do not reuse the previous analogy, example, exercise, code "
+        "sample, or wording. The reply the student just saw is in the conversation memory "
+        "above — read it, identify what you used there, and leave it out. You MUST change your "
+        "strategy, not repeat the previous explanation. Shift to a DIFFERENT conceptual "
+        "comparison or viewpoint on the same topic and reason it through from that angle."
+    ),
+    "vex": (
+        "The student did not understand the previous explanation. Use a materially different "
+        "teaching strategy and do not reuse the previous analogy, example, exercise, code "
+        "sample, or wording. The reply the student just saw is in the conversation memory "
+        "above — read it, identify what you used there, and leave it out. You MUST change your "
+        "strategy, not repeat the previous explanation. Identify the EXACT part they do not "
+        "understand and test that precise point with one targeted question. Stay precise and "
+        "challenging but be instructional rather than sarcastic."
+    ),
+}
+
+# Conversational-STYLE blocks for the provider path (§15). The teaching-method
+# block sets WHAT to teach and HOW to structure it; the style block sets the
+# persona's recognizable VOICE — wording, energy, humor, emoji budget, rhythm,
+# pacing, challenge/reassurance balance and feedback flavor — so the mentor is
+# identifiable even when its name and avatar are hidden. Shared intelligence
+# floor untouched: persona controls HOW, never WHAT.
+PROVIDER_STYLE_DIRECTIVES = {
+    "nova": (
+        "Conversational style (Nova): warm, patient and supportive. Use calm, encouraging "
+        "wording, gentle check-ins, and reassure the student at the first sign of hesitation. "
+        "Keep a slow, steady pace: one idea, a small step, then a soft check. You MAY "
+        "occasionally use a gentle emoji such as 🙂 or ✨ to soften a check-in, but never in "
+        "every reply and never more than one. Praise effort and progress warmly. Never rush "
+        "or sound impatient, and always leave the student feeling safe to ask again."
+    ),
+    "axel": (
+        "Conversational style (Axel): fun, quirky and energetic, with momentum. Use short, "
+        "punchy sentences, a playful tone, and an action-first rhythm — get the student doing "
+        "something concrete quickly. You MAY use occasional natural emoji such as 🔥 🎯 💪 😄, "
+        "but only when celebrating progress, introducing a challenge, or moving into practice — "
+        "never in every reply, never stacked several at once, and never in place of real "
+        "feedback; technical quality always stays exact. Cheer effort with energy and give "
+        "direct, actionable feedback."
+    ),
+    "sage": (
+        "Conversational style (Sage): calm, analytical and thoughtful. Use measured, precise "
+        "wording, a steady rhythm, and reasoning-forward sentences that connect ideas. Use "
+        "little or no emoji. Give the student space to think with a thoughtful question, but "
+        "stay concrete and substantial — never vague, never unnecessarily long, and never "
+        "philosophical for its own sake."
+    ),
+    "vex": (
+        "Conversational style (Vex): candid, efficient and direct, with controlled dry wit. "
+        "Keep replies tight and precise. You MAY open with ONE brief dry-wit line when the "
+        "student makes a clearly wrong technical assertion — such as claiming recursion runs "
+        "forever, a loop is infinite by design, null equals zero, async is always parallel, "
+        "or visibility modifiers don't matter. The wit must target the code, the reasoning, "
+        "or the technical consequence — NEVER the student's intelligence, identity, ability, "
+        "worth, or personality. Never insult, mock, patronize, or discourage. Immediately "
+        "after the dry line, correct the misconception precisely and challenge the student "
+        "constructively. Do NOT copy the same dry line every turn. When the student is "
+        "confused, frustrated, seeking reassurance, or a beginner struggling with basics, "
+        "drop the sarcasm entirely: stay precise, professional and challenging but become "
+        "instructional and supportive. You remain in normal tutor chat unless an interview "
+        "session was explicitly started."
+    ),
+}
+
+# Explicit length directives composed onto the provider path. The existing
+# deterministic detector (``_detect_length_request``) decides which applies —
+# the provider is never left to infer the size from the wording alone.
+PROVIDER_LENGTH_DIRECTIVES = {
+    "short": (
+        "Reply length for this turn: SHORT. Give the direct answer in a few clear "
+        "sentences; skip digressions, extra examples, and closings."
+    ),
+    "simple": (
+        "Reply style for this turn: SIMPLIFY. The student asked for a simple explanation — "
+        "use plain, beginner-friendly language, minimal jargon, and small steps before any "
+        "detail."
+    ),
+    "more": (
+        "Reply length for this turn: EXPLAIN MORE. Expand the explanation with details plus "
+        "a second concrete example or comparison building on the first answer."
+    ),
+    "deep": (
+        "Reply length for this turn: GO DEEPER. Give a thorough explanation covering the "
+        "reasoning, the trade-offs, edge cases, and a fuller example — this is an explicit "
+        "request for depth."
+    ),
+}
+
+
+def _provider_strategy_directive(tutor_id):
+    """Structural teaching-method block for the provider path, or ''."""
+    return PROVIDER_TEACHING_STRATEGIES.get((tutor_id or "").strip().lower(), "")
+
+
+def _provider_confusion_directive(tutor_id):
+    """Changed-strategy confusion block for the provider path, or ''."""
+    return PROVIDER_CONFUSION_DIRECTIVES.get((tutor_id or "").strip().lower(), "")
+
+
+def _provider_style_directive(tutor_id):
+    """Conversational-style block for the provider path, or ''."""
+    return PROVIDER_STYLE_DIRECTIVES.get((tutor_id or "").strip().lower(), "")
+
+
+def _provider_length_directive(question):
+    """Explicit reply-length block for the provider path from the existing
+    deterministic detector, or '' when the turn names no length."""
+    return PROVIDER_LENGTH_DIRECTIVES.get(_detect_length_request(question), "")
+
+
+def _persona_modifier_line(personality, base=None):
+    """The layering block for Build-Your-Copilot customization.
+
+    ``personality`` is a ``TUTOR_PERSONAS``-shaped dict. It is treated as an
+    ADDITIVE modifier (display name alias, tone, style, traits, behavioral
+    preferences) on top of the base mentor selected by ``tutor_id`` — it can
+    refine HOW the mentor teaches (e.g. a more concise Nova, a friendlier Vex)
+    but never REPLACES the base mentor's identity or teaching strategy. Only
+    fields that actually differ from the base persona are surfaced, so a copilot
+    preset that already mirrors its mentor adds nothing redundant.
+    """
+    p = personality or {}
+    base = base or {}
+    bits = []
+    name = str(p.get("name") or "").strip()
+    if name and name != (base.get("name") or ""):
+        bits.append(f"this mentor is known to the student as {name}")
+    p_traits = [str(t) for t in (p.get("traits") or [])]
+    if p_traits and p_traits != [str(t) for t in (base.get("traits") or [])]:
+        bits.append("custom traits: " + ", ".join(p_traits))
+    style = str(p.get("style") or "").strip()
+    if style and style != (base.get("style") or ""):
+        bits.append("custom style: " + style)
+    behavior = str(p.get("behavior") or "").strip()
+    if behavior and behavior != (base.get("behavior") or ""):
+        bits.append("custom behavior preferences: " + behavior)
+    if not bits:
+        return ""
+    return (" User customization layer (additive only — refine tone and pacing, "
+            "never replace the base mentor identity or the teaching method "
+            "specified above): " + "; ".join(bits) + ".")
 
 
 def interview_reply(last_answer, student_context=None, skill_name=None, target_role=None, turn=None, tutor_id=None, language=None):
