@@ -28,6 +28,7 @@ These tests pin the fixed contract:
 Never calls a paid API (deterministic fixture below).
 """
 
+import re
 import shutil
 import subprocess
 
@@ -228,3 +229,107 @@ def test_runtime_detection_unit_matches_spec_example():
     assert copilot.resolve_language("auto", ARABIC_EXACT_MESSAGE) == "ar"
     # 2. explicit pins are never replaced by auto/en.
     assert copilot.resolve_language("en", "اشرحلي Docker") == "en"
+
+
+# ------------------------------------------------------------------ live Arabizi mirroring (T1-T4)
+
+_ARABIZI_GREETING = "ezayek ya nova 3amla eh"
+_ARABIZI_DOCKER = "ana msh fahm el docker ports"
+_ARABIC_SCRIPT_GREETING = "إزيك يا نوفا"
+
+
+def test_live_arabizi_greeting_mirrors_arabic(client, student_id, auth_headers):
+    """T1 — auto + "ezayek ya nova 3amla eh" -> Arabic reply, no meta-commentary."""
+    h = auth_headers("aisha@student.edu")
+    _set_stored_language(client, student_id, h, "auto")
+    r = _tutor(client, student_id, h, _ARABIZI_GREETING)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data.get("language") == "ar"
+    reply = data.get("reply") or ""
+    assert has_arabic(reply)
+    low = reply.lower()
+    assert "i'll respond" not in low
+    assert "it looks like" not in low
+
+
+def test_live_arabizi_docker_question_mirrors_arabic(client, student_id, auth_headers):
+    """T2 — auto + mixed Arabizi/English "docker ports" -> Arabic reply."""
+    h = auth_headers("aisha@student.edu")
+    _set_stored_language(client, student_id, h, "auto")
+    r = _tutor(client, student_id, h, _ARABIZI_DOCKER)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data.get("language") == "ar"
+    assert has_arabic(data.get("reply") or "")
+
+
+def test_live_english_query_stays_english(client, student_id, auth_headers):
+    """T3 — "how are you" must still resolve English (regression guard)."""
+    h = auth_headers("aisha@student.edu")
+    _set_stored_language(client, student_id, h, "auto")
+    r = _tutor(client, student_id, h, "how are you")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data.get("language") == "en"
+    assert not has_arabic(data.get("reply") or "")
+
+
+def test_live_arabic_script_greeting_ends_in_arabic(client, student_id, auth_headers):
+    """T4 — an Arabic reply must not close on an English sentence."""
+    h = auth_headers("aisha@student.edu")
+    _set_stored_language(client, student_id, h, "auto")
+    r = _tutor(client, student_id, h, _ARABIC_SCRIPT_GREETING)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data.get("language") == "ar"
+    reply = (data.get("reply") or "").strip()
+    assert has_arabic(reply)
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?؟])\s+", reply) if s.strip()]
+    assert sentences, "reply must contain at least one sentence"
+    assert has_arabic(sentences[-1]), f"last sentence must be Arabic: {sentences[-1]!r}"
+
+
+def test_live_arabizi_negative_no_translation_narration(client, student_id, auth_headers):
+    """T5 — negative: "3amla eh" (auto) must not narrate translation decisions.
+
+    Catches model invention on the live provider: the reply must never contain
+    "in English", "translate", "I'll respond", or "Since you wrote".
+    """
+    h = auth_headers("aisha@student.edu")
+    _set_stored_language(client, student_id, h, "auto")
+    r = _tutor(client, student_id, h, "3amla eh")
+    assert r.status_code == 200, r.text
+    reply = (r.json().get("reply") or "").strip()
+    low = reply.lower()
+    assert "in english" not in low
+    assert "translate" not in low
+    assert "i'll respond" not in low
+    assert "since you wrote" not in low
+    assert has_arabic(reply)
+
+
+def test_live_longer_arabizi_docker_volumes_question(client, student_id, auth_headers):
+    """T6 — longer, specific Arabizi must mirror Arabic without degenerating.
+
+    "momken tshar7ly docker volumes bel3araby law samaht" is a normal long
+    Arabizi request (no Arabic script). Auto must resolve it ar and the reply
+    must be Arabic or Arabic+English technical — never a degenerate stub or an
+    English-only response.
+    """
+    from app import copilot
+    msg = "momken tshar7ly docker volumes bel3araby law samaht"
+    assert copilot.detect_language(msg) == "ar"
+    assert copilot.resolve_language("auto", msg) == "ar"
+    h = auth_headers("aisha@student.edu")
+    _set_stored_language(client, student_id, h, "auto")
+    r = _tutor(client, student_id, h, msg)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data.get("language") == "ar"
+    reply = (data.get("reply") or "").strip()
+    assert has_arabic(reply)
+    low = reply.lower()
+    assert "in english" not in low
+    assert "translate" not in low
+    assert "i'll respond" not in low

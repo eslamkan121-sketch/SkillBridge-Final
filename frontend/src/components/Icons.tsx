@@ -122,6 +122,18 @@ export const IconVolume = (p: IconProps) => (
     <path d="M11 5L6 9H3v6h3l5 4V5z" /><path d="M16 9l4 4M20 9l-4 4" />
   </svg>
 )
+export const IconSpeaker = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M11 5L6 9H2v6h4l5 4V5z" />
+    <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+    <path d="M18.5 5.5a9 9 0 0 1 0 13" />
+  </svg>
+)
+export const IconWaveform = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M4 11v2" /><path d="M8 8v8" /><path d="M12 5v14" /><path d="M16 8v8" /><path d="M20 11v2" />
+  </svg>
+)
 export const IconVolumeOff = (p: IconProps) => (
   <svg {...base(p.size, p.className, p.style)}>
     <path d="M11 5L6 9H3v6h3l5 4V5z" />
@@ -353,5 +365,26 @@ export const IconDots = (p: IconProps) => (
     <circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none" />
     <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
     <circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none" />
+  </svg>
+)
+export const IconThumbsUp = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M7 10v10H4a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2h3ZM7 10l5-7c1-1 3 0 3 2l-1 5h5a2 2 0 0 1 2 2l-1 6a2 2 0 0 1-2 2H7" />
+  </svg>
+)
+export const IconThumbsDown = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M7 14V4H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h3ZM7 14l5 7c1 1 3 0 3-2l-1-5h5a2 2 0 0 0 2-2l-1-6a2 2 0 0 0-2-2H7" />
+  </svg>
+)
+export const IconShare = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" />
+    <path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4" />
+  </svg>
+)
+export const IconRefresh = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M20 11a8 8 0 0 0-15-2M4 5v4h4M4 13a8 8 0 0 0 15 2M20 19v-4h-4" />
   </svg>
 )

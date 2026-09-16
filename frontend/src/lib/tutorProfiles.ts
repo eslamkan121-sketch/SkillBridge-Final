@@ -32,7 +32,7 @@ export interface TutorProfile {
   role: string
   personality: string
   purpose: string
-  theme: 'purple' | 'cyan' | 'green' | 'orange'
+  theme: 'purple' | 'blue' | 'gold' | 'green'
   avatar: string
   voiceHint: { rate: number; pitch: number }
   voiceId: string
@@ -81,7 +81,7 @@ export const TUTOR_PROFILES: TutorProfile[] = [
     role: 'Practical Coach',
     personality: 'Energetic, confident, practical, motivating and hands-on.',
     purpose: 'Turns skills into exercises, labs, projects and real scenarios.',
-    theme: 'cyan',
+    theme: 'blue',
     avatar: '/assets/tutors/axel.png',
     voiceHint: { rate: 1.08, pitch: 0.85 },
     voiceId: 'TX3LPaxmHKxFdv7VOQHJ',
@@ -105,7 +105,7 @@ export const TUTOR_PROFILES: TutorProfile[] = [
     role: 'Discussion Mentor',
     personality: 'Calm, intelligent, analytical, thoughtful, curious and patient.',
     purpose: 'Guides deeper understanding through discussion and critical thinking.',
-    theme: 'green',
+    theme: 'gold',
     avatar: '/assets/tutors/sage.png',
     voiceHint: { rate: 0.92, pitch: 1.08 },
     voiceId: 'XrExE9yKIg1WjnnlVkGX',
@@ -128,7 +128,7 @@ export const TUTOR_PROFILES: TutorProfile[] = [
     role: 'Examiner',
     personality: 'Serious, precise, professional, disciplined, demanding but fair.',
     purpose: 'Supports quizzes, interview simulations and skill verification.',
-    theme: 'orange',
+    theme: 'green',
     avatar: '/assets/tutors/vex.png',
     voiceHint: { rate: 0.9, pitch: 0.8 },
     voiceId: 'pNInz6obpgDQGcFmaJgB',

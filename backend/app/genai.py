@@ -13,6 +13,7 @@ without credentials.
 """
 import difflib
 import json
+import logging
 import os
 import random
 import re
@@ -90,6 +91,7 @@ _LAST_PROVIDER = ""
 _LAST_ATTEMPT = {
     "attempted": False,
     "provider": None,
+    "model": None,
     "success": False,
     "error_class": None,
     "http_status": None,
@@ -146,6 +148,7 @@ def provider_status():
         "active_provider": _LAST_PROVIDER or preferred,
         "last_active_provider": _LAST_PROVIDER or None,
         "last_attempted_provider": _LAST_ATTEMPT["provider"] if attempted else None,
+        "last_attempt_model": _LAST_ATTEMPT["model"] if attempted else None,
         "last_success": _LAST_ATTEMPT["success"] if attempted else None,
         "last_error_type": _LAST_ATTEMPT["error_class"] if attempted else None,
         "last_http_status": _LAST_ATTEMPT["http_status"],
@@ -224,7 +227,7 @@ def _chat_message_content(data):
 _nim_circuit = {"failures": 0, "open_until": 0.0}
 
 
-def _call_nim(system, user, retries=1, max_tokens=1024, timeout=None):
+def _call_nim(system, user, retries=1, max_tokens=1024, timeout=None, model=None):
     import httpx
 
     now = time.time()
@@ -234,7 +237,7 @@ def _call_nim(system, user, retries=1, max_tokens=1024, timeout=None):
     timeout_s = timeout or NIM_TIMEOUT_SECONDS
     url = f"{NIM_BASE_URL.rstrip('/')}/chat/completions"
     payload = {
-        "model": NIM_MODEL,
+        "model": (model or NIM_MODEL),
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -244,7 +247,12 @@ def _call_nim(system, user, retries=1, max_tokens=1024, timeout=None):
         "top_p": 0.95,
     }
     headers = {"Authorization": f"Bearer {NIM_KEY}"}
-    if NIM_DISABLE_THINKING:
+    # The NIM-specific reasoning toggle is only valid for the nemotron family
+    # (the configured main model). A LIVE fast-model override (``model=``) is an
+    # opt-in instruct-class model that must NOT receive model-specific kwargs it
+    # may reject with a 400 — fast instruct models already answer without a
+    # separate reasoning pass. Normal chat / main-model behavior is unchanged.
+    if NIM_DISABLE_THINKING and model is None:
         payload["chat_template_kwargs"] = {"enable_thinking": False}
     last_exc = None
     last_status = None
@@ -283,15 +291,22 @@ def _call_nim(system, user, retries=1, max_tokens=1024, timeout=None):
     raise err
 
 
-def _generate(system, user, max_tokens=None, timeout=None):
+def _generate(system, user, max_tokens=None, timeout=None, model=None):
     """Run the real provider chain in priority order; record secret-free
     diagnostics for every attempt (see ``provider_status``). All provider
     exceptions are caught and the next configured provider is tried; when every
     configured provider fails, RuntimeError is raised and ``complete`` resolves
-    to the deterministic fallback."""
+    to the deterministic fallback.
+
+    ``model`` is the LIVE-only fast-model override (see ``LIVE_NIM_MODEL``): it
+    is only used for the nvidia provider, and only for the turn that requested
+    it. If the fast model call fails, exactly one fallback attempt uses the
+    configured ``NIM_MODEL`` for that same turn — a provider failure never
+    silently downgrades or drops the answer.
+    """
     global _LAST_PROVIDER
     _LAST_ATTEMPT.update({
-        "attempted": False, "provider": None, "success": False,
+        "attempted": False, "provider": None, "model": None, "success": False,
         "error_class": None, "http_status": None, "timeout": False,
         "elapsed_ms": None,
     })
@@ -301,8 +316,17 @@ def _generate(system, user, max_tokens=None, timeout=None):
     if ANTHROPIC_KEY:
         candidates.append(("anthropic", lambda s, u: _call_anthropic(s, u)))
     if NIM_KEY:
-        candidates.append(("nvidia", lambda s, u: _call_nim(
-            s, u, max_tokens=max_tokens or 1024, timeout=timeout or NIM_TIMEOUT_SECONDS)))
+        def _nvidia_call(s, u):
+            kwargs = dict(max_tokens=max_tokens or 1024,
+                          timeout=timeout or NIM_TIMEOUT_SECONDS)
+            if model:
+                try:
+                    return _call_nim(s, u, model=model, **kwargs)
+                except Exception:
+                    # LIVE fast-model failure: same turn, main configured model.
+                    return _call_nim(s, u, **kwargs)
+            return _call_nim(s, u, **kwargs)
+        candidates.append(("nvidia", _nvidia_call))
     for name, call in candidates:
         started = time.time()
         _LAST_ATTEMPT.update({"attempted": True, "provider": name})
@@ -311,7 +335,7 @@ def _generate(system, user, max_tokens=None, timeout=None):
             _LAST_PROVIDER = name
             _LAST_ATTEMPT.update({
                 "success": True, "error_class": None, "http_status": None,
-                "timeout": False,
+                "timeout": False, "model": model if name == "nvidia" else None,
                 "elapsed_ms": int((time.time() - started) * 1000),
             })
             return reply
@@ -321,6 +345,7 @@ def _generate(system, user, max_tokens=None, timeout=None):
                 "error_class": type(exc).__name__,
                 "http_status": _exc_http_status(exc),
                 "timeout": _exc_is_timeout(exc) or bool(getattr(exc, "timeout", False)),
+                "model": model if name == "nvidia" else None,
                 "elapsed_ms": int((time.time() - started) * 1000),
             })
             continue
@@ -328,9 +353,9 @@ def _generate(system, user, max_tokens=None, timeout=None):
     raise RuntimeError("No GenAI provider available")
 
 
-def complete(system, user, fallback=None, max_tokens=None, timeout=None):
+def complete(system, user, fallback=None, max_tokens=None, timeout=None, model=None):
     try:
-        return _generate(system, user, max_tokens=max_tokens, timeout=timeout)
+        return _generate(system, user, max_tokens=max_tokens, timeout=timeout, model=model)
     except Exception as exc:
         if fallback is not None:
             return fallback
@@ -1386,6 +1411,208 @@ def _reply_matches_language(text, language):
     return not _has_arabic(text)
 
 
+# The reply language is resolved by the backend before the prompt is built
+# (preference pin or Auto detection reading the student's ACTUAL message, which
+# now also recognizes Arabizi). This clause replaces any prior ambiguity where
+# the model decided on its own to answer English for an Arabic message (then
+# narrated that choice) instead of mirroring the student. Kept deliberately
+# SHORT: earlier long-form "MANDATORY LANGUAGE RULE" phrasing introduced a
+# decoding latch on some turns (repeated "docker ports" spam) — the chained
+# constraints sent the model into a repetition loop. A/B data across 10 live
+# NIM attempts drove this reduction (see language-mirroring AGENTS entry).
+_MIRROR_LANGUAGE_RULE = (
+    "Reply in the same language as the user's message. "
+    "Do not explain. Do not translate."
+)
+
+# Live-Mode voice surface only (frontend sends spoken=true on the Live voice
+# request). This is a SURFACE directive, not a persona change: normal chat turns
+# never carry it. It keeps spoken replies natural — short for simple questions,
+# no markdown scaffolding — without any persona/teaching redesign.
+_SPOKEN_RULE = (
+    "This reply will be read aloud by a text-to-speech voice. Keep it natural "
+    "for speech and concise: answer the requested question directly and first, "
+    "then add at most one short supporting sentence. For a simple question (for "
+    "example \"What's your name?\" or \"What can you help me with?\") reply in "
+    "1-3 short sentences; for an explanation, prefer one focused paragraph over "
+    "a long essay. If the student explicitly asks for a detailed explanation, "
+    "step-by-step teaching, or a long example, a fuller spoken answer is fine, "
+    "but stay focused on exactly what was asked and do not pad it. "
+    "No markdown symbols, headers, bullet lists, or table formatting."
+)
+
+# LIVE-only generation budget. Spoken turns are conversational: a small
+# max_tokens keeps a fast model prompt-to-first-token quick and stops simple
+# questions from sprawling. An explicit length request (deep/step-by-step/long
+# example) keeps the default, fuller budget — answers are never globally
+# truncated, and normal chat never uses these numbers.
+_SPOKEN_MAX_TOKENS = 200
+_SPOKEN_TIMEOUT_SECONDS = 30
+
+
+def _live_fast_model():
+    """Live-only fast NIM model override (``LIVE_NIM_MODEL``), or None.
+
+    Optional configuration for the spoken path only: when set, spoken turns
+    prefer this (verified faster) model while normal chat stays on the
+    configured ``NIM_MODEL``. Unset or blank -> None (default model). The value
+    is intentionally not hardcoded or defaulted to an unverified name here.
+    """
+    name = (os.environ.get("LIVE_NIM_MODEL") or "").strip()
+    return name or None
+
+
+_SPOKEN_IDENTITY_REFERENCE = re.compile(
+    r"what('s| is)\s+your\s+name\s*[?!.؟]?|"
+    r"who\s+are\s+you\s*[?!.؟]?|"
+    r"tell\s+me\s+about\s+yourself\s*[?!.؟]?|"
+    r"what\s+should\s+i\s+calls?\s+you\s*[?!.؟]?|"
+    r"(?:your|ur)\s+name\s*[?]|"
+    r"اسمك\s+ايه|اسمك\s+أيه|اسمك\s+أي|اسمك\s+إيه|"
+    r"مين\s+انت|من\s+أنت|وانت\s+مين|وأنت\s+مين|"
+    r"عرفني\s+بنفسك|قولي\s+اسمك|قول\s+لي\s+اسمك|"
+    r"انت\s+مين|إنت\s+مين",
+    re.IGNORECASE,
+)
+
+# Short, conversational identity line for spoken turns only (never chat). The
+# chat identity answer is the fuller profile paragraph — unchanged.
+_SPOKEN_IDENTITY_EN = {
+    "nova": "I'm Nova, your SkillBridge mentor — the Explainer Tutor.",
+    "axel": "I'm Axel, your SkillBridge mentor — the Practical Coach.",
+    "sage": "I'm Sage, your SkillBridge mentor — the Discussion Mentor.",
+    "vex": "I'm Vex, your SkillBridge mentor — the Examiner.",
+}
+
+_SPOKEN_IDENTITY_AR = {
+    "nova": "أنا Nova، مرشدك في SkillBridge — مدرّب الشرح وتبسيط المفاهيم.",
+    "axel": "أنا Axel، مرشدك في SkillBridge — كوتش التدريب العملي.",
+    "sage": "أنا Sage، مرشدك في SkillBridge — مرشد المناقشة والتفكير.",
+    "vex": "أنا Vex، مرشدك في SkillBridge — المختبر والممتحن.",
+}
+
+
+def _short_spoken_identity(question, persona_id=None, language="en"):
+    """Short `spoken=True` identity answer for an explicit identity question.
+
+    Deterministic and provider-free, so Live's very first "What's your name?"
+    produces audio-ready text instantly (chat keeps the full profile line).
+    """
+    if not _SPOKEN_IDENTITY_REFERENCE.search(str(question or "")):
+        return None
+    pid = (persona_id or "").strip().lower()
+    if _normalized_lang(language) == "ar":
+        return _SPOKEN_IDENTITY_AR.get(pid, _SPOKEN_IDENTITY_AR["nova"])
+    return _SPOKEN_IDENTITY_EN.get(pid, _SPOKEN_IDENTITY_EN["nova"])
+
+def _no_language_narration_rule(persona_name):
+    """Never announce/justify/translate the student's language or the response.
+
+    ``persona_name`` is the SELECTED persona's display name (or a neutral phrase
+    when no persona is set). Only the selected name may appear in the prompt —
+    the persona-leakage contract forbids naming any other mentor.
+    """
+    return (
+        "Never announce, justify, or 'translate' the student's language, and never narrate "
+        "how or as whom you will respond. The visible reply must never contain lines like "
+        "'It looks like your message is in Arabic', 'Since you wrote in Arabic, I'll respond "
+        "in English', 'I'll respond in ...', 'As your Explainer Tutor persona', translation "
+        "notes such as 'which roughly translates to ...', or a third-person quote of yourself "
+        "like '" + persona_name + " says:'. Just write the answer itself, in the first person, "
+        "in the fixed language."
+    )
+
+# Deterministic hygiene gate: a provider reply containing any of these is rejected
+# (the language-appropriate fallback is used instead) even if the prompt is ignored.
+# The list combines the shapes observed on live NIM output ("It looks like you asked
+# in Arabic ... which translates to ...", "Since your message was a greeting, I'll
+# keep it simple", "Let me respond in English", "to be safe, I'll respond ...").
+_META_COMMENTARY_PHRASES = (
+    "it looks like your message",
+    "it looks like you asked",
+    "it looks like you used",
+    "it appears your message",
+    "your message is in arabic",
+    "asked in arabic",
+    "since you wrote in arabic",
+    "since your message",
+    "since this appears",
+    "i'll respond",
+    "i will respond",
+    "i'm going to respond",
+    "i'll reply",
+    "i'm replying",
+    "let me respond in",
+    "let me reply in",
+    "i'll keep it simple",
+    "i'll keep it short",
+    "to be safe",
+    "as your explainer tutor",
+    "as your practical coach",
+    "as your strategy mentor",
+    "as your interview challenger",
+    "nova says:",
+    "axel says:",
+    "sage says:",
+    "vex says:",
+    "which roughly translates",
+    "roughly translates to",
+    "translates to",
+    "you said hello",
+)
+
+
+def _reply_contains_meta_commentary(text):
+    """True when the reply narrates the language/persona decision instead of answering.
+
+    Matches the exact phrases the product blocks (evidence: "It looks like your message
+    is in Arabic", "Since you wrote in Arabic, I'll respond in English", "I'll respond
+    in ...", "As your Explainer Tutor persona", "Nova says:"). Case-insensitive.
+    """
+    low = str(text or "").lower()
+    return any(phrase in low for phrase in _META_COMMENTARY_PHRASES)
+
+
+def _sentence_language_signal(sentence):
+    """Return 'ar' or 'en' for a sentence using its dominant script."""
+    a = sum(1 for ch in str(sentence or "")
+            if "\u0600" <= ch <= "\u06FF" or "\u0750" <= ch <= "\u077F"
+            or "\u08A0" <= ch <= "\u08FF" or "\uFB50" <= ch <= "\uFDFF"
+            or "\uFE70" <= ch <= "\uFEFF")
+    l = sum(1 for ch in str(sentence or "") if ch.isascii() and ch.isalpha())
+    if a > 0 and a >= l:
+        return "ar"
+    return "en"
+
+
+def _strip_mismatched_language_tail(text, language):
+    """Drop a trailing run written in the opposite language.
+
+    Mixed-language replies are allowed for technical terms INSIDE a sentence, but the
+    reply must not end in a different language than it began (evidence 4: an Arabic
+    reply closing on "I'm ready when you are!"). Trailing sentences after the last
+    sentence matching the resolved language are removed. Returns None when there is
+    nothing to trim, otherwise the trimmed reply.
+    """
+    lang = _normalized_lang(language)
+    stripped = str(text or "").strip()
+    parts = re.split(r"(?<=[.!?؟])\s+", stripped)
+    parts = [p.strip() for p in parts if p.strip()]
+    if len(parts) < 2:
+        return None
+    tags = [_sentence_language_signal(p) for p in parts]
+    if tags[0] != lang:
+        return None
+    last_match = 0
+    for i in range(len(parts) - 1, 0, -1):
+        if tags[i] == lang:
+            last_match = i
+            break
+    if last_match == len(parts) - 1:
+        return None
+    return " ".join(parts[: last_match + 1]).strip()
+
+
 _INTERNAL_REPLY_LINE = re.compile(
     r"^\s*(?:"
     r"\[(?:nova|axel|sage|vex)(?:'s)? voice\]|"
@@ -1789,20 +2016,147 @@ def _strip_unrequested_mentor_intro(text, persona_id=None, language=None, fallba
     return str(fallback or "").strip()
 
 
-def _complete_visible(system, user, fallback, language, max_tokens=None, timeout=None, persona_id=None):
+def _is_latched_reply(text):
+    """True when a provider reply is a decoding latch, not a real answer.
+
+    Live NIM evidence: a pathological repetition loop that repeats one unit
+    to the token limit — the exact line "docker ports" indefinitely, or an
+    Arabic "أنا نيموترون، ..." self-identification loop. Such replies are
+    transient decoding failures: they deserve ONE re-generation before the
+    deterministic fallback is even considered. Also treats an empty reply as
+    a latch (nothing useful was generated).
+    """
+    text = str(text or "").strip()
+    if not text:
+        return True
+    tokens = re.findall(r"[A-Za-z0-9\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF]+", text)
+    if len(tokens) < 24:
+        # Too little text to judge repetition from; the language/hygiene gate
+        # (not this latch heuristic) decides short replies.
+        return False
+    bigrams = [(tokens[i], tokens[i + 1]) for i in range(len(tokens) - 1)]
+    if not bigrams:
+        return False
+    counts = {}
+    for bigram in bigrams:
+        counts[bigram] = counts.get(bigram, 0) + 1
+    top = max(counts.values())
+    return top / len(bigrams) >= 0.5
+
+
+def _visible_reply_verdict(raw, cleaned, language):
+    """Run the full visible-reply gate on one provider attempt.
+
+    Returns ``(meta, matches, latch, accepted)`` — ``accepted`` is True only
+    when the reply is free of meta-commentary, in the fixed language, and not
+    a decoding latch.
+
+    The latch is judged on BOTH the raw output and the repaired/cleaned text:
+    identity-repair collapses an Arabic "أنا نيموترون..." self-ID loop in-place
+    before cleaning, which would otherwise mask the latch behind a canned
+    identity line. The RAW loop must still count as a latch (and re-generate).
+    """
+    meta = _reply_contains_meta_commentary(cleaned)
+    trimmed = _strip_mismatched_language_tail(cleaned, language)
+    gate_cleaned = trimmed if trimmed is not None else cleaned
+    matches = _reply_matches_language(gate_cleaned, language)
+    # 0 Arabic chars on an ar-classified input is itself a latch class
+    # (the model ignored the fixed language entirely).
+    latch = _is_latched_reply(raw) or _is_latched_reply(cleaned) or (
+        language == "ar" and not _has_arabic(cleaned))
+    return meta, matches, latch, (not meta) and matches and not latch
+
+
+def _any_provider_configured():
+    return bool(NIM_KEY or OPENAI_KEY or ANTHROPIC_KEY)
+
+
+def _complete_visible(system, user, fallback, language, max_tokens=None, timeout=None, persona_id=None, model=None):
     """Provider call wrapper for visible tutor/interview replies.
 
     Providers are instructed to honor the selected language, but the UI contract
     is stricter than a prompt: explicit Arabic/English must never surface the
-    opposite-language reply. If a provider ignores the lock, return the
-    deterministic fallback for that language instead.
+    opposite-language reply. When the raw reply is a decoding latch (spam,
+    self-identification loop, or a language-classified input with zero matching
+    script) we do NOT immediately serve the fallback — we give NIM exactly one
+    more draw with the SAME prompt. One retry only; if the second draw also
+    fails the gate, fall back deterministically. No retry storms, no prompt /
+    model / provider-priority changes.
+
+    ``model`` (LIVE only, see ``_live_fast_model``/``LIVE_NIM_MODEL``) is
+    forwarded to the provider chain for spoken turns; chat uses the configured
+    provider model unchanged.
     """
     fallback = _clean_visible_reply(fallback, persona_id=persona_id, language=language)
-    reply = complete(system, user, fallback=fallback, max_tokens=max_tokens, timeout=timeout)
-    cleaned = _clean_visible_reply(reply, persona_id=persona_id, language=language)
-    if _reply_matches_language(cleaned, language):
-        return cleaned
-    return fallback
+    path = "fallback after two rejects"
+    final = fallback
+    attempts = []
+
+    def _attempt():
+        t0 = time.time()
+        try:
+            replied = complete(system, user, fallback=fallback,
+                               max_tokens=max_tokens, timeout=timeout, model=model)
+        except Exception:
+            replied = fallback
+        dt_ms = int((time.time() - t0) * 1000)
+        cleaned = _clean_visible_reply(replied, persona_id=persona_id, language=language)
+        # Object identity (not equality): `complete` hands back the exact fallback
+        # object when the provider call raised, so this distinguishes a real NIM
+        # output from a deterministic fallback that merely matches the text.
+        provider_failed = replied is fallback
+        meta, matches, latch, _ = _visible_reply_verdict(replied, cleaned, language)
+        accepted = not meta and matches and not latch and not provider_failed
+        record = {
+            "elapsed_ms": dt_ms,
+            "provider_failed": provider_failed,
+            "raw_reply": replied,
+            "cleaned": cleaned,
+            "meta_commentary": meta,
+            "matches_language": matches,
+            "latch": latch,
+            "accepted": accepted,
+        }
+        attempts.append(record)
+        return record
+
+    first = _attempt()
+    if first["accepted"]:
+        path = "first-attempt accepted"
+        final = _strip_mismatched_language_tail(first["cleaned"], language) or first["cleaned"]
+    elif _any_provider_configured():
+        # Exactly one re-generation with the SAME prompt. Skipped when no
+        # provider is configured at all — deterministic/demo mode would just
+        # re-raise into the fallback, so a retry would be pure waste.
+        second = _attempt()
+        if second["accepted"]:
+            path = "second-attempt accepted"
+            final = _strip_mismatched_language_tail(second["cleaned"], language) or second["cleaned"]
+    # Debug transparency: when SKILLBRIDGE_DEBUG_PROMPT=1, record the EXACT raw
+    # provider output(s), which gate path each turn took, the attempt latencies,
+    # and what the user actually saw — so every live NIM turn is auditable.
+    if os.environ.get("SKILLBRIDGE_DEBUG_PROMPT", "0") == "1":
+        _log = logging.getLogger("skillbridge")
+        _log.info("[DBG] path=%s attempts=%d latency_ms=%r",
+                  path, len(attempts), [a["elapsed_ms"] for a in attempts])
+        _log.info("[DBG] system=%s", system)
+        _dbg_file = os.environ.get("SKILLBRIDGE_DEBUG_FILE") or os.path.join(
+            os.environ.get("TEMP", "."), "opencode", "sb_debug.jsonl")
+        try:
+            with open(_dbg_file, "a", encoding="utf-8") as _f:
+                _f.write(json.dumps({
+                    "language": language,
+                    "path": path,
+                    "attempts": len(attempts),
+                    "first": attempts[0],
+                    "second": attempts[1] if len(attempts) > 1 else None,
+                    "final_reply": final,
+                    "system": system,
+                    "user": user,
+                }, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+    return final
 
 
 _FOLLOWUP_QUESTION_REQUEST = re.compile(
@@ -2445,7 +2799,10 @@ _FOLLOWUP_REFERENCE = re.compile(
     r"what\s+you\s+just\s+(?:explained|said|taught|covered)\b|"
     r"what\s+you\s+were\s+explaining\b|what\s+did\s+you\s+mean\b|tell\s+me\s+more\b|"
     r"مثال\s*تاني|مثال\s*آخر|مثال\s*كمان|مرة\s*تانية|\bتاني\b|\bكمان\b|"
-    r"اللي\s*شرحته|اللي\s*اتشرح|شرحتهولنا|موضحتهالنا|سهّ?لها|أبسط|بسّ?طه",
+    r"اللي\s*شرحته|اللي\s*اتشرح|شرحتهولنا|موضحتهالنا|سهّ?لها|أبسط|بسّ?طه|"
+    r"where\s+(?:were|are|did)\s+we\b|where\s+did\s+we\s+(?:leave\s+off|stop)\b|"
+    r"what\s+did\s+we\s+(?:talk|discuss|cover|go\s+over)\b|"
+    r"what\s+were\s+we\s+(?:talking|discussing)\b",
     re.IGNORECASE,
 )
 
@@ -2525,6 +2882,24 @@ def _detect_length_request(question):
     if _LENGTH_SIMPLE_REFERENCE.search(q):
         return "simple"
     return None
+
+
+# Spoken turns that may take the fuller (default) token budget: explicit depth
+# requests or an explicit step-by-step / long-example ask. Everything else stays
+# on the small Live budget so a simple question is answered fast, never cut.
+_SPOKEN_FULLER_REFERENCE = re.compile(
+    r"\bstep\s*[- ]?by\s*[- ]?step\b|\b(?:a\s+)?long\s+example\b|"
+    r"\bdetailed\s+explanation\b|\bexplain\s+in\s+detail\b|"
+    r"\bخطوة\s*بخطوة\b|\bبخطوات\b|\bبالخطوات\b|\bمثال\s*طويل\b|"
+    r"\bشرح\s*مفصل\b",
+    re.IGNORECASE,
+)
+
+
+def _wants_fuller_spoken_reply(question):
+    if _detect_length_request(question) in ("deep", "more"):
+        return True
+    return bool(_SPOKEN_FULLER_REFERENCE.search(str(question or "")))
 
 
 def _is_confusion_request(question):
@@ -4255,7 +4630,57 @@ def _persona_line_image(identity):
     )
 
 
-def tutor_reply(question, student_context=None, skill_name=None, target_role=None, tutor_id=None, mode=None, language=None, personality=None, conversation_memory=None):
+def _tutor_system(lang, intent, mode, tutor_id, question, persona, personality, *, spoken=False):
+    """Build the exact tutor system prompt (used by ``tutor_reply``).
+
+    Factored out so the exact prompt sent to the provider can be inspected
+    (debug endpoint / tests) and stays the single source of truth. ``persona``
+    is the fixed ``TUTOR_PERSONAS`` entry (or None for a BYC-only copilot);
+    ``personality`` is the optional Build-Your-Copilot additive modifier.
+    """
+    base_identity = persona
+    if personality and personality.get("name") and base_identity is None:
+        # No fixed mentor for this tutor_id (defensive): fall back to the
+        # personality dict so the prompt is never left without an identity.
+        base_identity = personality
+    persona_line = _persona_line_image(base_identity) if base_identity else ""
+    narration_persona = (base_identity or {}).get("name") or "the selected mentor"
+    if persona and personality and personality.get("name"):
+        # Base mentor + additive user customization. The personality can only
+        # MODIFY tone/pacing — the base identity and teaching strategy stay.
+        persona_line = persona_line + _persona_modifier_line(personality, base=persona)
+    lang_lock = _language_lock(lang)
+    rules = GENERAL_ASSISTANT_RULES if intent in ("GENERAL", "IDENTITY") else BASE_ASSISTANT_RULES
+    strategy = _provider_strategy_directive(tutor_id)
+    style = _provider_style_directive(tutor_id)
+    confusion_instr = _provider_confusion_directive(tutor_id) if _is_confusion_request(question) else ""
+    length_instr = _provider_length_directive(question)
+    system = (
+        lang_lock + " "
+        + _MIRROR_LANGUAGE_RULE + " "
+        + _no_language_narration_rule(narration_persona) + " "
+        + rules
+        + persona_line
+        + ((" " + strategy) if strategy else "")
+        + ((" " + style) if style else "")
+        + ((" " + confusion_instr) if confusion_instr else "")
+        + ((" " + length_instr) if length_instr else "")
+        + ((" " + _SPOKEN_RULE) if spoken else "")
+        + " " + LANG_INSTRUCTIONS.get(lang, LANG_INSTRUCTIONS["en"])
+        + " " + _intent_instruction(intent)
+        + " " + lang_lock
+    )
+    norm_mode = (mode or "chat").strip().lower()
+    if intent in ("GENERAL", "IDENTITY"):
+        mode_instr = GENERAL_MODE_INSTRUCTIONS.get(norm_mode)
+    else:
+        mode_instr = MODE_INSTRUCTIONS.get(norm_mode)
+    if mode_instr:
+        system = system + " " + mode_instr
+    return system
+
+
+def tutor_reply(question, student_context=None, skill_name=None, target_role=None, tutor_id=None, mode=None, language=None, personality=None, conversation_memory=None, *, spoken=False):
     """Return a personalized tutor answer, styled by ``tutor_id`` persona.
 
     ``tutor_id`` is one of nova/axel/sage/vex (see ``TUTOR_PERSONAS``). When
@@ -4294,46 +4719,17 @@ def tutor_reply(question, student_context=None, skill_name=None, target_role=Non
         # A pure greeting always gets the persona's own greeting — never an
         # identity-echo, meta-commentary ("You said hello..."), or an offer.
         return greeting
+    if spoken:
+        spoken_identity = _short_spoken_identity(question, persona_id=tutor_id, language=lang)
+        if spoken_identity:
+            # Live first-turn identity: deterministic, provider-free, short.
+            return spoken_identity
     persona = TUTOR_PERSONAS.get((tutor_id or "").lower())
     intent = _classify_tutor_turn(
         question, skill_name=skill_name, target_role=target_role, mode=mode,
         student_context=student_context,
     )
-    base_identity = persona
-    if personality and personality.get("name") and base_identity is None:
-        # No fixed mentor for this tutor_id (defensive): fall back to the
-        # personality dict so the prompt is never left without an identity.
-        base_identity = personality
-    persona_line = _persona_line_image(base_identity) if base_identity else ""
-    if persona and personality and personality.get("name"):
-        # Base mentor + additive user customization. The personality can only
-        # MODIFY tone/pacing — the base identity and teaching strategy stay.
-        persona_line = persona_line + _persona_modifier_line(personality, base=persona)
-    lang_lock = _language_lock(lang)
-    rules = GENERAL_ASSISTANT_RULES if intent in ("GENERAL", "IDENTITY") else BASE_ASSISTANT_RULES
-    strategy = _provider_strategy_directive(tutor_id)
-    style = _provider_style_directive(tutor_id)
-    confusion_instr = _provider_confusion_directive(tutor_id) if _is_confusion_request(question) else ""
-    length_instr = _provider_length_directive(question)
-    system = (
-        lang_lock + " "
-        + rules
-        + persona_line
-        + ((" " + strategy) if strategy else "")
-        + ((" " + style) if style else "")
-        + ((" " + confusion_instr) if confusion_instr else "")
-        + ((" " + length_instr) if length_instr else "")
-        + " " + LANG_INSTRUCTIONS.get(lang, LANG_INSTRUCTIONS["en"])
-        + " " + _intent_instruction(intent)
-        + " " + lang_lock
-    )
-    norm_mode = (mode or "chat").strip().lower()
-    if intent in ("GENERAL", "IDENTITY"):
-        mode_instr = GENERAL_MODE_INSTRUCTIONS.get(norm_mode)
-    else:
-        mode_instr = MODE_INSTRUCTIONS.get(norm_mode)
-    if mode_instr:
-        system = system + " " + mode_instr
+    system = _tutor_system(lang, intent, mode, tutor_id, question, persona, personality, spoken=spoken)
     trusted_context = _context_for_intent(intent, student_context, skill_name, target_role)
     user = (
         f"Context route: {intent}\n"
@@ -4409,7 +4805,15 @@ def tutor_reply(question, student_context=None, skill_name=None, target_role=Non
     fallback = _tutor_fallback(question, skill_name, target_role, student_context, tutor_id, lang,
                                intent=intent, conversation_memory=conversation_memory)
 
-    reply = _complete_visible(system, user, fallback, lang, persona_id=tutor_id)
+    reply = _complete_visible(
+        system, user, fallback, lang, persona_id=tutor_id,
+        max_tokens=(
+            None if (not spoken or _wants_fuller_spoken_reply(question))
+            else _SPOKEN_MAX_TOKENS
+        ),
+        timeout=(_SPOKEN_TIMEOUT_SECONDS if spoken else None),
+        model=(_live_fast_model() if spoken else None),
+    )
     if intent != "IDENTITY":
         reply = _strip_unrequested_mentor_intro(
             reply,

@@ -63,10 +63,23 @@ for (const [id, name, origin, specialty] of EXPECTED) {
     `${id}: avatar should point at /assets/tutors/{id}.png, got ${p.avatar}`)
   // voice metadata survives (used by TTS; ids must not change)
   ok(typeof p.voiceId === 'string' && p.voiceId.length > 0, `${id}: voiceId must be present`)
+  // Phase 4C.1: every mentor resolves a VALID voice configuration — a real
+  // provider-shaped voice id (no placeholder tokens) and finite rate/pitch
+  // hints within the supported range.
+  const placeholderish = /^(none|default|placeholder|n\/a|-)$/i
+  ok(/^[A-Za-z0-9_-]{8,64}$/.test(p.voiceId) && !placeholderish.test(p.voiceId),
+    `${id}: voiceId must be a real voice id (not a placeholder), got ${p.voiceId}`)
+  ok(Number.isFinite(p.voiceHint?.rate) && p.voiceHint.rate >= 0.5 && p.voiceHint.rate <= 1.5,
+    `${id}: voiceHint.rate must be a finite number in [0.5, 1.5], got ${p.voiceHint?.rate}`)
+  ok(Number.isFinite(p.voiceHint?.pitch) && p.voiceHint.pitch >= 0.5 && p.voiceHint.pitch <= 1.5,
+    `${id}: voiceHint.pitch must be a finite number in [0.5, 1.5], got ${p.voiceHint?.pitch}`)
 }
 
 const unique = new Set(ids)
 ok(unique.size === ids.length, 'all Tutor IDs must be distinct')
+
+const voiceIds = profiles.map((p) => p.voiceId)
+ok(new Set(voiceIds).size === voiceIds.length, 'all four mentors must resolve DISTINCT voices')
 
 if (process.exitCode) {
   process.exit(1)

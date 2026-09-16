@@ -44,7 +44,9 @@ export function fetchTutorTtsBlob(
           detail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)
         }
       } catch { /* non-JSON error body */ }
-      throw new Error(detail)
+      const err = new Error(detail) as Error & { status?: number }
+      err.status = res.status
+      throw err
     }
     return res.blob()
   })

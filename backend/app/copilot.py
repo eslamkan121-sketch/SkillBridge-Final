@@ -13,6 +13,7 @@ that request before any context is built.
 """
 
 import json
+import re
 
 from . import models, matching, career_roadmap, jobs, skill_blueprint as sb
 
@@ -334,6 +335,63 @@ TUTOR_DEFAULT_LANGUAGE = "auto"
 # Arabic-dominant threshold for the mixed-language heuristic (see below).
 _ARABIC_RATIO = 0.25
 
+# Latin-script Arabic ("Arabizi" - Gulf/Egyptian/Levantine colloquial written
+# in Latin letters, often with digits: 2= hamza, 3= ayn, 5= khaa, 7= haa,
+# 9= qaaf). These tokens contain NO Arabic Unicode characters, so the
+# script-ratio heuristic alone classifies them as English and the reply stops
+# mirroring the student. The lexicon is curated and conservative: only tokens
+# that are rarely valid English words (or strongly Arabizi-marked) are listed,
+# so ordinary English questions like "how are you" never flip to Arabic.
+_ARABIZI_LEXICON = frozenset({
+    # strong signals - not valid English words
+    "ana", "enta", "enti", "enty", "ent", "ehna", "ihna", "ahna", "7na",
+    "msh", "mish", "mesh", "3amla", "3amel", "3amal", "3awz", "3ayz",
+    "3awza", "3ayza", "3ayez", "3awez", "ezay", "ezayek", "ezayak", "3aml",
+    "5alas", "khalas", "tamam", "3andi", "3andak", "3andek", "a3mel",
+    "a3mil", "2olt", "2ol", "ye3ni", "ya3ni", "yani", "hena", "henak",
+    "fein", "feen", "leh", "koll", "kol", "3ayron", "sha3b", "za3lan",
+    "3ayb", "awel", "a5er", "shab3an", "momken", "mumken", "tshar7",
+    "shar7", "sharh", "tshar7ly", "shar7ly", "bel3araby", "tshar7lna",
+    # weaker connective words - count toward the majority when paired with
+    # a strong token or another weak token
+    "ya", "eh", "eih", "ay", "el", "al", "fe", "fi", "3ala", "3alay",
+    "3aleh", "keda", "kida", "kaman", "bardo", "awi", "gamed", "gamedan",
+    "kwayes", "kweis", "7elw", "7elwa", "ghalat", "wa", "be", "2abl",
+    "b3d", "fahm", "faham", "delwa2ty", "halden", "hazel", "shu",
+    "shwaya", "shuwaya", "m3ana", "ma3a", "3alee", "7aga", "haga",
+    "law", "samaht", "samah", "3araby", "el3araby", "bel3arabi", "2owm", "yekon",
+})
+
+_ARABIZI_STRONG = frozenset({
+    "ana", "enta", "enti", "enty", "ent", "ehna", "ihna", "ahna", "7na",
+    "msh", "mish", "mesh", "3amla", "3amel", "3amal", "3awz", "3ayz",
+    "3awza", "3ayza", "3ayez", "3awez", "ezay", "ezayek", "ezayak", "3aml",
+    "5alas", "khalas", "tamam", "3andi", "3andak", "3andek", "a3mel",
+    "a3mil", "2olt", "2ol", "ye3ni", "ya3ni", "yani", "hena", "henak",
+    "fein", "feen", "leh", "koll", "kol", "momken", "mumken", "tshar7",
+    "shar7", "sharh", "tshar7ly", "shar7ly", "bel3araby", "tshar7lna",
+})
+
+
+def detect_arabizi(text):
+    """True when a Latin-script message reads as conversational Arabizi.
+
+    Complements ``detect_language``'s script-ratio logic: Arabizi has no
+    Arabic characters, so callers can use this to accept Arabizi replies as
+    Arabic-mixed output where the script gate would be blind to them.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return False
+    tokens = re.findall(r"[a-z0-9]+", text.lower())
+    if not tokens:
+        return False
+    hits = [t for t in tokens if t in _ARABIZI_LEXICON]
+    if not hits:
+        return False
+    strong = sum(1 for t in hits if t in _ARABIZI_STRONG)
+    return (strong >= 2 or (strong >= 1 and len(hits) >= 2)
+            or len(hits) > len(tokens) // 2)
+
 
 def validate_language(value):
     """Return a normalized language, or None when the value is unsupported.
@@ -356,6 +414,13 @@ def detect_language(text):
     classify as Arabic when a meaningful ratio of the message is Arabic script;
     hints like the spec examples (arabic framing + English technical terms)
     land safely on Arabic with the ratio chosen below.
+
+    Arabizi (colloquial Arabic in Latin letters, e.g. "ezayek ya nova 3amla
+    eh") contains no Arabic characters at all, so after the script ratio comes
+    back English we fall back to the curated Arabizi lexicon: a strong signal,
+    or a strong signal paired with at least one other Arabizi token (or an
+    Arabizi majority), classifies as Arabic so the reply mirrors the student
+    instead of translating for them.
     """
     if not isinstance(text, str) or not text.strip():
         return "en"
@@ -365,12 +430,15 @@ def detect_language(text):
                  or "\uFE70" <= ch <= "\uFEFF")
     latin = sum(1 for ch in text
                 if ("\u0041" <= ch <= "\u005A") or ("\u0061" <= ch <= "\u007A"))
-    if arabic <= 0:
+    if arabic > 0:
+        total = arabic + latin
+        if total <= 0:
+            return "ar"
+        if (arabic / total) >= _ARABIC_RATIO:
+            return "ar"
         return "en"
-    total = arabic + latin
-    if total <= 0:
-        return "ar"
-    return "ar" if (arabic / total) >= _ARABIC_RATIO else "en"
+    # No Arabic script at all: the message may still be Arabizi.
+    return "ar" if detect_arabizi(text) else "en"
 
 
 def resolve_language(language, message_text):

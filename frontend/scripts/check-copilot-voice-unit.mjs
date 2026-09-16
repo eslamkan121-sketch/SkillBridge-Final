@@ -33,17 +33,25 @@ function assert(cond, label) {
 
 function ok() { passed += 1 }
 
-function makeHarness() {
+function makeHarness(extraOpts = {}) {
   const calls = { listen: [], hush: 0, send: [], synth: [], play: [], schedule: [], cancel: [] }
   const pendingTimers = new Map()
   let timerSeq = 1
 
   const recognition = {
     listen({ mode, lang, onFinal, onSpeechStart, onError }) {
-      calls.listen.push({ mode, lang, onFinal, onSpeechStart, onError })
-      return { mode, lang, onFinal, onSpeechStart, onError }
+      // Deactivate any prior listener (a hush() in the engine is what the real
+      // browser adapter uses to kill an in-flight recognizer; new listen()
+      // supersedes old ones the same way).
+      for (const l of calls.listen) l.active = false
+      const entry = { mode, lang, onFinal, onSpeechStart, onError, active: true }
+      calls.listen.push(entry)
+      return entry
     },
-    hush() { calls.hush += 1 },
+    hush() {
+      calls.hush += 1
+      for (const l of calls.listen) l.active = false
+    },
   }
 
   const timers = {
@@ -61,7 +69,13 @@ function makeHarness() {
   }
 
   let listenId = 0
-  const lastListen = () => calls.listen[calls.listen.length - 1] || null
+  const lastListen = () => {
+    for (let i = calls.listen.length - 1; i >= 0; i -= 1) {
+      if (calls.listen[i].active) return calls.listen[i]
+    }
+    return null
+  }
+  const activeListens = () => calls.listen.filter((l) => l.active).length
 
   let sendImpl = null
   let synthImpl = null
@@ -84,9 +98,9 @@ function makeHarness() {
         return handle
       },
     },
-    send(text, signal) {
-      calls.send.push({ text, aborted: signal?.aborted, signal })
-      if (sendImpl) return sendImpl(text, signal)
+    send(text, signal, opts) {
+      calls.send.push({ text, aborted: signal?.aborted, signal, opts })
+      if (sendImpl) return sendImpl(text, signal, opts)
       return Promise.resolve('Nice to meet you.')
     },
     schedule: timers.schedule,
@@ -100,12 +114,14 @@ function makeHarness() {
     onTranscript: (t) => events.transcripts.push(t),
     onError: (kind, message) => events.errors.push({ kind, message }),
     onAssistantReply: (reply) => events.replies.push(reply),
+    ...extraOpts,
   })
   session._debug = () => ({ calls, timers, events, listenId: ++listenId })
 
   return {
     adapters, calls, timers, events, session,
     lastListen,
+    activeListens,
     setSend: (fn) => { sendImpl = fn },
     setSynth: (fn) => { synthImpl = fn },
     setPlay: (fn) => { playImpl = fn },
@@ -207,8 +223,10 @@ function flush() { return new Promise((r) => setImmediate(r)) }
 }
 
 // ---------------------------------------------------------------------------
-// 3) Barge-in while speaking: hush, abort TTS, playback.stop, interrupted,
-//    400 ms later -> listening (fresh primary listen).
+// 3) Deliberate barge-in while speaking (mic/orb button). CRITICAL Live
+//    invariant: the ENTIRE speaking state runs with NO active recognizer, so
+//    the mentor's own speaker audio can never be mistaken for a user barge-in
+//    (the echo loop). Only an explicit interrupt()/stop() cuts playback.
 // ---------------------------------------------------------------------------
 {
   const h = makeHarness()
@@ -233,13 +251,16 @@ function flush() { return new Promise((r) => setImmediate(r)) }
   assert(h.session.state === 'speaking', 'bargein: reached speaking')
   assert(h.calls.play.length === 1, 'bargein: playback started')
   assert(synthCalls.every((c) => !c.abortedAtCall), 'bargein: /tutor/tts not aborted before it played')
+  assert(h.activeListens() === 0, 'bargein: NO recognizer is active while the mentor speaks (no echo loop)')
 
-  // Speech starts while the tutor's audio plays.
-  h.fireSpeechStart()
-  assert(h.session.state === 'interrupted', 'bargein: speech during speaking -> interrupted')
+  // Explicit user interruption (the dedicated mic/orb button path).
+  h.session.interrupt()
+  assert(h.session.state === 'interrupted', 'bargein: deliberate interrupt during speaking -> interrupted')
   assert(playbackStopped === true, 'bargein: playback.stop() called')
   assert(h.calls.play.length === 1, 'bargein: no new playback started')
   assert(h.timers.pendingCount() === 1, 'bargein: exactly one handoff timer armed')
+  assert(h.calls.listen.filter((l) => l.mode === 'interrupt' && l.active).length === 0,
+    'bargein: no interrupt recognizer was left running during speaking')
 
   h.timers.fireNext()
   assert(h.session.state === 'listening', 'bargein: 400ms later -> listening')
@@ -322,6 +343,8 @@ function flush() { return new Promise((r) => setImmediate(r)) }
 
 // ---------------------------------------------------------------------------
 // 8) Empty STT while speaking stays speaking; stop from any active state -> idle.
+//    (No recognizer runs while speaking, so an empty final can only arrive on a
+//    stale hushed listener — it must be ignored.)
 // ---------------------------------------------------------------------------
 {
   const h = makeHarness()
@@ -329,8 +352,10 @@ function flush() { return new Promise((r) => setImmediate(r)) }
   h.fireFinal('hello')
   await flush()
   assert(h.session.state === 'speaking', 'empty-stt: speaking')
-  h.fireFinal('')
-  assert(h.session.state === 'speaking', 'empty-stt: empty final leaves speaking untouched')
+  for (const l of h.calls.listen) {
+    if (l.onFinal && !l.active) l.onFinal('')
+  }
+  assert(h.session.state === 'speaking', 'empty-stt: empty stale final leaves speaking untouched')
   h.session.stop()
   assert(h.session.state === 'idle', 'empty-stt: stop -> idle')
   h.session.stop()
@@ -386,8 +411,11 @@ function flush() { return new Promise((r) => setImmediate(r)) }
   assert(h.session.state === 'idle', 'clear: -> idle')
   assert(h.session.transcript.length === 0, 'clear: transcript emptied')
   const idBeforeClear = h.calls.send.length
-  h.fireFinal('too late')
-  assert(h.calls.send.length === idBeforeClear, 'clear: post-clear recognizer event ignored')
+  for (const l of h.calls.listen) {
+    if (l.onFinal && !l.active) l.onFinal('too late')
+  }
+  await flush()
+  assert(h.calls.send.length === idBeforeClear, 'clear: post-clear stale recognizer event ignored')
 }
 
 // ---------------------------------------------------------------------------
@@ -463,6 +491,389 @@ function flush() { return new Promise((r) => setImmediate(r)) }
 }
 
 // ---------------------------------------------------------------------------
+// 15b) Hands-free Live loop: with resumeAfterPlaybackEnd=true a clean audio end
+//      auto-returns to listening (fresh primary recognizer, no per-turn mic
+//      tap), so the user can speak, hear the mentor, and speak again — with
+//      exactly one tutor request and one TTS pass per user utterance.
+// ---------------------------------------------------------------------------
+{
+  const h = makeHarness({ resumeAfterPlaybackEnd: true, resumeDelayMs: 150 })
+  h.session.start()
+  assert(h.session.state === 'listening', 'live-loop: opens listening automatically')
+
+  h.fireFinal('first question')
+  assert(h.session.state === 'processing', 'live-loop: first utterance -> processing')
+  await flush()
+  assert(h.session.state === 'speaking', 'live-loop: mentor reply -> speaking')
+  assert(h.calls.send.length === 1 && h.calls.send[0].text === 'first question',
+    'live-loop: first final utterance submitted exactly once')
+
+  const handle = h.calls.play[0].handle
+  handle.resolveDone()
+  await flush()
+  assert(h.session.state === 'idle', 'live-loop: audio end -> idle (transition flash)')
+  assert(h.timers.pendingCount() === 1, 'live-loop: exactly one resume timer armed after audio end')
+  h.timers.fireNext()
+  assert(h.session.state === 'listening', 'live-loop: TTS end auto-resumed listening')
+  assert(h.lastListen().mode === 'primary', 'live-loop: resume started a fresh PRIMARY recognizer')
+
+  // Second turn with zero user action — no duplicate tutor requests / TTS.
+  h.fireFinal('second question')
+  assert(h.calls.send.length === 2, 'live-loop: second final utterance submitted exactly once (total 2)')
+  await flush()
+  assert(h.session.state === 'speaking', 'live-loop: second reply spoken automatically')
+  assert(h.calls.synth.length === 2 && h.calls.play.length === 2, 'live-loop: no duplicate TTS')
+}
+
+// ---------------------------------------------------------------------------
+// 15c) Hands-free must NEVER resume on an explicit stop or a TTS failure —
+//      resumeAfterPlaybackEnd fires only for a clean natural audio end.
+// ---------------------------------------------------------------------------
+{
+  const h = makeHarness({ resumeAfterPlaybackEnd: true })
+  h.session.start()
+  h.fireFinal('will you fail?')
+  h.session.stop()
+  await flush()
+  assert(h.session.state === 'idle' && h.timers.pendingCount() === 0,
+    'live-stop: explicit stop -> idle with NO resume timer armed')
+
+  const h2 = makeHarness({ resumeAfterPlaybackEnd: true })
+  h2.session.start()
+  h2.fireFinal('no tts')
+  h2.setSynth(() => Promise.reject(new Error('tts down')))
+  await flush()
+  assert(h2.events.errors.some((e) => e.kind === 'voice-unavailable'),
+    'live-tts: TTS unavailable surfaces the honest error (no fake speaking)')
+  assert(h2.session.state === 'idle', 'live-tts: TTS unavailable -> idle')
+  assert(h2.timers.pendingCount() === 0, 'live-tts: no resume timer after TTS failure')
+}
+
+// ---------------------------------------------------------------------------
+// 15d) No-microphone-while-speaking (the playback-cutoff root cause): from the
+//      moment the mentor's reply is ready the recognizer is hushed and NO new
+//      recognizer is started until a clean audio end auto-resumes listening.
+//      Exactly one fresh primary recognizer after playback, no interrupt/listen
+//      burst during TTS, and no duplicate turn after the resume.
+// ---------------------------------------------------------------------------
+{
+  const h = makeHarness({ resumeAfterPlaybackEnd: true, resumeDelayMs: 150 })
+  h.session.start()
+  h.fireFinal('echo trap')
+  const listensBeforeSpeaking = h.calls.listen.length
+  await flush()
+  assert(h.session.state === 'speaking', 'no-mic: speaking reached')
+  assert(h.lastListen() === null, 'no-mic: NO active recognizer while speaking (last active is empty)')
+  assert(h.calls.synth.length === 1, 'no-mic: TTS requested once')
+  assert(h.calls.synth[0].aborted === false, 'no-mic: TTS request started cleanly (not pre-aborted by echo)')
+
+  // Simulate a would-be echo final arriving on a stale recognizer callback:
+  // because the recognizer is hushed, the engine MUST ignore it entirely.
+  const nul = h.timers.pendingCount()
+  for (const l of h.calls.listen) {
+    if (l.onFinal && !l.active) l.onFinal('echoed mentor audio')
+  }
+  await flush()
+  assert(h.session.state === 'speaking', 'no-mic: a stale final (echo) does NOT cut playback')
+  assert(h.calls.listen.length === listensBeforeSpeaking,
+    'no-mic: no recognizer was (re)opened by the echo at all')
+  assert(h.timers.pendingCount() === nul, 'no-mic: no timers armed by echo')
+  assert(h.calls.send.length === 1, 'no-mic: echo never submits a new tutor turn')
+
+  const handle = h.calls.play[0].handle
+  handle.resolveDone()
+  await flush()
+  assert(h.session.state === 'idle', 'no-mic: natural audio end -> idle')
+  assert(h.timers.pendingCount() === 1, 'no-mic: exactly one resume timer')
+  h.timers.fireNext()
+  assert(h.session.state === 'listening', 'no-mic: listening resumed after playback completion')
+  assert(h.lastListen() && h.lastListen().mode === 'primary', 'no-mic: fresh PRIMARY recognizer after playback')
+  assert(h.calls.listen.length === listensBeforeSpeaking + 1,
+    'no-mic: the ONLY new recognizer after playback is the fresh primary')
+
+  h.fireFinal('second question')
+  assert(h.calls.send.length === 2, 'no-mic: second turn submitted once (no duplicate after resume)')
+  await flush()
+  assert(h.session.state === 'speaking', 'no-mic: second reply spoken')
+}
+
+// ---------------------------------------------------------------------------
+// 15e) Deliberate interruption during speaking still works (mic/orb button),
+//      cuts playback cleanly, hands off to listening, and NEVER arms an
+//      auto-resume for that turn (resume is only for a natural audio end).
+// ---------------------------------------------------------------------------
+{
+  const h = makeHarness({ resumeAfterPlaybackEnd: true })
+  let playbackStopped = false
+  h.setPlay(() => {
+    const doneBox = { done: null }
+    const done = new Promise((r) => { doneBox.done = r })
+    return { stop() { playbackStopped = true; doneBox.done() }, done }
+  })
+  h.session.start()
+  h.fireFinal('cut me off')
+  await flush()
+  assert(h.session.state === 'speaking', 'explicit-bargein: speaking')
+  h.session.interrupt()
+  assert(playbackStopped === true, 'explicit-bargein: playback stopped')
+  assert(h.session.state === 'interrupted', 'explicit-bargein: interrupted')
+  assert(h.timers.pendingCount() === 1, 'explicit-bargein: handoff timer armed, no resume timer')
+  h.timers.fireNext()
+  assert(h.session.state === 'listening', 'explicit-bargein: 400ms handoff -> listening')
+  assert(h.lastListen().mode === 'primary', 'explicit-bargein: fresh primary listen')
+}
+
+// ---------------------------------------------------------------------------
+// 15f) EXPLICIT LIVE LANGUAGE — Live Voice has EXACTLY TWO speech modes (EN |
+//      Arabic) and NO Auto inside the session. English forces en-US; the
+//      recognizer never steers (no interim interface at all), and the /tutor
+//      turn always carries the explicit language.
+// ---------------------------------------------------------------------------
+{
+  const det = []
+  const h = makeHarness({ language: 'en', onLanguageDetected: (l) => det.push(l) })
+  h.session.start()
+  assert(h.lastListen().lang === 'en-US', 'explicit-en: Live opens in en-US')
+  assert(h.lastListen().onInterim === undefined, 'explicit-en: no interim-steering interface remains')
+  h.fireFinal("What's your name?")
+  assert(h.calls.listen.filter((l) => l.mode === 'primary').length === 1,
+    'explicit-en: exactly one primary recognizer per utterance (no steering restart)')
+  assert(h.calls.send.length === 1, 'explicit-en: one STT final -> one /tutor turn')
+  assert(h.calls.send[0].opts.language === 'en', 'explicit-en: /tutor receives language=en')
+  assert(det[0] === 'en', 'explicit-en: onLanguageDetected reports en')
+  await flush()
+  assert(h.session.state === 'speaking', 'explicit-en: English reply is spoken')
+}
+
+// ---------------------------------------------------------------------------
+// 15g) EXPLICIT Arabic — ar-EG recognizer, real Arabic transcript end-to-end.
+// ---------------------------------------------------------------------------
+{
+  const det = []
+  const h = makeHarness({ language: 'ar', onLanguageDetected: (l) => det.push(l) })
+  h.session.start()
+  assert(h.lastListen().lang === 'ar-EG', 'explicit-ar: Live opens in ar-EG')
+  h.fireFinal('اسمك ايه؟')
+  assert(h.calls.send.length === 1, 'explicit-ar: one final -> one /tutor turn')
+  assert(h.calls.send[0].opts.language === 'ar', 'explicit-ar: /tutor receives language=ar')
+  assert(det[0] === 'ar', 'explicit-ar: onLanguageDetected reports ar')
+  await flush()
+  assert(h.session.state === 'speaking', 'explicit-ar: Arabic reply is spoken')
+}
+
+// ---------------------------------------------------------------------------
+// 15h) MID-SESSION SWITCH EN -> AR while LISTENING — safe restart: hush the
+//      current recognizer, invalidate its stale callbacks (recogId bump), start
+//      a fresh primary listener in the new locale, and never commit a stale
+//      final from the old recognizer. The hands-free loop then continues in
+//      Arabic.
+// ---------------------------------------------------------------------------
+{
+  const det = []
+  const h = makeHarness({ language: 'en', resumeAfterPlaybackEnd: true, onLanguageDetected: (l) => det.push(l) })
+  h.session.start()
+  assert(h.lastListen().lang === 'en-US', 'switch-en-ar: starts en-US')
+  const firstListen = h.lastListen()
+  const hushBefore = h.calls.hush
+  h.session.setLanguage('ar')
+  assert(h.lastListen().lang === 'ar-EG', 'switch-en-ar: recognizer restarted in ar-EG')
+  assert(h.lastListen() !== firstListen, 'switch-en-ar: a NEW primary recognizer was started')
+  assert(h.calls.hush === hushBefore + 1, 'switch-en-ar: the old recognizer was hushed')
+  assert(h.activeListens() === 1, 'switch-en-ar: exactly one recognizer active after the switch')
+  assert(det[det.length - 1] === 'ar', 'switch-en-ar: onLanguageDetected reported ar immediately')
+  // A stale final from the OLD en-US recognizer must never commit.
+  firstListen.onFinal('Stale english final')
+  await flush()
+  assert(h.calls.send.length === 0, 'switch-en-ar: stale en-US final is discarded')
+  assert(h.session.state === 'listening', 'switch-en-ar: still listening after discarding the stale final')
+  h.fireFinal('ممكن تشرحلي Docker ببساطة؟')
+  assert(h.calls.send.length === 1, 'switch-en-ar: the real Arabic final submits once')
+  assert(h.calls.send[0].opts.language === 'ar', 'switch-en-ar: Arabic turn sends language=ar')
+  await flush()
+  assert(h.session.state === 'speaking', 'switch-en-ar: Arabic reply is spoken')
+  // The hands-free loop continues in the switched language.
+  h.calls.play[0].handle.resolveDone()
+  await flush()
+  assert(h.session.state === 'idle', 'switch-en-ar: audio end -> idle')
+  h.timers.fireNext()
+  assert(h.session.state === 'listening', 'switch-en-ar: loop auto-resumes to listening')
+  assert(h.lastListen().lang === 'ar-EG', 'switch-en-ar: resumed recognizer stays ar-EG')
+}
+
+// ---------------------------------------------------------------------------
+// 15i) MID-SESSION SWITCH AR -> EN while LISTENING (symmetric — no lingering
+//      Arabic recognizer, no duplicate turn).
+// ---------------------------------------------------------------------------
+{
+  const h = makeHarness({ language: 'ar' })
+  h.session.start()
+  assert(h.lastListen().lang === 'ar-EG', 'switch-ar-en: starts ar-EG')
+  const firstListen = h.lastListen()
+  h.session.setLanguage('en')
+  assert(h.lastListen().lang === 'en-US', 'switch-ar-en: recognizer restarted in en-US')
+  assert(h.lastListen() !== firstListen, 'switch-ar-en: fresh primary recognizer')
+  assert(h.activeListens() === 1, 'switch-ar-en: exactly one active recognizer')
+  firstListen.onFinal('عربى ملغى')
+  await flush()
+  assert(h.calls.send.length === 0, 'switch-ar-en: stale ar-EG final is discarded')
+  h.fireFinal('Can you explain Docker simply?')
+  assert(h.calls.send.length === 1, 'switch-ar-en: English final submits once')
+  assert(h.calls.send[0].opts.language === 'en', 'switch-ar-en: English turn sends language=en')
+}
+
+// ---------------------------------------------------------------------------
+// 15j) SWITCH WHILE THE MENTOR IS SPEAKING — the language change is applied
+//      AFTER playback (never cut, never duplicated): in-flight TTS keeps
+//      playing, and the auto-resume restarts Listening in the new locale.
+// ---------------------------------------------------------------------------
+{
+  const det = []
+  const h = makeHarness({ language: 'en', resumeAfterPlaybackEnd: true, onLanguageDetected: (l) => det.push(l) })
+  h.session.start()
+  h.fireFinal('Hello there')
+  await flush()
+  assert(h.session.state === 'speaking', 'switch-speaking: mentor is speaking')
+  const playCount = h.calls.play.length
+  const hushBefore = h.calls.hush
+  h.session.setLanguage('ar')
+  assert(h.session.state === 'speaking', 'switch-speaking: playback is NOT interrupted by a language switch')
+  assert(h.calls.play.length === playCount, 'switch-speaking: no new playback / duplicate turn')
+  assert(h.calls.hush === hushBefore, 'switch-speaking: no microphone restart during playback')
+  assert(det[det.length - 1] === 'en', 'switch-speaking: language not applied mid-playback')
+  h.calls.play[0].handle.resolveDone()
+  await flush()
+  assert(h.session.state === 'idle', 'switch-speaking: playback ends naturally -> idle')
+  h.timers.fireNext()
+  assert(h.session.state === 'listening', 'switch-speaking: loop resumes to listening')
+  assert(h.lastListen().lang === 'ar-EG', 'switch-speaking: pending switch applied -> ar-EG')
+  assert(det[det.length - 1] === 'ar', 'switch-speaking: onLanguageDetected reported ar after playback')
+}
+
+// ---------------------------------------------------------------------------
+// 15k) SWITCH WHILE /tutor IS IN FLIGHT (processing) — the in-flight turn is
+//      finished in the OLD language (never re-sent), and the switch applies to
+//      the NEXT Listening session only.
+// ---------------------------------------------------------------------------
+{
+  const det = []
+  const h = makeHarness({ language: 'ar', resumeAfterPlaybackEnd: true, onLanguageDetected: (l) => det.push(l) })
+  h.session.start()
+  h.fireFinal('عندي سؤال')
+  assert(h.session.state === 'processing', 'switch-processing: /tutor in flight')
+  h.session.setLanguage('en')
+  assert(h.calls.send.length === 1, 'switch-processing: the in-flight turn is never re-sent')
+  assert(h.calls.send[0].opts.language === 'ar', 'switch-processing: in-flight turn stays in the old language (ar)')
+  await flush()
+  assert(h.session.state === 'speaking', 'switch-processing: old-language reply still spoken')
+  h.calls.play[0].handle.resolveDone()
+  await flush()
+  h.timers.fireNext()
+  assert(h.session.state === 'listening', 'switch-processing: loop resumes')
+  assert(h.lastListen().lang === 'en-US', 'switch-processing: pending switch applied -> en-US')
+  assert(det[det.length - 1] === 'en', 'switch-processing: onLanguageDetected reported en after the turn')
+}
+
+// ---------------------------------------------------------------------------
+// 15l) LATENCY OBSERVABILITY (Phase 4C.1): every spoken-turn stage traces
+//      elapsed_ms from the STT final, in order, plus audio-ready -> playback
+//      delay. The turn also proves exactly ONE TTS request and ONE playback
+//      handle (no duplicates) and that auto-resume is armed only AFTER the
+//      playback reached its genuine `ended`.
+// ---------------------------------------------------------------------------
+{
+  const traces = []
+  const h = makeHarness({
+    resumeAfterPlaybackEnd: true,
+    resumeDelayMs: 150,
+    onTrace: (stage, meta) => traces.push({ stage, meta }),
+  })
+  h.session.start()
+  h.fireFinal('What\'s your name?')
+  await flush()
+  assert(h.session.state === 'speaking', '4c-latency: reached speaking')
+  const order = ['stt.final', 'tutor.sent', 'tutor.ok', 'tts.sent', 'tts.ok', 'play.start']
+  const idx = order.map((s) => traces.findIndex((t) => t.stage === s))
+  assert(idx.every((i) => i !== -1), '4c-latency: every spoken-turn stage is traced')
+  assert(idx.every((i, n) => n === 0 || idx[n - 1] < i),
+    '4c-latency: stages trace in order (final -> tutor -> TTS -> playback)')
+  const el = (s) => traces.find((t) => t.stage === s).meta.elapsedMs
+  assert(el('stt.final') === 0, '4c-latency: STT final is the 0ms baseline')
+  assert(order.every((s) => Number.isFinite(el(s)) && el(s) >= 0),
+    '4c-latency: every stage carries elapsed_ms >= 0')
+  assert(el('tutor.sent') <= el('tutor.ok') && el('tutor.ok') <= el('tts.sent') && el('tts.sent') <= el('play.start'),
+    '4c-latency: elapsed_ms is monotonic across the turn')
+  const play = traces.find((t) => t.stage === 'play.start')
+  assert(play.meta.lang === 'en', '4c-latency: trace carries the spoken language')
+  assert(typeof play.meta.playDelayMs === 'number' && play.meta.playDelayMs >= 0,
+    '4c-latency: audio-ready -> playback-start delta traced')
+  assert(traces.filter((t) => t.stage === 'tts.sent').length === 1,
+    '4c-latency: exactly ONE TTS request per turn')
+  assert(h.calls.synth.length === 1 && h.calls.play.length === 1,
+    '4c-latency: one synth call + one playback, no duplicates')
+  assert(h.timers.pendingCount() === 0, '4c-latency: no resume armed before the audio ended')
+  h.calls.play[0].handle.resolveDone()
+  await flush()
+  assert(traces.some((t) => t.stage === 'play.end'), '4c-latency: playback reached genuine ended')
+  assert(h.timers.pendingCount() === 1, '4c-latency: resume armed only AFTER playback ended')
+}
+
+// ---------------------------------------------------------------------------
+// 15m) CLOSE/END CANCELS PENDING PLAYBACK/RESUME (Phase 4C.1): after a natural
+//      audio end a resume is armed, but leaving the overlay cancels it — the
+//      loop must NOT keep listening in the background after the user closes.
+// ---------------------------------------------------------------------------
+{
+  const traces = []
+  const h = makeHarness({
+    resumeAfterPlaybackEnd: true,
+    resumeDelayMs: 200,
+    onTrace: (s) => traces.push(s),
+  })
+  h.session.start()
+  h.fireFinal('hello')
+  await flush()
+  assert(h.session.state === 'speaking', '4c-close: speaking')
+  h.calls.play[0].handle.resolveDone()
+  await flush()
+  assert(h.session.state === 'idle', '4c-close: natural audio end -> idle')
+  assert(h.timers.pendingCount() === 1, '4c-close: resume armed after natural end')
+  h.session.stop()
+  assert(h.timers.pendingCount() === 0, '4c-close: close/end cancels the pending resume')
+  assert(!traces.includes('resume.fired'), '4c-close: resume never fired after close')
+  assert(h.session.state === 'idle', '4c-close: stays idle (no background listening)')
+}
+
+// ---------------------------------------------------------------------------
+// 15n) TTS ERROR FALLBACK (Phase 4C.1): a failed synthesis must NOT fake
+//      Speaking — it preserves the generated text, surfaces a localized
+//      voice-unavailable error, never plays anything, and the user can simply
+//      speak again (the loop continues).
+// ---------------------------------------------------------------------------
+{
+  let lastErr = ''
+  const h = makeHarness({ onError: (k) => { lastErr = k } })
+  h.setSynth(() => Promise.reject(new Error('provider down')))
+  h.session.start()
+  h.fireFinal('can you help me?')
+  await flush()
+  assert(h.session.state === 'idle', '4c-fallback: TTS failure -> idle, NO fake Speaking')
+  assert(lastErr === 'voice-unavailable', '4c-fallback: voice-unavailable error surfaced')
+  assert(h.events.transcripts.some((t) => t.role === 'assistant' && t.text === 'Nice to meet you.'),
+    '4c-fallback: generated reply text preserved in the transcript')
+  assert(h.calls.play.length === 0, '4c-fallback: nothing was played')
+  // Retry / continue: the next utterance is heard and spoken normally.
+  h.setSynth(() => Promise.resolve({ blob: {} }))
+  h.session.start()
+  assert(h.session.state === 'listening', '4c-fallback: retry re-opens listening')
+  h.fireFinal('back again')
+  await flush()
+  assert(h.calls.send.length === 2 && h.calls.send[1].text === 'back again',
+    '4c-fallback: the loop continues with the next utterance')
+  assert(h.session.state === 'speaking' && h.calls.synth.length === 2 && h.calls.play.length === 1,
+    '4c-fallback: retry turn is synthesized and played normally')
+}
+
+// ---------------------------------------------------------------------------
 // 16) SR-unsupported source guards (offline, read-only): the hook refuses to
 //     build a session when recognition is unsupported or there is no student,
 //     exposes `supported`, and the panel gates the chat mic on busy / active
@@ -482,6 +893,54 @@ function flush() { return new Promise((r) => setImmediate(r)) }
     'sr-guard: unsupported browser shows the honest note, never opens the overlay')
   assert(/disabled=\{assessmentActive \|\| busy \|\| !studentId\}/.test(panelSrc),
     'sr-guard: composer mic disabled while busy / assessment / no student')
+  assert(/if \(opts\.mode !== 'primary'\) return/.test(hookSrc),
+    'sr-guard: interrupt recognizer never self-triggers from a plain result (noise/echo)')
+  assert(/rec\.onspeechstart = \(\) => \{ if \(!entry\.cancelled\) opts\.onSpeechStart\?\.\(\) \}/.test(hookSrc),
+    'sr-guard: only a real VAD speech-start may barge in')
+  const engineSrc = readFileSync(resolve(__dirname, '../src/lib/voiceSession.ts'), 'utf8')
+  assert((engineSrc.match(/this\.listenInterrupt\(\)/g) || []).length === 1,
+    'sr-guard: no microphone is opened while the mentor speaks (echo loop impossible)')
+  const voiceSrc = readFileSync(resolve(__dirname, '../src/components/VoiceMode.tsx'), 'utf8')
+  // Phase 4B.2 r2 — explicit Live speech languages: EN | Arabic only, no Auto.
+  assert(!/steerAutoRecognition/.test(engineSrc),
+    'explicit-live: NO Auto steering path remains (removed)')
+  assert(!/steeringTarget|scriptDetectLang/.test(engineSrc),
+    'explicit-live: NO script-detection steering helpers remain (removed)')
+  assert(!/steerBudget|MAX_STEER_PER_UTTERANCE/.test(engineSrc),
+    'explicit-live: NO steering budget remains (removed)')
+  assert(!/onInterim/.test(engineSrc) && !/onInterim/.test(hookSrc),
+    'explicit-live: NO interim-steering interface remains (engine + hook)')
+  assert(!/prefLang/.test(engineSrc),
+    'explicit-live: NO Auto preference field remains in the engine')
+  assert(/language: 'en' \| 'ar'/.test(engineSrc),
+    'explicit-live: the session language is EXPLICIT en|ar (no Auto inside Live)')
+  assert(/recognitionLang\(this\.sessionLang\)/.test(engineSrc),
+    'explicit-live: recognizer locale always follows the selected session language')
+  assert(/setLanguage\(/.test(engineSrc),
+    'explicit-live: engine exposes the mid-session language switch')
+  assert(/onLanguageDetected\?\.\(this\.turnLang\)/.test(engineSrc),
+    'explicit-live: the utterance language is reported before /tutor')
+  assert(/language: sessionOpts\?\.language \?\? voiceLang/.test(panelSrc),
+    'explicit-live: the voice /tutor turn sends the explicit/selected language, never an Auto fallback')
+  assert(/resolveInitialLiveLang/.test(panelSrc),
+    'explicit-live: Auto chat preference resolves to an explicit Live language at open')
+  assert(/sb_live_lang/.test(hookSrc),
+    'explicit-live: the last Live speech language is persisted locally (Auto re-open reuses it)')
+  assert(/setLanguage\(/.test(hookSrc),
+    'explicit-live: hook exposes the switch for the EN | Arabic selector')
+  assert(/v-lang/.test(voiceSrc),
+    'explicit-live: compact EN | Arabic selector present in the fullscreen surface')
+  assert(/voice\.setLanguage\('en'\)/.test(voiceSrc) && /voice\.setLanguage\('ar'\)/.test(voiceSrc),
+    'explicit-live: selector buttons switch the live session to en / ar')
+  assert(/aria-pressed=\{voice\.language === 'en'\}/.test(voiceSrc),
+    'explicit-live: selector exposes the active language to assistive tech')
+  // Phase 4C.1 — latency observability plumbing (developer traces only).
+  assert(/elapsedMs/.test(engineSrc),
+    '4c-latency: engine traces elapsed_ms on every spoken-turn stage')
+  assert(/playDelayMs/.test(engineSrc),
+    '4c-latency: audio-ready -> playback-start delta is traced')
+  assert(/console\.info\('\[voice-live\]'/.test(hookSrc),
+    '4c-latency: stage traces appear ONLY in the developer console (never the UI)')
 }
 
 // ---------------------------------------------------------------------------

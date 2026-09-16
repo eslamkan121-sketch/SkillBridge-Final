@@ -57,6 +57,19 @@ def _tutor(client, student_id, headers, body=None):
                        headers=headers)
 
 
+def _prime(client, student_id, headers):
+    """Past the backend fresh-thread context gating: a FIRST message is
+    intentionally persona/language-only (main.api_tutor_chat nulls the per-page
+    trusted context on a fresh thread — a first turn can never fabricate
+    "earlier in our session..." content). The NEXT turn then receives the
+    trusted per-page context these context-aware tests assert on."""
+    r = client.post(f"/api/students/{student_id}/tutor",
+                    json={"message": "Let's get started.", "page": "dashboard"},
+                    headers=headers)
+    assert r.status_code == 200
+    return r
+
+
 # ------------------------------------------------------------------ canonical definition + validation
 
 def test_language_definition_is_canonical():
@@ -366,6 +379,7 @@ def test_dashboard_arabic_context(client, student_id, auth_headers, monkeypatch)
     captured = _capture_complete(monkeypatch)
     h = auth_headers("aisha@student.edu")
     _set_pref(client, student_id, h, {"language": "ar"})
+    _prime(client, student_id, h)
     r = _tutor(client, student_id, h, {
         "page": "dashboard", "message": "إيه أكتر حاجة موقفاني عن الوظيفة اللي أنا عاوزها؟"})
     assert r.status_code == 200 and r.json()["language"] == "ar"
@@ -379,6 +393,7 @@ def test_learning_arabic_context(client, student_id, auth_headers, monkeypatch):
     captured = _capture_complete(monkeypatch)
     h = auth_headers("aisha@student.edu")
     _set_pref(client, student_id, h, {"language": "ar"})
+    _prime(client, student_id, h)
     python = models.get_skill_by_name("Python")["id"]
     r = _tutor(client, student_id, h, {
         "page": "learning", "skill_id": python, "competency": "containers",
@@ -393,6 +408,7 @@ def test_jobs_arabic_context(client, student_id, auth_headers, monkeypatch):
     captured = _capture_complete(monkeypatch)
     h = auth_headers("aisha@student.edu")
     _set_pref(client, student_id, h, {"language": "ar"})
+    _prime(client, student_id, h)
     r = _tutor(client, student_id, h, {
         "page": "jobs", "job_title": "Junior Backend Engineer", "message": "هل أقدم على الوظيفة دي؟"})
     assert r.status_code == 200 and r.json()["language"] == "ar"
@@ -404,6 +420,7 @@ def test_roadmap_arabic_context(client, student_id, auth_headers, monkeypatch):
     captured = _capture_complete(monkeypatch)
     h = auth_headers("aisha@student.edu")
     _set_pref(client, student_id, h, {"language": "ar"})
+    _prime(client, student_id, h)
     r = _tutor(client, student_id, h, {"page": "career_roadmap", "message": "أعمل إيه بعد كده؟"})
     assert r.status_code == 200 and r.json()["language"] == "ar"
     assert has_arabic(r.json()["reply"])
@@ -555,3 +572,255 @@ def test_endpoint_arabic_identity_echo_never_surfaces(client, student_id, auth_h
     assert has_arabic(reply)
     assert reply.strip() != "أنا Nova، مدرّبك الذكي في SkillBridge."
     assert len(reply) > 60
+
+
+# ------------------------------------------------------------------ Arabizi mirroring (language-mirroring bug fix)
+
+_ARABIZI_GREETING = "ezayek ya nova 3amla eh"
+_ARABIZI_DOCKER = "ana msh fahm el docker ports"
+
+
+def test_detect_language_arabizi_greeting_is_arabic():
+    """D1 — Arabizi (Arabic in Latin letters) must detect as Arabic."""
+    assert copilot.detect_language(_ARABIZI_GREETING) == "ar"
+    assert copilot.detect_language(_ARABIZI_DOCKER) == "ar"
+    assert copilot.detect_language("3amla eh") == "ar"
+    assert copilot.detect_language("ezayek ya nova") == "ar"
+
+
+def test_detect_language_longer_arabizi_request_is_arabic():
+    """D1 — the longer/specific Arabizi request must also detect as Arabic."""
+    assert copilot.detect_language("momken tshar7ly docker volumes bel3araby law samaht") == "ar"
+    assert copilot.detect_language("shar7li el containers ya nova law samaht") == "ar"
+    assert copilot.resolve_language("auto", "momken tshar7ly docker volumes bel3araby law samaht") == "ar"
+
+
+def test_detect_language_multilingual_guards_stay_intact():
+    """D1/D — Arabizi detection must never flip pure English or Arabic script."""
+    assert copilot.detect_language("how are you") == "en"
+    assert copilot.detect_language("Please explain Docker containers simply") == "en"
+    assert copilot.detect_language("see ya") == "en"
+    assert copilot.detect_language("مرحبا يا نوفا") == "ar"
+    assert copilot.detect_language("اشرحلي Docker networking") == "ar"
+
+
+def test_resolve_language_auto_mirrors_arabizi_not_english():
+    """D1 — auto resolution follows the corrected detection."""
+    assert copilot.resolve_language("auto", _ARABIZI_GREETING) == "ar"
+    assert copilot.resolve_language("auto", _ARABIZI_DOCKER) == "ar"
+    assert copilot.resolve_language("auto", "how are you") == "en"
+    # explicit pins still win over detection
+    assert copilot.resolve_language("en", _ARABIZI_GREETING) == "en"
+    assert copilot.resolve_language("ar", "how are you") == "ar"
+
+
+def test_detect_arabizi_helper():
+    assert copilot.detect_arabizi(_ARABIZI_GREETING) is True
+    assert copilot.detect_arabizi(_ARABIZI_DOCKER) is True
+    assert copilot.detect_arabizi("how are you") is False
+    assert copilot.detect_arabizi("see ya") is False
+
+
+def test_meta_commentary_phrases_rejected():
+    """D2 — replies narrating the language/persona decision are rejected."""
+    for evil in (
+        "It looks like your message is in Arabic",
+        "It looks like you used an Arabic phrase",
+        "Since you wrote in Arabic, I'll respond in English",
+        "I'll respond warmly as your Explainer Tutor persona",
+        "Since this appears to be a greeting, I'll respond in English",
+        "Nova says: let's talk about Docker",
+        "the phrase roughly translates to containers",
+    ):
+        assert genai._reply_contains_meta_commentary(evil), evil
+    for clean in (
+        "Let's break down Docker containers together.",
+        "عايز تفهم Docker؟ نبدأ بمثال بسيط.",
+        "Hi! What would you like to practice next?",
+    ):
+        assert not genai._reply_contains_meta_commentary(clean), clean
+
+
+def test_arabic_provider_reply_surfaces_after_english_tail_stripped(monkeypatch):
+    """C — an Arabic reply must not close on an English sentence (evidence 4).
+
+    Provider emits Arabic body + "I'm ready when you are!" tail. The tail must
+    be removed and the Arabic answer surfaced, not replaced by the fallback.
+    """
+    def fake_complete(system, user, fallback=None, **kw):
+        return ("عايز تفهم Docker؟ نسيبها تعمل عزل بين الخدمات. "
+                "Docker يسهل تشغيل الخدمات على أي جهاز. I'm ready when you are!")
+
+    monkeypatch.setattr(genai, "complete", fake_complete)
+    reply = genai.tutor_reply(
+        "ana msh fahm el docker ports",
+        student_context=None, skill_name="Docker",
+        target_role="Cybersecurity Analyst",
+        tutor_id="nova", mode="chat", language="ar",
+    )
+    assert has_arabic(reply)
+    assert "I'm ready when you are!" not in reply
+    assert not genai._reply_contains_meta_commentary(reply)
+    tail = " ".join(str(reply).rstrip().split()[-6:])
+    assert has_arabic(tail) or copilot.detect_arabizi(tail) or tail.isascii(), tail
+
+
+def test_english_provider_reply_untouched(monkeypatch):
+    """D — a clean English reply for an English message must pass unchanged."""
+    def fake_complete(system, user, fallback=None, **kw):
+        return "Great — Docker is an open platform for running apps in containers."
+
+    monkeypatch.setattr(genai, "complete", fake_complete)
+    reply = genai.tutor_reply(
+        "how are you",
+        student_context=None, skill_name="Docker",
+        target_role="Cybersecurity Analyst",
+        tutor_id="nova", mode="chat", language="en",
+    )
+    assert not has_arabic(reply)
+    assert "Docker is an open platform" in reply
+
+
+def test_provider_language_narration_replaced_by_fallback(monkeypatch):
+    """D2 — a provider reply announcing the language decision is never shown."""
+    def evil_complete(system, user, fallback=None, **kw):
+        return "It looks like your message is in Arabic, so I'll respond in English."
+
+    monkeypatch.setattr(genai, "complete", evil_complete)
+    reply = genai.tutor_reply(
+        _ARABIZI_GREETING,
+        student_context=None, skill_name="Docker",
+        target_role="Cybersecurity Analyst",
+        tutor_id="nova", mode="chat", language="ar",
+    )
+    assert not genai._reply_contains_meta_commentary(reply)
+    assert has_arabic(reply)
+
+
+def test_system_prompt_carries_mirror_and_no_narration_rules(monkeypatch):
+    """A/B — the tutor system prompt now carries the mirror + hygiene rules."""
+    captured = _capture_complete(monkeypatch)
+    genai.tutor_reply(
+        "ezayek ya nova 3amla eh",
+        student_context=None, skill_name="Docker",
+        target_role="Cybersecurity Analyst",
+        tutor_id="nova", mode="chat", language="ar",
+    )
+    system = captured["system"]
+    assert "Reply in the same language as the user's message" in system
+    assert "Do not explain. Do not translate." in system
+    assert "Never announce, justify, or 'translate' the student's language" in system
+
+
+def test_narration_phrases_seen_on_live_nim_are_rejected():
+    """D3 — every exact phrasing observed on live NIM output must be blocked.
+
+    Evidence ("It looks like you asked in Arabic ... which translates to ...",
+    "Since your message was a greeting, I'll keep it simple", "Let me respond
+    in English", "to be safe, I'll answer in English") is now in the gate list.
+    """
+    phrasings = [
+        "It looks like you asked in Arabic. That translates to 'how are you'.",
+        "asked in Arabic, I will translate it",
+        "which roughly translates to",
+        "It looks like you asked in Arabic, which translates to 'how are you'.",
+        "Since your message is a greeting, I'll keep it simple and respond in English.",
+        "Let me respond in English to make sure it's clear.",
+        "to be safe, I'll respond in English.",
+        "To be safe, I'll keep the answer short.",
+    ]
+    for text in phrasings:
+        assert genai._reply_contains_meta_commentary(text), text
+
+
+def test_live_nim_style_narration_replaced_by_arabic_fallback(monkeypatch):
+    """D4 — the exact live-NIM narration shape never reaches the UI."""
+    def evil_complete(system, user, fallback=None, **kw):
+        return ("It looks like you asked in Arabic! "
+                "Which translates to 'how are you'. "
+                "I'll keep it simple and respond in English.")
+
+    monkeypatch.setattr(genai, "complete", evil_complete)
+    reply = genai.tutor_reply(
+        _ARABIZI_GREETING,
+        student_context=None, skill_name="Docker",
+        target_role="Cybersecurity Analyst",
+        tutor_id="nova", mode="chat", language="ar",
+    )
+    assert not genai._reply_contains_meta_commentary(reply)
+
+
+# ------------------------------------------------------------------ retry-on-latch (one-shot re-generation)
+
+def test_retry_recovers_first_attempt_latch_and_serves_second(monkeypatch):
+    """D5 — a degenerate first draw (the exact live-NIM "docker ports" latch)
+    triggers exactly ONE re-generation, and the second draw's accepted Arabic
+    reply is what the user sees — never the deterministic fallback."""
+    calls = []
+
+    def fake_complete(system, user, fallback=None, **kw):
+        calls.append(1)
+        if len(calls) == 1:
+            return "docker ports\n" * 40
+        return ("بخصوص Docker ports، الفكرة أنك تربط منفذ الحاوية بمنفذ المضيف "
+                "عبر -p 8080:80 ثم تزور localhost:8080 من المتصفح.")
+
+    monkeypatch.setattr(genai, "complete", fake_complete)
+    monkeypatch.setattr(genai, "NIM_KEY", "nv-test")
+    reply = genai.tutor_reply(
+        "ana msh fahm el docker ports",
+        student_context=None, skill_name="Docker",
+        target_role="Cybersecurity Analyst",
+        tutor_id="nova", mode="chat", language="ar",
+    )
+    assert len(calls) == 2, "exactly one re-generation — no retry storm"
+    assert "الفكرة أنك تربط منفذ الحاوية" in reply, "the SECOND attempt is served"
+    assert "docker ports\ndocker ports" not in reply
+
+
+def test_retry_never_loops_beyond_second_attempt(monkeypatch):
+    """D6 — both draws latching must end in the deterministic Arabic fallback
+    after exactly two provider calls (a retry storm is impossible)."""
+    calls = []
+
+    def fake_complete(system, user, fallback=None, **kw):
+        calls.append(1)
+        return "docker ports\n" * 40
+
+    monkeypatch.setattr(genai, "complete", fake_complete)
+    monkeypatch.setattr(genai, "NIM_KEY", "nv-test")
+    reply = genai.tutor_reply(
+        "ana msh fahm el docker ports",
+        student_context=None, skill_name="Docker",
+        target_role="Cybersecurity Analyst",
+        tutor_id="nova", mode="chat", language="ar",
+    )
+    assert len(calls) == 2, "exactly two provider calls total, no more"
+    assert has_arabic(reply)
+    assert "docker ports\ndocker ports" not in reply
+
+
+def test_retry_recovers_zero_arabic_wrong_language_first_draw(monkeypatch):
+    """D7 — a coherent-but-0-Arabic first draw on an ar input (the model
+    ignored the fixed language) is treated as a latch class and retried once;
+    the second draw's Arabic reply surfaces instead of the fallback."""
+    calls = []
+
+    def fake_complete(system, user, fallback=None, **kw):
+        calls.append(1)
+        if len(calls) == 1:
+            return "Docker ports work by mapping a host address to a container port."
+        return "يعمل Docker ports ببساطة: تربط منفذ المضيف بمنفذ الحاوية."
+
+    monkeypatch.setattr(genai, "complete", fake_complete)
+    monkeypatch.setattr(genai, "NIM_KEY", "nv-test")
+    reply = genai.tutor_reply(
+        "ana msh fahm el docker ports",
+        student_context=None, skill_name="Docker",
+        target_role="Cybersecurity Analyst",
+        tutor_id="nova", mode="chat", language="ar",
+    )
+    assert len(calls) == 2
+    assert has_arabic(reply)
+    assert "Docker ports work by mapping" not in reply
+    assert has_arabic(reply)

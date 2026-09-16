@@ -1,0 +1,1202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SkillBridge · Skills &amp; Roles — review (EN / AR)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ============ 0. tokens (short-form aliases of the --sb-role-* brief) ============ */
+:root{
+  --surface:#F8FAFC;
+  --panel:#FFFFFF;
+  --border:#E2E8F0;
+  --raised:#FFFFFF;
+  --accent:#FF6B2C;
+  --accent-strong:#E85A1F;
+  --accent-soft:#FFF0E8;
+  --accent-border:#FAD4C2;
+  --teal:#14B8A6;
+  --teal-strong:#0F766E;
+  --teal-soft:#E6FBF8;
+  --data:#7C5CFC;
+  --data-soft:#F0EBFC;
+  --success:#1E8A5A;
+  --success-soft:#E7F7EF;
+  --verified:#1E8A5A;
+  --verified-soft:#E6F6EE;
+  --caution:#B45309;
+  --caution-soft:#FEF3E2;
+  --danger:#D7263D;
+  --danger-soft:#FDEBEC;
+  --muted:#64748B;
+  --muted-strong:#334155;
+  --muted-faint:#94A3B8;
+  --navy:#0D1B2A;
+  --navy-deep:#0F1B2E;
+  --ink:#14273B;
+  --on-navy:#FFFFFF;
+  --on-navy-muted:rgba(255,255,255,.72);
+  --font-sans:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --font-sans-ar:'IBM Plex Sans Arabic','Inter',system-ui,sans-serif;
+  --sp-1:4px;--sp-2:8px;--sp-3:12px;--sp-4:16px;--sp-5:20px;--sp-6:24px;--sp-8:32px;--sp-10:40px;--sp-12:48px;
+  --radius-sm:8px;--radius-md:12px;--radius-lg:16px;--radius-pill:999px;
+  --elev-1:0 2px 8px rgba(13,27,42,.06);
+  --elev-2:0 24px 65px rgba(13,27,42,.28);
+  --elev-3:0 32px 80px rgba(13,27,42,.32);
+  --motion:200ms cubic-bezier(.22,.8,.32,1);
+}
+
+/* ============ 1. base ============ */
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  background:var(--surface);
+  color:var(--muted-strong);
+  font-family:var(--font-sans);
+  font-size:14px;line-height:1.55;
+}
+body:has(#lang-ar:checked){direction:rtl;font-family:var(--font-sans-ar)}
+.rtl-only{display:none}
+body:has(#lang-ar:checked) .ltr-only{display:none}
+body:has(#lang-ar:checked) .rtl-only{display:inline}
+body:has(#lang-ar:checked) .icon-directional{transform:scaleX(-1)}
+
+body:has(#lang-ar:checked) .eyebrow,
+body:has(#lang-ar:checked) .srb-eyebrow,
+body:has(#lang-ar:checked) .sro3-eyebrow,
+body:has(#lang-ar:checked) .ring-label small{letter-spacing:0;text-transform:none}
+body:has(#lang-ar:checked) .card-sub,
+body:has(#lang-ar:checked) .srb-role-meta,
+body:has(#lang-ar:checked) .srb-target-meta,
+body:has(#lang-ar:checked) .srb-role-desc,
+body:has(#lang-ar:checked) .sro3-hero-sub,
+body:has(#lang-ar:checked) .rd-drawer-desc,
+body:has(#lang-ar:checked) .srb-facet>summary{line-height:1.7}
+
+.toggle-radio{
+  position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;
+  overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;
+}
+
+pre,code,.code{direction:ltr!important;unicode-bidi:isolate;font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace}
+.ic{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.btn{
+  display:inline-flex;align-items:center;gap:var(--sp-2);
+  border:1px solid var(--border);background:var(--panel);color:var(--muted-strong);
+  border-radius:var(--radius-sm);padding:9px 16px;font:inherit;font-weight:600;cursor:pointer;
+  transition:background var(--motion),border-color var(--motion),color var(--motion),box-shadow var(--motion);
+}
+.btn:hover{border-color:var(--accent-border);color:var(--ink);box-shadow:var(--elev-1)}
+.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn-primary:hover{background:var(--accent-strong);border-color:var(--accent-strong);color:#fff}
+.btn-sm{padding:6px 12px;font-size:12.5px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.srb-btn-outline{background:var(--panel);border-color:var(--border);color:var(--muted-strong)}
+
+.toolbar{
+  position:fixed;inset-inline:0;top:0;z-index:9999;
+  display:flex;align-items:center;gap:var(--sp-4);
+  padding:10px 16px;background:var(--navy);
+  border-block-end:1px solid rgba(255,255,255,.1);
+}
+.toolbar-group{display:flex;align-items:center;gap:var(--sp-2);margin-inline-end:auto}
+.toolbar-group:last-child{margin-inline-end:0}
+.toolbar-label{color:var(--on-navy-muted);font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+.toolbar-seg{display:inline-flex;gap:4px;background:rgba(255,255,255,.08);border-radius:var(--radius-sm);padding:3px}
+.toolbar-seg label{padding:5px 14px;border-radius:6px;color:var(--on-navy-muted);font-size:12px;font-weight:600;cursor:pointer;transition:background var(--motion),color var(--motion)}
+body:has(#lang-ar:checked) label[for="lang-ar"],
+body:has(#lang-en:checked) label[for="lang-en"],
+body:has(#vp-1440:checked) label[for="vp-1440"],
+body:has(#vp-1024:checked) label[for="vp-1024"],
+body:has(#vp-390:checked) label[for="vp-390"]{background:var(--accent);color:#fff}
+
+body{padding-top:52px}
+
+.viewport-wrapper{container-type:inline-size;width:100%;max-width:1720px;margin-inline:auto}
+body:has(#vp-1024:checked) .viewport-wrapper{width:1024px}
+body:has(#vp-390:checked) .viewport-wrapper{width:390px}
+
+.app-shell{display:grid;grid-template-columns:240px 1fr;min-height:calc(100vh - 52px);background:var(--surface)}
+
+.sidebar{
+  background:linear-gradient(180deg,var(--navy),var(--navy-deep));
+  color:var(--on-navy);display:flex;flex-direction:column;padding-block:var(--sp-6);
+  position:sticky;top:52px;align-self:start;height:calc(100vh - 52px);
+}
+.brand-block{display:flex;align-items:center;gap:var(--sp-3);padding-inline:var(--sp-5);margin-block-end:var(--sp-8)}
+.brand-mark{
+  width:38px;height:38px;border-radius:10px;flex:none;
+  background:linear-gradient(135deg,var(--accent),var(--teal));
+  display:grid;place-items:center;color:#fff;font-weight:800;font-size:18px;
+}
+.brand-eyebrow{font-size:10.5px;color:var(--on-navy-muted);letter-spacing:.06em;text-transform:uppercase;line-height:1.4}
+.brand-word{font-weight:700;font-size:15px;letter-spacing:.01em}
+.main-nav{display:flex;flex-direction:column;gap:2px;padding-inline:var(--sp-3)}
+.nav-item{
+  display:flex;align-items:center;gap:var(--sp-3);padding:10px 12px;border-radius:var(--radius-sm);
+  color:var(--on-navy-muted);text-decoration:none;font-weight:500;font-size:13px;
+  transition:background var(--motion),color var(--motion);position:relative;
+}
+.nav-item:hover{color:var(--on-navy);background:rgba(255,255,255,.05)}
+.nav-item.active{color:var(--on-navy);background:rgba(255,255,255,.08);font-weight:600}
+.nav-item.active::before{content:"";position:absolute;inset-inline-start:-8px;top:8px;bottom:8px;width:3px;background:var(--accent);border-radius:0 3px 3px 0}
+.role-badge{
+  margin-block-start:auto;padding-inline:var(--sp-5);padding-block:var(--sp-4);
+  border-block-start:1px solid rgba(255,255,255,.08);margin-inline:var(--sp-4);
+}
+.rb-label{font-size:11px;color:var(--on-navy-muted);letter-spacing:.03em}
+.rb-wrap{display:flex;align-items:center;gap:var(--sp-2);margin-block-start:6px}
+.rb-avatar{width:30px;height:30px;border-radius:var(--radius-pill);background:var(--data);display:grid;place-items:center;color:#fff;font-size:12px;font-weight:700;flex:none}
+.rb-name{font-weight:600;font-size:13px;color:var(--on-navy)}
+.rb-role{font-size:11.5px;color:var(--on-navy-muted)}
+
+.content{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--sp-6);padding:var(--sp-6);align-content:start;background:var(--surface)}
+
+.topbar{display:flex;align-items:center;gap:var(--sp-3);background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-lg);padding:12px 18px}
+.nav-toggle{display:none;align-items:center;justify-content:center;width:40px;height:40px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--panel);color:var(--ink);font-size:18px;cursor:pointer}
+.topbar-title{display:flex;flex-direction:column;gap:2px;margin-inline-end:auto}
+.topbar .eyebrow{font-size:11px;color:var(--muted-faint);letter-spacing:.05em;text-transform:uppercase}
+.topbar h2{font-size:20px;font-weight:700;color:var(--ink);line-height:1.3}
+.topbar-actions{display:flex;align-items:center;gap:var(--sp-2)}
+.role-chip{display:inline-flex;align-items:center;gap:6px;background:var(--data-soft);color:var(--data);border-radius:var(--radius-pill);padding:6px 12px;font-size:12px;font-weight:600}
+.bell-btn{width:38px;height:38px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--panel);color:var(--muted-strong);display:grid;place-items:center;cursor:pointer;position:relative}
+.bell-btn .dot{position:absolute;inset-block-start:8px;inset-inline-end:9px;width:7px;height:7px;border-radius:50%;background:var(--accent)}
+.user-chip{display:inline-flex;align-items:center;gap:var(--sp-2);border:1px solid var(--border);border-radius:var(--radius-pill);padding:4px 8px 4px 4px;background:var(--panel);font-size:12.5px;font-weight:600;color:var(--ink);cursor:pointer}
+.user-chip .avatar{width:28px;height:28px;border-radius:50%;background:var(--teal);color:#fff;display:grid;place-items:center;font-size:11px;font-weight:700}
+
+.demo-banner{display:flex;align-items:center;gap:var(--sp-2);background:var(--accent-soft);border:1px solid var(--accent-border);border-radius:var(--radius-sm);padding:8px 14px;color:var(--accent-strong);font-size:12px;font-weight:500}
+
+.skills-page{display:grid;gap:var(--sp-6)}
+
+.crumbs{display:flex;align-items:center;gap:var(--sp-2);font-size:12px;color:var(--muted-faint)}
+.crumbs a{color:var(--muted);text-decoration:none;font-weight:500}
+.crumbs a:hover{color:var(--accent-strong)}
+.crumbs .sep{color:var(--border);display:grid;place-items:center}
+.crumbs .cur{color:var(--muted-strong);font-weight:600}
+
+.sro3-hero{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-lg);padding:var(--sp-6)}
+.sro3-eyebrow,.srb-eyebrow{font-size:11px;color:var(--muted-faint);letter-spacing:.05em;text-transform:uppercase}
+.sro3-hero-title{font-size:24px;font-weight:700;color:var(--ink);line-height:1.3;margin-block-start:6px}
+.sro3-hero-sub{color:var(--muted);font-size:13.5px;max-inline-size:72ch;margin-block-start:var(--sp-2)}
+
+.srb-summary{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:var(--sp-4)}
+.srb-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-lg);padding:var(--sp-5);display:flex;flex-direction:column;gap:var(--sp-3)}
+.srb-card-head{display:flex;align-items:center;gap:var(--sp-3);justify-content:space-between}
+.srb-target-title{font-size:19px;font-weight:700;color:var(--ink);line-height:1.3}
+.srb-target-meta{font-size:12.5px;color:var(--muted)}
+.srb-cat-version{display:inline-flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-pill);padding:2px 10px;font-size:11px;font-weight:600;color:var(--muted-strong);white-space:nowrap}
+.srb-target-actions{display:flex;align-items:center;gap:var(--sp-2);flex-wrap:wrap;margin-block-start:var(--sp-1)}
+.current-target-badge{display:inline-flex;align-items:center;gap:5px;background:var(--verified-soft);border:1px solid var(--verified);color:var(--verified);border-radius:var(--radius-pill);padding:5px 12px;font-size:12px;font-weight:700}
+.current-target-badge svg{width:13px;height:13px}
+
+.srb-match-ring{--pct:54%;flex:none;border-radius:50%;background:conic-gradient(var(--data) calc(var(--pct)*1%),var(--border) 0);display:grid;place-items:center}
+.srb-match-inner{width:76%;height:76%;border-radius:50%;background:var(--panel);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0}
+.srb-match-inner strong{font-size:20px;font-weight:700;color:var(--ink);line-height:1}
+.srb-match-inner .srb-match-label{font-size:9.5px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;margin-block-start:3px}
+body:has(#lang-ar:checked) .srb-match-inner .srb-match-label{letter-spacing:0;text-transform:none}
+
+.mxb{width:100%}
+.mxb>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:6px;font-weight:600;font-size:12.5px;color:var(--data);padding-block:4px}
+.mxb>summary::-webkit-details-marker{display:none}
+.mxb>summary .ic{margin-inline-start:auto;transition:transform var(--motion)}
+.mxb[open]>summary .ic{transform:rotate(180deg)}
+.mxb-body{border-block-start:1px solid var(--surface);margin-block-start:var(--sp-2);padding-block-start:var(--sp-2);display:flex;flex-direction:column;gap:var(--sp-2)}
+.mxb-row{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(80px,1.4fr) 40px;gap:var(--sp-3);align-items:center}
+.mxb-label{font-size:12px;color:var(--muted-strong);font-weight:500}
+.mxb-bar{height:8px;border-radius:var(--radius-pill);background:var(--surface);border:1px solid var(--border);overflow:hidden}
+.mxb-bar i{display:block;height:100%;border-radius:var(--radius-pill)}
+.mxb-bar i.core{background:var(--data)}
+.mxb-bar i.tools{background:var(--teal)}
+.mxb-bar i.soft{background:var(--caution)}
+.mxb-val{font-size:12px;font-weight:700;color:var(--muted-strong);text-align:end}
+.mxb-foot{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted)}
+
+.srb-profile-line{display:flex;align-items:center;gap:var(--sp-2);color:var(--muted-strong);font-weight:600;font-size:13px}
+.avatar.srb-avatar{width:34px;height:34px;border-radius:50%;background:var(--data);color:#fff;display:grid;place-items:center;font-size:12px;font-weight:700;flex:none}
+.srb-profile-file{color:var(--muted);font-weight:500;font-size:12.5px}
+.srb-stat-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--sp-2);margin-block-start:auto}
+.srb-stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.srb-stat strong{font-size:19px;font-weight:700;color:var(--ink)}
+.srb-stat strong.srb-green{color:var(--success)}
+.srb-stat span{font-size:11px;color:var(--muted-faint)}
+
+.srb-section-head{display:flex;align-items:baseline;gap:var(--sp-3);flex-wrap:wrap}
+.srb-section-head h3{font-size:18px;font-weight:700;color:var(--ink)}
+.srb-count{font-size:12px;color:var(--muted)}
+.searchbar{border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 14px;font:inherit;font-size:13px;color:var(--muted-strong);background:var(--panel);width:100%}
+.searchbar:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+.srb-search-sort{display:grid;gap:var(--sp-2);margin-block-start:var(--sp-4)}
+.srb-sort{border:1px solid var(--border);border-radius:var(--radius-sm);padding:9px 12px;font:inherit;font-size:12.5px;color:var(--muted-strong);background:var(--panel)}
+.srb-sort:focus{outline:none;border-color:var(--accent)}
+
+.rd-tabs{display:inline-flex;gap:4px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);padding:4px;margin-block-start:var(--sp-4);align-self:start;max-inline-size:100%}
+.rd-tab{display:inline-flex;align-items:center;gap:6px;border:none;background:transparent;border-radius:6px;padding:7px 14px;font:inherit;font-size:12.5px;font-weight:600;color:var(--muted);cursor:pointer;transition:background var(--motion),color var(--motion)}
+.rd-tab.on{background:var(--accent-soft);color:var(--accent-strong)}
+.rd-tab-count{background:var(--data-soft);color:var(--data);border-radius:var(--radius-pill);font-size:10.5px;font-weight:700;padding:1px 7px}
+
+.srb-filterbar{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--sp-2);margin-block-start:var(--sp-3)}
+.srb-facet{border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--panel)}
+.srb-facet>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:6px;padding:10px 14px;font:inherit;font-size:12.5px;font-weight:600;color:var(--muted-strong)}
+.srb-facet>summary::-webkit-details-marker{display:none}
+.srb-facet>summary .ic{margin-inline-start:auto;transition:transform var(--motion);color:var(--muted-faint)}
+.srb-facet[open]>summary .ic{transform:rotate(180deg)}
+.srb-facet-search{border:1px solid var(--border);border-radius:var(--radius-sm);width:calc(100% - 20px);margin:0 10px 8px;padding:7px 10px;font:inherit;font-size:12px;color:var(--muted-strong);background:var(--surface)}
+.srb-facet-search:focus{outline:none;border-color:var(--accent)}
+.srb-facet-opts{display:flex;flex-direction:column;gap:2px;padding:0 10px 10px}
+.srb-facet-opts label{display:flex;align-items:center;gap:8px;padding:5px 4px;font-size:12.5px;color:var(--muted-strong);cursor:pointer}
+.srb-facet-opts input{accent-color:var(--accent);width:15px;height:15px}
+.srb-facet-scroll{max-height:180px;overflow-y:auto}
+
+.srb-active{display:flex;align-items:center;gap:var(--sp-2);flex-wrap:wrap;margin-block-start:var(--sp-3)}
+.srb-chip{display:inline-flex;align-items:center;gap:5px;background:var(--accent-soft);border:1px solid var(--accent-border);border-radius:var(--radius-pill);padding:4px 10px;font:inherit;font-size:11.5px;font-weight:600;color:var(--accent-strong);cursor:pointer}
+.srb-chip-x{color:var(--accent);font-size:11px}
+.srb-clear{border:none;background:none;color:var(--data);font:inherit;font-weight:600;font-size:11.5px;cursor:pointer;padding:4px}
+.srb-clear:hover{text-decoration:underline}
+
+.srb-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:var(--sp-4);margin-block-start:var(--sp-4)}
+.srb-role{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-lg);padding:var(--sp-4);display:flex;flex-direction:column;gap:10px;height:100%;transition:border-color var(--motion),box-shadow var(--motion)}
+.srb-role:hover{border-color:var(--data);box-shadow:var(--elev-1)}
+.srb-role-head{display:flex;align-items:flex-start;gap:var(--sp-3)}
+.srb-role-heading{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
+.chip{display:inline-flex;align-items:center;gap:5px;align-self:flex-start;border-radius:var(--radius-pill);padding:3px 10px;font-size:11px;font-weight:700;white-space:nowrap}
+.chip-company{background:var(--data-soft);color:var(--data)}
+.chip-catalog{background:var(--teal-soft);color:var(--teal-strong)}
+.srb-role-title{border:none;background:none;padding:0;text-align:start;font:inherit;font-size:15px;font-weight:700;color:var(--ink);cursor:pointer;line-height:1.35}
+.srb-role-title:hover{color:var(--data)}
+.srb-role-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;color:var(--muted-faint);font-size:11.5px}
+.srb-role-desc{font-size:12.5px;color:var(--muted);line-height:1.55}
+.srb-chiprow{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.srb-schip{border-radius:var(--radius-pill);padding:3px 9px;font-size:11px;font-weight:600;background:var(--surface);border:1px solid var(--border);color:var(--muted-strong)}
+.srb-schip.have{background:var(--verified-soft);border-color:var(--verified);color:var(--verified)}
+.srb-pills{display:flex;gap:6px;flex-wrap:wrap}
+.srb-pill{border-radius:var(--radius-pill);padding:2px 9px;font-size:10.5px;font-weight:700}
+.srb-pill.have{background:var(--success-soft);color:var(--success)}
+.srb-pill.gap{background:var(--caution-soft);color:var(--caution)}
+.srb-pill.missing{background:var(--surface);border:1px solid var(--border);color:var(--muted)}
+.srb-role-foot{display:flex;align-items:center;gap:var(--sp-2);flex-wrap:wrap;margin-block-start:auto;border-block-start:1px solid var(--surface);padding-block-start:var(--sp-3)}
+.srb-role-foot .btn-sm{padding:6px 11px;font-size:12px}
+.srb-save-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--panel);padding:7px 11px;font:inherit;font-size:12px;font-weight:600;color:var(--muted-strong);cursor:pointer}
+.srb-save-btn.on{background:var(--teal-soft);border-color:var(--teal);color:var(--teal-strong)}
+.srb-role-foot .current-target-badge{padding:6px 11px;font-size:12px;font-weight:700}
+
+.rd-pager{display:flex;align-items:center;justify-content:space-between;gap:var(--sp-3);margin-block-start:var(--sp-4);padding-block-start:var(--sp-3);border-block-start:1px solid var(--border)}
+.rd-pager-info{font-size:12.5px;color:var(--muted)}
+.rd-pager .pager-group{display:flex;gap:var(--sp-2)}
+
+.rd-shell{position:fixed;inset:0;z-index:120;visibility:hidden;opacity:0;transition:opacity var(--motion),visibility var(--motion)}
+.rd-backdrop{position:absolute;inset:0;background:rgba(13,27,42,.42);cursor:pointer;display:block}
+.rd-drawer{position:absolute;inset-block:0;inset-inline-end:0;width:min(460px,100%);background:var(--raised);box-shadow:var(--elev-2);display:flex;flex-direction:column;gap:var(--sp-3);padding:var(--sp-5);overflow-y:auto;transform:translateX(110%);transition:transform var(--motion)}
+body:has(#lang-ar:checked) .rd-drawer{transform:translateX(-110%)}
+.rd-shell .rd-drawer{transform:translateX(110%)}
+body:has(#lang-ar:checked) .rd-shell .rd-drawer{transform:translateX(-110%)}
+.rd-drawer-head{display:flex;align-items:flex-start;gap:var(--sp-3)}
+.rd-drawer-title{min-width:0;flex:1;display:flex;flex-direction:column;gap:4px}
+.rd-drawer-head h3{font-size:18px;font-weight:700;color:var(--ink);line-height:1.35}
+.srb-close{flex:none;width:34px;height:34px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--panel);color:var(--muted);font-size:14px;cursor:pointer;display:grid;place-items:center}
+.srb-close:hover{color:var(--danger);border-color:var(--danger)}
+.rd-drawer-desc{font-size:13px;color:var(--muted)}
+.rd-skills{display:flex;flex-direction:column}
+.rd-skill-row{display:flex;align-items:center;gap:var(--sp-2);padding-block:8px;border-block-end:1px solid var(--surface)}
+.rd-skill-row:last-child{border-block-end:none}
+.rd-skill-name{font-weight:600;color:var(--muted-strong);font-size:13px}
+.rd-skill-lv{color:var(--muted-faint);font-size:11px}
+.rd-skill-right{margin-inline-start:auto;display:flex;align-items:center;gap:var(--sp-2)}
+.rd-actions-row{display:flex;align-items:center;gap:var(--sp-2);flex-wrap:wrap;border-block-start:1px solid var(--surface);padding-block-start:var(--sp-3)}
+.rd-provider{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted)}
+.rd-provider .dot{width:7px;height:7px;border-radius:50%;background:var(--teal)}
+.rd-drawer .srb-cat-version{align-self:flex-start}
+.rd-skills-head{font-size:12px;color:var(--muted-faint);letter-spacing:.05em;text-transform:uppercase}
+body:has(#lang-ar:checked) .rd-skills-head{letter-spacing:0;text-transform:none}
+
+body:has(#rd-view-1:checked) .rd-shell-1,
+body:has(#rd-view-2:checked) .rd-shell-2,
+body:has(#rd-view-3:checked) .rd-shell-3,
+body:has(#rd-view-4:checked) .rd-shell-4,
+body:has(#rd-view-5:checked) .rd-shell-5,
+body:has(#rd-view-6:checked) .rd-shell-6,
+body:has(#rd-view-7:checked) .rd-shell-7,
+body:has(#rd-view-8:checked) .rd-shell-8,
+body:has(#rd-view-9:checked) .rd-shell-9,
+body:has(#rd-view-10:checked) .rd-shell-10,
+body:has(#rd-view-11:checked) .rd-shell-11,
+body:has(#rd-view-12:checked) .rd-shell-12{visibility:visible;opacity:1}
+body:has(#rd-view-1:checked) .rd-shell-1 .rd-drawer,
+body:has(#rd-view-2:checked) .rd-shell-2 .rd-drawer,
+body:has(#rd-view-3:checked) .rd-shell-3 .rd-drawer,
+body:has(#rd-view-4:checked) .rd-shell-4 .rd-drawer,
+body:has(#rd-view-5:checked) .rd-shell-5 .rd-drawer,
+body:has(#rd-view-6:checked) .rd-shell-6 .rd-drawer,
+body:has(#rd-view-7:checked) .rd-shell-7 .rd-drawer,
+body:has(#rd-view-8:checked) .rd-shell-8 .rd-drawer,
+body:has(#rd-view-9:checked) .rd-shell-9 .rd-drawer,
+body:has(#rd-view-10:checked) .rd-shell-10 .rd-drawer,
+body:has(#rd-view-11:checked) .rd-shell-11 .rd-drawer,
+body:has(#rd-view-12:checked) .rd-shell-12 .rd-drawer{transform:translateX(0)}
+
+.app-footer{margin-block-start:var(--sp-4);border-block-start:1px solid var(--border);padding-block:var(--sp-4);font-size:11.5px;color:var(--muted-faint)}
+
+@container (max-width:1100px){
+  .content{padding:var(--sp-4)}
+  .srb-grid{grid-template-columns:repeat(auto-fill,minmax(270px,1fr))}
+}
+@container (max-width:1023px){
+  .srb-summary{grid-template-columns:minmax(0,1fr)}
+  .content{grid-template-columns:minmax(0,1fr)}
+}
+@container (max-width:899px){
+  .app-shell{grid-template-columns:minmax(0,1fr)}
+  .sidebar{position:fixed;inset-block:52px 0;inset-inline-start:0;width:240px;z-index:60;transform:translateX(-100%);transition:transform var(--motion)}
+  .sidebar.open{transform:none}
+  body:has(#lang-ar:checked) .sidebar{transform:translateX(100%)}
+  body:has(#lang-ar:checked) .sidebar.open{transform:none}
+  .nav-toggle{display:flex}
+  .rd-tabs{overflow-x:auto;max-inline-size:100%}
+}
+@container (max-width:559px){
+  .toolbar{flex-wrap:wrap;padding-block:8px}
+  .topbar{flex-wrap:wrap}
+  .topbar-title{margin-inline-end:0;width:100%}
+  .role-chip{display:none}
+  .srb-filterbar{grid-template-columns:minmax(0,1fr)}
+  .srb-grid{grid-template-columns:minmax(0,1fr)}
+  .rd-tabs{width:100%;display:grid;grid-template-columns:1fr 1fr}
+  .rd-tab{justify-content:center}
+  .rd-drawer{inset-inline:0;width:100%;padding:var(--sp-4)}
+  .rd-pager{flex-direction:column;align-items:stretch}
+  .rd-pager .pager-group{justify-content:space-between}
+  .srb-stat-row{grid-template-columns:minmax(0,1fr)}
+}
+</style>
+</head>
+<body>
+
+<!-- ==== radios (review toggle and drawer toggles, zero-JS) ==== -->
+<input type="radio" name="lang" id="lang-en" class="toggle-radio" checked>
+<input type="radio" name="lang" id="lang-ar" class="toggle-radio">
+<input type="radio" name="vp" id="vp-1440" class="toggle-radio" checked>
+<input type="radio" name="vp" id="vp-1024" class="toggle-radio">
+<input type="radio" name="vp" id="vp-390" class="toggle-radio">
+<input type="checkbox" id="rd-view-1" class="toggle-radio">
+<input type="checkbox" id="rd-view-2" class="toggle-radio">
+<input type="checkbox" id="rd-view-3" class="toggle-radio">
+<input type="checkbox" id="rd-view-4" class="toggle-radio">
+<input type="checkbox" id="rd-view-5" class="toggle-radio">
+<input type="checkbox" id="rd-view-6" class="toggle-radio">
+<input type="checkbox" id="rd-view-7" class="toggle-radio">
+<input type="checkbox" id="rd-view-8" class="toggle-radio">
+<input type="checkbox" id="rd-view-9" class="toggle-radio">
+<input type="checkbox" id="rd-view-10" class="toggle-radio">
+<input type="checkbox" id="rd-view-11" class="toggle-radio">
+<input type="checkbox" id="rd-view-12" class="toggle-radio">
+
+<div class="toolbar">
+  <div class="toolbar-group">
+    <span class="toolbar-label"><span class="ltr-only">Viewport</span><span class="rtl-only">حجم العرض</span></span>
+    <div class="toolbar-seg">
+      <label for="vp-1440">1440</label>
+      <label for="vp-1024">1024</label>
+      <label for="vp-390">390</label>
+    </div>
+  </div>
+  <div class="toolbar-group">
+    <span class="toolbar-label"><span class="ltr-only">Language</span><span class="rtl-only">اللغة</span></span>
+    <div class="toolbar-seg">
+      <label for="lang-en">EN</label>
+      <label for="lang-ar">AR</label>
+    </div>
+  </div>
+</div>
+
+<div class="viewport-wrapper">
+  <div class="app-shell">
+
+    <aside class="sidebar" aria-label="main">
+      <div class="brand-block">
+        <span class="brand-mark">S</span>
+        <div>
+          <div class="brand-eyebrow"><span class="ltr-only">Professional Intelligence</span><span class="rtl-only">استخبارات مهنية</span></div>
+          <div class="brand-word">SkillBridge</div>
+        </div>
+      </div>
+      <nav class="main-nav">
+        <a class="nav-item" href="#">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="7" height="7" rx="1.4"/><rect x="14" y="3" width="7" height="7" rx="1.4"/><rect x="3" y="14" width="7" height="7" rx="1.4"/><rect x="14" y="14" width="7" height="7" rx="1.4"/></svg>
+          <span class="ltr-only">Dashboard</span><span class="rtl-only">لوحة التحكم</span>
+        </a>
+        <a class="nav-item active" href="#">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3.5" y="8" width="17" height="12" rx="2.2"/><path d="M9 8V6.5A1.8 1.8 0 0 1 10.8 4.7h2.4A1.8 1.8 0 0 1 15 6.5V8"/><path d="M12 12.2v2.7M12 14.9h.01"/></svg>
+          <span class="ltr-only">Skills &amp; Roles</span><span class="rtl-only">المهارات والأدوار</span>
+        </a>
+        <a class="nav-item" href="#">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16.5H6.5A2.5 2.5 0 0 0 4 22z"/><path d="M20 15.5H6.5A2.5 2.5 0 0 0 4 18"/><path d="M8.5 8.5h6"/></svg>
+          <span class="ltr-only">Learning</span><span class="rtl-only">التعلم</span>
+        </a>
+        <a class="nav-item" href="#">
+          <svg class="ic" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4.5 14h6L9 22l8.5-12h-6z"/></svg>
+          <span class="ltr-only">Practice</span><span class="rtl-only">تطبيق عملي</span>
+        </a>
+        <a class="nav-item" href="#">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="3" width="14" height="18" rx="2.4"/><path d="M9 3.5V5h6V3.5"/><path d="m9.4 12.4 1.7 1.7 3.5-3.6"/></svg>
+          <span class="ltr-only">Assessments</span><span class="rtl-only">التقييمات</span>
+        </a>
+        <a class="nav-item" href="#">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3.6 2.8 8.4 12 13.2l9.2-4.8z"/><path d="M6.5 11.2v4.4c0 1.5 2.5 3.2 5.5 3.2s5.5-1.7 5.5-3.2v-4.4"/><path d="M21.2 8.4v6"/></svg>
+          <span class="ltr-only">University</span><span class="rtl-only">الجامعة</span>
+        </a>
+      </nav>
+      <div class="role-badge">
+        <div class="rb-label"><span class="ltr-only">Signed in as</span><span class="rtl-only">مسجلة الدخول باسم</span></div>
+        <div class="rb-wrap">
+          <span class="rb-avatar">AM</span>
+          <div>
+            <div class="rb-name"><span class="ltr-only">Aisha Mahmoud</span><span class="rtl-only">عائشة محمود</span></div>
+            <div class="rb-role"><span class="ltr-only">Student</span><span class="rtl-only">طالبة</span></div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="content">
+      <header class="topbar">
+        <button class="nav-toggle" aria-label="menu">☰</button>
+        <div class="topbar-title">
+          <span class="eyebrow"><span class="ltr-only">Role discovery &amp; matching</span><span class="rtl-only">اكتشاف الأدوار والمطابقة</span></span>
+          <h2><span class="ltr-only">Skills &amp; Roles</span><span class="rtl-only">المهارات والأدوار</span></h2>
+        </div>
+        <div class="topbar-actions">
+          <span class="role-chip">
+            <svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r=".6" fill="currentColor"/></svg>
+            <span class="ltr-only">Student</span><span class="rtl-only">طالبة</span>
+          </span>
+          <button class="bell-btn" aria-label="notifications">
+            <span class="dot"></span>
+            <svg class="ic" viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+          </button>
+          <button class="user-chip">
+            <span class="avatar">AM</span>
+            <span class="ltr-only">Aisha</span><span class="rtl-only">عائشة</span>
+          </button>
+        </div>
+      </header>
+
+      <div class="demo-banner">
+        <svg class="ic" style="width:14px;height:14px" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 8v4.5"/><circle cx="12" cy="16" r=".7" fill="currentColor"/></svg>
+        <span class="ltr-only">Demo data — match scores reflect your CV skills; verified marks reflect only passed assessments.</span>
+        <span class="rtl-only">بيانات تجريبية — درجات التطابق تعكس مهارات سيرتك الذاتية؛ علامات التوثيق تعكس تقييمات ناجحة فقط.</span>
+      </div>
+
+      <div class="skills-page">
+
+        <nav class="crumbs" aria-label="Breadcrumbs">
+          <a href="#"><span class="ltr-only">Home</span><span class="rtl-only">الرئيسية</span></a>
+          <span class="sep" aria-hidden="true"><svg class="ic icon-directional" style="width:12px;height:12px" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></span>
+          <span class="cur"><span class="ltr-only">Skills &amp; Roles</span><span class="rtl-only">المهارات والأدوار</span></span>
+        </nav>
+
+        <section class="sro3-hero">
+          <p class="sro3-eyebrow"><span class="ltr-only">Find your next role</span><span class="rtl-only">اكتشفي دورك التالي</span></p>
+          <h1 class="sro3-hero-title"><span class="ltr-only">Choose the role your learning path should serve.</span><span class="rtl-only">اختاري الدور الذي سيخدم مسارك التعليمي.</span></h1>
+          <p class="sro3-hero-sub"><span class="ltr-only">Your CV profile, verified skills, and target role stay separate so the match score remains explainable. Search the library, filter by category and skill, and open role details before committing.</span><span class="rtl-only">يبقى ملفك المهني ومهاراتك الموثقة ودورك المستهدف منفصلة حتى تظل درجة التطابق قابلة للتفسير. ابحثي في المكتبة، وصفّي حسب الفئة والمهارة، وافتحي تفاصيل الدور قبل الالتزام.</span></p>
+        </section>
+
+        <section class="srb-summary" aria-label="Career summary">
+          <div class="srb-card srb-target-card">
+            <div class="srb-card-head">
+              <span class="srb-eyebrow"><span class="ltr-only">Your target career</span><span class="rtl-only">مسارك المهني المستهدف</span></span>
+              <div class="srb-match-ring" style="--pct:54;width:96px;height:96px" role="img" aria-label="54% skill match">
+                <div class="srb-match-inner"><strong>54%</strong><span class="srb-match-label"><span class="ltr-only">match</span><span class="rtl-only">تطابق</span></span></div>
+              </div>
+            </div>
+            <h3 class="srb-target-title"><span class="ltr-only">Cybersecurity Analyst</span><span class="rtl-only">محللة أمن سيبراني</span></h3>
+            <p class="srb-target-meta">
+              <span class="srb-cat-version"><span class="ltr-only">Security</span><span class="rtl-only">الأمن</span> · <span class="ltr-only">Role v2.1</span><span class="rtl-only">دور 2.1</span></span>
+              <span class="ltr-only">· Northstar Labs · Mid-level · Remote</span>
+              <span class="rtl-only">· نورث ستار لابز · مستوى متوسط · عن بُعد</span>
+            </p>
+            <div class="srb-target-actions">
+              <span class="current-target-badge">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>
+                <span class="ltr-only">Current target</span><span class="rtl-only">الدور الحالي</span>
+              </span>
+              <label class="btn btn-sm srb-btn-outline" for="rd-view-1">
+                <svg class="ic icon-directional" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
+                <span class="ltr-only">Change target</span><span class="rtl-only">تغيير الدور المستهدف</span>
+              </label>
+              <button type="button" class="btn btn-sm btn-primary" style="margin-inline-start:auto">
+                <span class="ltr-only">Browse roles</span><span class="rtl-only">تصفح الأدوار</span>
+              </button>
+            </div>
+            <details class="mxb">
+              <summary>
+                <svg class="ic" style="width:14px;height:14px" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+                <span class="ltr-only">Match breakdown</span><span class="rtl-only">تفصيل التطابق</span>
+                <svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+              </summary>
+              <div class="mxb-body">
+                <div class="mxb-row">
+                  <span class="mxb-label"><span class="ltr-only">Core competencies</span><span class="rtl-only">الكفاءات الأساسية</span></span>
+                  <span class="mxb-bar"><i class="core" style="width:80%"></i></span>
+                  <span class="mxb-val">80%</span>
+                </div>
+                <div class="mxb-row">
+                  <span class="mxb-label"><span class="ltr-only">Tool proficiency</span><span class="rtl-only">إتقان الأدوات</span></span>
+                  <span class="mxb-bar"><i class="tools" style="width:50%"></i></span>
+                  <span class="mxb-val">50%</span>
+                </div>
+                <div class="mxb-row">
+                  <span class="mxb-label"><span class="ltr-only">Soft skills</span><span class="rtl-only">المهارات الشخصية</span></span>
+                  <span class="mxb-bar"><i class="soft" style="width:13%"></i></span>
+                  <span class="mxb-val">13%</span>
+                </div>
+              </div>
+              <div class="mxb-foot">
+                <svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 8v4.5"/><circle cx="12" cy="16" r=".7" fill="currentColor"/></svg>
+                <span class="ltr-only">Close the Vulnerability Management gap — your mentor will raise it in your next mock interview.</span>
+                <span class="rtl-only">سدّي فجوة إدارة الثغرات — ستشير إليها مرشدتك في مقابلتك التدريبية التالية.</span>
+              </div>
+            </details>
+          </div>
+
+          <div class="srb-card srb-profile-card">
+            <div class="srb-card-head">
+              <span class="srb-eyebrow"><span class="ltr-only">Profile &amp; CV</span><span class="rtl-only">الملف والسيرة الذاتية</span></span>
+              <label class="btn btn-sm srb-btn-outline" style="cursor:pointer">
+                <svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M12 16V4"/><path d="m6 10 6-6 6 6"/><path d="M4 20h16"/></svg>
+                <span class="ltr-only">Upload CV</span><span class="rtl-only">رفع السيرة الذاتية</span>
+              </label>
+            </div>
+            <div class="srb-profile-line">
+              <span class="avatar srb-avatar">AM</span>
+              <span class="srb-profile-file"><span class="ltr-only">aisha-cv-2026.pdf</span><span class="rtl-only">السيرة الذاتية لعائشة.pdf</span></span>
+            </div>
+            <div class="srb-stat-row">
+              <div class="srb-stat">
+                <strong>5</strong>
+                <span><span class="ltr-only">skills detected</span><span class="rtl-only">مهارات مكتشفة</span></span>
+              </div>
+              <div class="srb-stat">
+                <strong class="srb-green">1</strong>
+                <span><span class="ltr-only">verified</span><span class="rtl-only">موثقة</span></span>
+              </div>
+              <div class="srb-stat">
+                <strong>54%</strong>
+                <span><span class="ltr-only">target match</span><span class="rtl-only">تطابق الهدف</span></span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="srb-library" aria-label="Role library">
+          <div class="srb-section-head">
+            <h3><span class="ltr-only">Browse roles</span><span class="rtl-only">تصفح الأدوار</span></h3>
+            <span class="srb-count"><span class="ltr-only">17 roles</span><span class="rtl-only">17 دورًا</span></span>
+          </div>
+
+          <div class="srb-search-sort">
+            <input type="search" class="searchbar" placeholder="Search roles, keywords, or skills…" aria-label="Search roles">
+            <select class="srb-sort" aria-label="Sort roles">
+              <option><span class="ltr-only">Sort · Best match</span><span class="rtl-only">ترتيب · أفضل تطابق</span></option>
+              <option><span class="ltr-only">Match · high to low</span><span class="rtl-only">التطابق · من الأعلى إلى الأقل</span></option>
+              <option><span class="ltr-only">Title A–Z</span><span class="rtl-only">العنوان أ–ي</span></option>
+              <option><span class="ltr-only">Recently added</span><span class="rtl-only">الأحدث</span></option>
+            </select>
+          </div>
+
+          <div class="rd-tabs" role="tablist" aria-label="Role source">
+            <button type="button" class="rd-tab on"><span class="ltr-only">Company roles</span><span class="rtl-only">أدوار الشركات</span><span class="rd-tab-count">6</span></button>
+            <button type="button" class="rd-tab"><span class="ltr-only">Catalog roles</span><span class="rtl-only">أدوار الكتالوج</span><span class="rd-tab-count">11</span></button>
+          </div>
+
+          <div class="srb-filterbar">
+            <details class="srb-facet">
+              <summary>
+                <svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M4 7h16"/><circle cx="9" cy="7" r="2.4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 17h16"/><circle cx="15" cy="17" r="2.4" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+                <span class="ltr-only">Category</span><span class="rtl-only">الفئة</span>
+                <span class="srb-chip-x" style="margin-inline-start:auto">✕</span>
+                <svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+              </summary>
+              <div class="srb-facet-opts">
+                <label><input type="checkbox" checked> <span class="ltr-only">Security</span><span class="rtl-only">الأمن</span></label>
+                <label><input type="checkbox"> <span class="ltr-only">Networking</span><span class="rtl-only">الشبكات</span></label>
+                <label><input type="checkbox"> <span class="ltr-only">Identity</span><span class="rtl-only">الهوية</span></label>
+                <label><input type="checkbox"> <span class="ltr-only">Compliance</span><span class="rtl-only">الامتثال</span></label>
+                <label><input type="checkbox"> <span class="ltr-only">Offensive</span><span class="rtl-only">الهجومية</span></label>
+                <label><input type="checkbox"> <span class="ltr-only">Cloud</span><span class="rtl-only">السحابة</span></label>
+                <label><input type="checkbox"> <span class="ltr-only">Forensics</span><span class="rtl-only">الطب الشرعي</span></label>
+              </div>
+            </details>
+            <details class="srb-facet" open>
+              <summary>
+                <svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M12 3.6 2.8 8.4 12 13.2l9.2-4.8z"/><path d="M6.5 11.2v4.4c0 1.5 2.5 3.2 5.5 3.2s5.5-1.7 5.5-3.2v-4.4"/></svg>
+                <span class="ltr-only">Skill</span><span class="rtl-only">المهارة</span>
+                <span class="srb-chip-x" style="margin-inline-start:auto">✕</span>
+                <svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+              </summary>
+              <input type="search" class="srb-facet-search" placeholder="Search skills…" aria-label="Search skills">
+              <div class="srb-facet-opts srb-facet-scroll">
+                <label><input type="checkbox" checked> <span class="ltr-only">Network Security</span><span class="rtl-only">أمن الشبكات</span></label>
+                <label><input type="checkbox" checked> <span class="ltr-only">Threat Detection</span><span class="rtl-only">كشف التهديدات</span></label>
+                <label><input type="checkbox" checked> <span class="ltr-only">SIEM</span></label>
+                <label><input type="checkbox"> <span class="ltr-only">Incident Response</span><span class="rtl-only">الاستجابة للحوادث</span></label>
+                <label><input type="checkbox"> <span class="ltr-only">Vulnerability Management</span><span class="rtl-only">إدارة الثغرات</span></label>
+                <label><input type="checkbox"> <span class="ltr-only">Active Directory</span></label>
+                <label><input type="checkbox"> <span class="ltr-only">Linux</span></label>
+                <label><input type="checkbox"> <span class="ltr-only">Risk Assessment</span><span class="rtl-only">تقييم المخاطر</span></label>
+                <label><input type="checkbox"> <span class="ltr-only">Cloud Security</span><span class="rtl-only">أمن السحابة</span></label>
+                <label><input type="checkbox"> <span class="ltr-only">IAM</span></label>
+                <label><input type="checkbox"> <span class="ltr-only">Forensics</span><span class="rtl-only">الطب الشرعي الرقمي</span></label>
+                <label><input type="checkbox"> <span class="ltr-only">Python</span></label>
+              </div>
+            </details>
+          </div>
+
+          <div class="srb-active">
+            <button type="button" class="srb-chip"><span class="ltr-only">Security</span><span class="rtl-only">الأمن</span><span class="srb-chip-x">✕</span></button>
+            <button type="button" class="srb-chip"><span class="ltr-only">Network Security</span><span class="rtl-only">أمن الشبكات</span><span class="srb-chip-x">✕</span></button>
+            <button type="button" class="srb-chip"><span class="ltr-only">Threat Detection</span><span class="rtl-only">كشف التهديدات</span><span class="srb-chip-x">✕</span></button>
+            <button type="button" class="srb-chip"><span class="ltr-only">SIEM</span><span class="srb-chip-x">✕</span></button>
+            <button type="button" class="srb-clear"><span class="ltr-only">Clear all</span><span class="rtl-only">مسح الكل</span></button>
+          </div>
+
+          <div class="srb-grid">
+
+            <article class="srb-role">
+              <header class="srb-role-head">
+                <div class="srb-role-heading">
+                  <span class="chip chip-company"><span class="ltr-only">Company</span><span class="rtl-only">شركة</span></span>
+                  <button type="button" class="srb-role-title"><span class="ltr-only">Cybersecurity Analyst</span><span class="rtl-only">محللة أمن سيبراني</span></button>
+                  <p class="srb-role-meta"><span class="srb-cat-version"><span class="ltr-only">Security</span><span class="rtl-only">الأمن</span> · <span class="ltr-only">Role v2.1</span><span class="rtl-only">دور 2.1</span></span> · <span class="ltr-only">Northstar Labs · Remote</span><span class="rtl-only">نورث ستار</span></p>
+                </div>
+                <div class="srb-match-ring" style="--pct:54;width:52px;height:52px" role="img" aria-label="54% match">
+                  <div class="srb-match-inner"><strong style="font-size:13px">54%</strong></div>
+                </div>
+              </header>
+              <p class="srb-role-desc"><span class="ltr-only">Monitor alerts, triage incidents, and keep the security posture visible to leadership.</span><span class="rtl-only">تراقب التنبيهات وتصدر الحوادث وتحافظ على وضوح الوضع الأمني للإدارة.</span></p>
+              <div class="srb-chiprow">
+                <span class="srb-schip have"><span class="ltr-only">Network Security</span><span class="rtl-only">أمن الشبكات</span></span>
+                <span class="srb-schip have"><span class="ltr-only">SIEM</span></span>
+              </div>
+              <div class="srb-pills">
+                <span class="srb-pill have"><span class="ltr-only">have · Incident Response</span><span class="rtl-only">متوفر · استجابة للحوادث</span></span>
+                <span class="srb-pill gap"><span class="ltr-only">gap · Threat Detection</span><span class="rtl-only">فجوة · كشف تهديدات</span></span>
+                <span class="srb-pill missing"><span class="ltr-only">missing · Vulnerability Mgmt</span><span class="rtl-only">مفقود · إدارة ثغرات</span></span>
+              </div>
+              <footer class="srb-role-foot">
+                <span class="current-target-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg><span class="ltr-only">Current target</span><span class="rtl-only">الدور الحالي</span></span>
+                <label class="btn btn-sm srb-btn-outline" for="rd-view-1" style="margin-inline-start:auto"><span class="ltr-only">View details</span><span class="rtl-only">عرض التفاصيل</span></label>
+              </footer>
+            </article>
+
+            <article class="srb-role">
+              <header class="srb-role-head">
+                <div class="srb-role-heading">
+                  <span class="chip chip-company"><span class="ltr-only">Company</span><span class="rtl-only">شركة</span></span>
+                  <button type="button" class="srb-role-title"><span class="ltr-only">Security Operations Analyst</span><span class="rtl-only">محلل عمليات أمنية</span></button>
+                  <p class="srb-role-meta"><span class="srb-cat-version"><span class="ltr-only">Security</span><span class="rtl-only">الأمن</span> · <span class="ltr-only">Role v1.8</span></span> · <span class="ltr-only">Northstar Labs · Hybrid · Entry</span><span class="rtl-only">نورث ستار · هجين · مبتدئ</span></p>
+                </div>
+                <div class="srb-match-ring" style="--pct:76;width:52px;height:52px" role="img" aria-label="76% match">
+                  <div class="srb-match-inner"><strong style="font-size:13px">76%</strong></div>
+                </div>
+              </header>
+              <p class="srb-role-desc"><span class="ltr-only">Run the day-to-day monitoring queue and document investigations for the shift team.</span><span class="rtl-only">تدير قائمة المراقبة اليومية وتوثق التحقيقات لفريق الوردية.</span></p>
+              <div class="srb-chiprow">
+                <span class="srb-schip have"><span class="ltr-only">Threat Detection</span><span class="rtl-only">كشف التهديدات</span></span>
+                <span class="srb-schip have"><span class="ltr-only">SIEM</span></span>
+              </div>
+              <div class="srb-pills">
+                <span class="srb-pill have"><span class="ltr-only">have · Network Security</span><span class="rtl-only">متوفر · أمن شبكات</span></span>
+                <span class="srb-pill have"><span class="ltr-only">have · Incident Response</span><span class="rtl-only">متوفر · استجابة للحوادث</span></span>
+                <span class="srb-pill gap"><span class="ltr-only">gap · Communication</span><span class="rtl-only">فجوة · التواصل</span></span>
+              </div>
+              <footer class="srb-role-foot">
+                <button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button>
+                <button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button>
+                <label class="btn btn-sm srb-btn-outline" for="rd-view-2" style="margin-inline-start:auto"><span class="ltr-only">View details</span><span class="rtl-only">عرض التفاصيل</span></label>
+              </footer>
+            </article>
+
+            <article class="srb-role">
+              <header class="srb-role-head">
+                <div class="srb-role-heading">
+                  <span class="chip chip-company"><span class="ltr-only">Company</span><span class="rtl-only">شركة</span></span>
+                  <button type="button" class="srb-role-title"><span class="ltr-only">SOC Analyst Tier 1</span><span class="rtl-only">محلل مركز عمليات أمنية - المستوى 1</span></button>
+                  <p class="srb-role-meta"><span class="srb-cat-version"><span class="ltr-only">Security</span><span class="rtl-only">الأمن</span> · <span class="ltr-only">Role v1.4</span></span> · <span class="ltr-only">Northstar Labs · On-site · Entry</span><span class="rtl-only">نورث ستار · حضور · مبتدئ</span></p>
+                </div>
+                <div class="srb-match-ring" style="--pct:61;width:52px;height:52px" role="img" aria-label="61% match">
+                  <div class="srb-match-inner"><strong style="font-size:13px">61%</strong></div>
+                </div>
+              </header>
+              <p class="srb-role-desc"><span class="ltr-only">First line of defense — triage raw alerts and escalate confirmed events to Tier 2.</span><span class="rtl-only">خط الدفاع الأول — تصنيف التنبيهات الخام ورفع الأحداث المؤكدة إلى المستوى 2.</span></p>
+              <div class="srb-chiprow">
+                <span class="srb-schip have"><span class="ltr-only">Threat Detection</span><span class="rtl-only">كشف التهديدات</span></span>
+                <span class="srb-schip have"><span class="ltr-only">SIEM</span></span>
+              </div>
+              <div class="srb-pills">
+                <span class="srb-pill have"><span class="ltr-only">have · Critical Thinking</span><span class="rtl-only">متوفر · تفكير نقدي</span></span>
+                <span class="srb-pill gap"><span class="ltr-only">gap · Communication</span><span class="rtl-only">فجوة · التواصل</span></span>
+                <span class="srb-pill missing"><span class="ltr-only">missing · Linux</span><span class="rtl-only">مفقود · لينكس</span></span>
+              </div>
+              <footer class="srb-role-foot">
+                <button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button>
+                <button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button>
+                <label class="btn btn-sm srb-btn-outline" for="rd-view-3" style="margin-inline-start:auto"><span class="ltr-only">View details</span><span class="rtl-only">عرض التفاصيل</span></label>
+              </footer>
+            </article>
+
+            <article class="srb-role">
+              <header class="srb-role-head">
+                <div class="srb-role-heading">
+                  <span class="chip chip-company"><span class="ltr-only">Company</span><span class="rtl-only">شركة</span></span>
+                  <button type="button" class="srb-role-title"><span class="ltr-only">SIEM Engineer</span><span class="rtl-only">مهندس SIEM</span></button>
+                  <p class="srb-role-meta"><span class="srb-cat-version"><span class="ltr-only">Security</span><span class="rtl-only">الأمن</span> · <span class="ltr-only">Role v1.2</span></span> · <span class="ltr-only">Northstar Labs · Remote · Mid</span><span class="rtl-only">نورث ستار · عن بُعد · متوسط</span></p>
+                </div>
+                <div class="srb-match-ring" style="--pct:58;width:52px;height:52px" role="img" aria-label="58% match">
+                  <div class="srb-match-inner"><strong style="font-size:13px">58%</strong></div>
+                </div>
+              </header>
+              <p class="srb-role-desc"><span class="ltr-only">Design detection rules and keep the SIEM pipelines healthy and queryable at scale.</span><span class="rtl-only">تصميم قواعد الكشف وتحافظ على سلامة خطوط SIEM وقابليتها للاستعلام على نطاق واسع.</span></p>
+              <div class="srb-chiprow">
+                <span class="srb-schip have"><span class="ltr-only">SIEM</span></span>
+                <span class="srb-schip have"><span class="ltr-only">Threat Detection</span><span class="rtl-only">كشف التهديدات</span></span>
+              </div>
+              <div class="srb-pills">
+                <span class="srb-pill have"><span class="ltr-only">have · Network Security</span><span class="rtl-only">متوفر · أمن شبكات</span></span>
+                <span class="srb-pill gap"><span class="ltr-only">gap · Python</span><span class="rtl-only">فجوة · بايثون</span></span>
+                <span class="srb-pill missing"><span class="ltr-only">missing · Linux</span><span class="rtl-only">مفقود · لينكس</span></span>
+              </div>
+              <footer class="srb-role-foot">
+                <button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button>
+                <button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button>
+                <label class="btn btn-sm srb-btn-outline" for="rd-view-4" style="margin-inline-start:auto"><span class="ltr-only">View details</span><span class="rtl-only">عرض التفاصيل</span></label>
+              </footer>
+            </article>
+
+            <article class="srb-role">
+              <header class="srb-role-head">
+                <div class="srb-role-heading">
+                  <span class="chip chip-company"><span class="ltr-only">Company</span><span class="rtl-only">شركة</span></span>
+                  <button type="button" class="srb-role-title"><span class="ltr-only">Vulnerability Management Analyst</span><span class="rtl-only">محلل إدارة الثغرات</span></button>
+                  <p class="srb-role-meta"><span class="srb-cat-version"><span class="ltr-only">Security</span><span class="rtl-only">الأمن</span> · <span class="ltr-only">Role v0.9</span></span> · <span class="ltr-only">Northstar Labs · Hybrid · Mid</span><span class="rtl-only">نورث ستار · هجين · متوسط</span></p>
+                </div>
+                <div class="srb-match-ring" style="--pct:64;width:52px;height:52px" role="img" aria-label="64% match">
+                  <div class="srb-match-inner"><strong style="font-size:13px">64%</strong></div>
+                </div>
+              </header>
+              <p class="srb-role-desc"><span class="ltr-only">Own the patch-and-prioritization loop and make remediation deadlines defensible.</span><span class="rtl-only">تتولى حلقة التحديث والأولوية وتجعل مواعيد المعالجة قابلة للدفاع.</span></p>
+              <div class="srb-chiprow">
+                <span class="srb-schip gap"><span class="ltr-only">Vulnerability Mgmt</span><span class="rtl-only">إدارة ثغرات</span></span>
+                <span class="srb-schip have"><span class="ltr-only">Network Security</span><span class="rtl-only">أمن الشبكات</span></span>
+              </div>
+              <div class="srb-pills">
+                <span class="srb-pill have"><span class="ltr-only">have · Threat Detection</span><span class="rtl-only">متوفر · كشف تهديدات</span></span>
+                <span class="srb-pill gap"><span class="ltr-only">gap · Vulnerability Mgmt</span><span class="rtl-only">فجوة · إدارة ثغرات</span></span>
+                <span class="srb-pill missing"><span class="ltr-only">missing · Risk Assessment</span><span class="rtl-only">مفقود · تقييم مخاطر</span></span>
+              </div>
+              <footer class="srb-role-foot">
+                <button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button>
+                <button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button>
+                <label class="btn btn-sm srb-btn-outline" for="rd-view-5" style="margin-inline-start:auto"><span class="ltr-only">View details</span><span class="rtl-only">عرض التفاصيل</span></label>
+              </footer>
+            </article>
+
+            <article class="srb-role">
+              <header class="srb-role-head">
+                <div class="srb-role-heading">
+                  <span class="chip chip-company"><span class="ltr-only">Company</span><span class="rtl-only">شركة</span></span>
+                  <button type="button" class="srb-role-title"><span class="ltr-only">Network Security Engineer</span><span class="rtl-only">مهندس أمن الشبكات</span></button>
+                  <p class="srb-role-meta"><span class="srb-cat-version"><span class="ltr-only">Networking</span><span class="rtl-only">الشبكات</span> · <span class="ltr-only">Role v1.6</span></span> · <span class="ltr-only">Northstar Labs · On-site · Mid</span><span class="rtl-only">نورث ستار · حضور · متوسط</span></p>
+                </div>
+                <div class="srb-match-ring" style="--pct:52;width:52px;height:52px" role="img" aria-label="52% match">
+                  <div class="srb-match-inner"><strong style="font-size:13px">52%</strong></div>
+                </div>
+              </header>
+              <p class="srb-role-desc"><span class="ltr-only">Harden the network edge — firewall policy, segmentation, and encrypted transport.</span><span class="rtl-only">تحصّن حافة الشبكة — سياسة الجدار الناري والتقسيم والنقل المشفر.</span></p>
+              <div class="srb-chiprow">
+                <span class="srb-schip have"><span class="ltr-only">Network Security</span><span class="rtl-only">أمن الشبكات</span></span>
+                <span class="srb-schip gap"><span class="ltr-only">Active Directory</span></span>
+              </div>
+              <div class="srb-pills">
+                <span class="srb-pill have"><span class="ltr-only">have · SIEM</span></span>
+                <span class="srb-pill gap"><span class="ltr-only">gap · Active Directory</span><span class="rtl-only">فجوة · أكتيف ديركتوري</span></span>
+                <span class="srb-pill missing"><span class="ltr-only">missing · Cloud Security</span><span class="rtl-only">مفقود · أمن سحابة</span></span>
+              </div>
+              <footer class="srb-role-foot">
+                <button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button>
+                <button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button>
+                <label class="btn btn-sm srb-btn-outline" for="rd-view-6" style="margin-inline-start:auto"><span class="ltr-only">View details</span><span class="rtl-only">عرض التفاصيل</span></label>
+              </footer>
+            </article>
+
+            <article class="srb-role">
+              <header class="srb-role-head">
+                <div class="srb-role-heading">
+                  <span class="chip chip-catalog"><span class="ltr-only">Catalog</span><span class="rtl-only">كتالوج</span></span>
+                  <button type="button" class="srb-role-title"><span class="ltr-only">Cyber Threat Hunter</span><span class="rtl-only">خبير صيد التهديدات</span></button>
+                  <p class="srb-role-meta"><span class="srb-cat-version"><span class="ltr-only">Security</span><span class="rtl-only">الأمن</span> · <span class="ltr-only">Role v2.0</span></span> · <span class="ltr-only">Virtual · Mid</span><span class="rtl-only">افتراضي · متوسط</span></p>
+                </div>
+                <div class="srb-match-ring" style="--pct:55;width:52px;height:52px" role="img" aria-label="55% match">
+                  <div class="srb-match-inner"><strong style="font-size:13px">55%</strong></div>
+                </div>
+              </header>
+              <p class="srb-role-desc"><span class="ltr-only">Proactively hunt for latent threats that automated detections missed.</span><span class="rtl-only">تبحث استباقيًا عن تهديدات كامنة فاتتها الكشوفات الآلية.</span></p>
+              <div class="srb-chiprow">
+                <span class="srb-schip have"><span class="ltr-only">Threat Detection</span><span class="rtl-only">كشف التهديدات</span></span>
+                <span class="srb-schip have"><span class="ltr-only">SIEM</span></span>
+              </div>
+              <div class="srb-pills">
+                <span class="srb-pill have"><span class="ltr-only">have · Critical Thinking</span><span class="rtl-only">متوفر · تفكير نقدي</span></span>
+                <span class="srb-pill missing"><span class="ltr-only">missing · Python</span><span class="rtl-only">مفقود · بايثون</span></span>
+                <span class="srb-pill missing"><span class="ltr-only">missing · Forensics</span><span class="rtl-only">مفقود · طب شرعي رقمي</span></span>
+              </div>
+              <footer class="srb-role-foot">
+                <button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button>
+                <button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button>
+                <label class="btn btn-sm srb-btn-outline" for="rd-view-7" style="margin-inline-start:auto"><span class="ltr-only">View details</span><span class="rtl-only">عرض التفاصيل</span></label>
+              </footer>
+            </article>
+
+            <article class="srb-role">
+              <header class="srb-role-head">
+                <div class="srb-role-heading">
+                  <span class="chip chip-catalog"><span class="ltr-only">Catalog</span><span class="rtl-only">كتالوج</span></span>
+                  <button type="button" class="srb-role-title"><span class="ltr-only">IAM Analyst</span><span class="rtl-only">محلل إدارة الهوية والوصول</span></button>
+                  <p class="srb-role-meta"><span class="srb-cat-version"><span class="ltr-only">Identity</span><span class="rtl-only">الهوية</span> · <span class="ltr-only">Role v1.3</span></span> · <span class="ltr-only">Remote · Entry</span><span class="rtl-only">عن بُعد · مبتدئ</span></p>
+                </div>
+                <div class="srb-match-ring" style="--pct:43;width:52px;height:52px" role="img" aria-label="43% match">
+                  <div class="srb-match-inner"><strong style="font-size:13px">43%</strong></div>
+                </div>
+              </header>
+              <p class="srb-role-desc"><span class="ltr-only">Manage identities, access reviews, and least-privilege enforcement.</span><span class="rtl-only">تدير الهويات ومراجعات الوصول وتطبيق مبدأ الامتياز الأدنى.</span></p>
+              <div class="srb-chiprow">
+                <span class="srb-schip have"><span class="ltr-only">Network Security</span><span class="rtl-only">أمن الشبكات</span></span>
+                <span class="srb-schip gap"><span class="ltr-only">IAM</span></span>
+              </div>
+              <div class="srb-pills">
+                <span class="srb-pill have"><span class="ltr-only">have · Communication</span><span class="rtl-only">متوفر · التواصل</span></span>
+                <span class="srb-pill gap"><span class="ltr-only">gap · IAM</span></span>
+                <span class="srb-pill missing"><span class="ltr-only">missing · Active Directory</span><span class="rtl-only">مفقود · أكتيف ديركتوري</span></span>
+              </div>
+              <footer class="srb-role-foot">
+                <button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button>
+                <button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button>
+                <label class="btn btn-sm srb-btn-outline" for="rd-view-8" style="margin-inline-start:auto"><span class="ltr-only">View details</span><span class="rtl-only">عرض التفاصيل</span></label>
+              </footer>
+            </article>
+
+            <article class="srb-role">
+              <header class="srb-role-head">
+                <div class="srb-role-heading">
+                  <span class="chip chip-catalog"><span class="ltr-only">Catalog</span><span class="rtl-only">كتالوج</span></span>
+                  <button type="button" class="srb-role-title"><span class="ltr-only">Security Compliance Analyst</span><span class="rtl-only">محلل الامتثال الأمني</span></button>
+                  <p class="srb-role-meta"><span class="srb-cat-version"><span class="ltr-only">Compliance</span><span class="rtl-only">الامتثال</span> · <span class="ltr-only">Role v1.1</span></span> · <span class="ltr-only">Hybrid · Mid</span><span class="rtl-only">هجين · متوسط</span></p>
+                </div>
+                <div class="srb-match-ring" style="--pct:41;width:52px;height:52px" role="img" aria-label="41% match">
+                  <div class="srb-match-inner"><strong style="font-size:13px">41%</strong></div>
+                </div>
+              </header>
+              <p class="srb-role-desc"><span class="ltr-only">Map controls to frameworks and keep evidence audit-ready.</span><span class="rtl-only">تربط الضوابط بالأطر المعيارية وتحافظ على الأدلة جاهزة للتدقيق.</span></p>
+              <div class="srb-chiprow">
+                <span class="srb-schip have"><span class="ltr-only">Communication</span><span class="rtl-only">التواصل</span></span>
+                <span class="srb-schip gap"><span class="ltr-only">Risk Assessment</span><span class="rtl-only">تقييم المخاطر</span></span>
+              </div>
+              <div class="srb-pills">
+                <span class="srb-pill have"><span class="ltr-only">have · Critical Thinking</span><span class="rtl-only">متوفر · تفكير نقدي</span></span>
+                <span class="srb-pill gap"><span class="ltr-only">gap · Risk Assessment</span><span class="rtl-only">فجوة · تقييم مخاطر</span></span>
+                <span class="srb-pill missing"><span class="ltr-only">missing · Compliance</span><span class="rtl-only">مفقود · امتثال</span></span>
+              </div>
+              <footer class="srb-role-foot">
+                <button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button>
+                <button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button>
+                <label class="btn btn-sm srb-btn-outline" for="rd-view-9" style="margin-inline-start:auto"><span class="ltr-only">View details</span><span class="rtl-only">عرض التفاصيل</span></label>
+              </footer>
+            </article>
+
+            <article class="srb-role">
+              <header class="srb-role-head">
+                <div class="srb-role-heading">
+                  <span class="chip chip-catalog"><span class="ltr-only">Catalog</span><span class="rtl-only">كتالوج</span></span>
+                  <button type="button" class="srb-role-title"><span class="ltr-only">Junior Penetration Tester</span><span class="rtl-only">مختبِر اختراق مبتدئ</span></button>
+                  <p class="srb-role-meta"><span class="srb-cat-version"><span class="ltr-only">Offensive</span><span class="rtl-only">الهجومية</span> · <span class="ltr-only">Role v1.5</span></span> · <span class="ltr-only">On-site · Entry</span><span class="rtl-only">حضور · مبتدئ</span></p>
+                </div>
+                <div class="srb-match-ring" style="--pct:47;width:52px;height:52px" role="img" aria-label="47% match">
+                  <div class="srb-match-inner"><strong style="font-size:13px">47%</strong></div>
+                </div>
+              </header>
+              <p class="srb-role-desc"><span class="ltr-only">Execute scoped engagements under a lead tester and write findings reports.</span><span class="rtl-only">تنفذ اختبارات ضمن نطاق محدد تحت إشراف قائد فريق وتكتب تقارير النتائج.</span></p>
+              <div class="srb-chiprow">
+                <span class="srb-schip have"><span class="ltr-only">Network Security</span><span class="rtl-only">أمن الشبكات</span></span>
+                <span class="srb-schip gap"><span class="ltr-only">Linux</span></span>
+              </div>
+              <div class="srb-pills">
+                <span class="srb-pill have"><span class="ltr-only">have · Critical Thinking</span><span class="rtl-only">متوفر · تفكير نقدي</span></span>
+                <span class="srb-pill gap"><span class="ltr-only">gap · Linux</span><span class="rtl-only">فجوة · لينكس</span></span>
+                <span class="srb-pill missing"><span class="ltr-only">missing · Python</span><span class="rtl-only">مفقود · بايثون</span></span>
+              </div>
+              <footer class="srb-role-foot">
+                <button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button>
+                <button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button>
+                <label class="btn btn-sm srb-btn-outline" for="rd-view-10" style="margin-inline-start:auto"><span class="ltr-only">View details</span><span class="rtl-only">عرض التفاصيل</span></label>
+              </footer>
+            </article>
+
+            <article class="srb-role">
+              <header class="srb-role-head">
+                <div class="srb-role-heading">
+                  <span class="chip chip-catalog"><span class="ltr-only">Catalog</span><span class="rtl-only">كتالوج</span></span>
+                  <button type="button" class="srb-role-title"><span class="ltr-only">Cloud Security Engineer</span><span class="rtl-only">مهندس أمن سحابي</span></button>
+                  <p class="srb-role-meta"><span class="srb-cat-version"><span class="ltr-only">Cloud</span><span class="rtl-only">السحابة</span> · <span class="ltr-only">Role v1.7</span></span> · <span class="ltr-only">Remote · Mid</span><span class="rtl-only">عن بُعد · متوسط</span></p>
+                </div>
+                <div class="srb-match-ring" style="--pct:39;width:52px;height:52px" role="img" aria-label="39% match">
+                  <div class="srb-match-inner"><strong style="font-size:13px">39%</strong></div>
+                </div>
+              </header>
+              <p class="srb-role-desc"><span class="ltr-only">Secure cloud workloads — posture, identity, and infrastructure-as-code guardrails.</span><span class="rtl-only">تؤمّن أعباء العمل السحابية — الوضعية والهوية وضوابط البنية ككود.</span></p>
+              <div class="srb-chiprow">
+                <span class="srb-schip have"><span class="ltr-only">Network Security</span><span class="rtl-only">أمن الشبكات</span></span>
+                <span class="srb-schip gap"><span class="ltr-only">Cloud Security</span><span class="rtl-only">أمن السحابة</span></span>
+              </div>
+              <div class="srb-pills">
+                <span class="srb-pill have"><span class="ltr-only">have · SIEM</span></span>
+                <span class="srb-pill gap"><span class="ltr-only">gap · Cloud Security</span><span class="rtl-only">فجوة · أمن السحابة</span></span>
+                <span class="srb-pill missing"><span class="ltr-only">missing · Linux</span><span class="rtl-only">مفقود · لينكس</span></span>
+              </div>
+              <footer class="srb-role-foot">
+                <button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button>
+                <button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button>
+                <label class="btn btn-sm srb-btn-outline" for="rd-view-11" style="margin-inline-start:auto"><span class="ltr-only">View details</span><span class="rtl-only">عرض التفاصيل</span></label>
+              </footer>
+            </article>
+
+            <article class="srb-role">
+              <header class="srb-role-head">
+                <div class="srb-role-heading">
+                  <span class="chip chip-catalog"><span class="ltr-only">Catalog</span><span class="rtl-only">كتالوج</span></span>
+                  <button type="button" class="srb-role-title"><span class="ltr-only">Digital Forensics Analyst</span><span class="rtl-only">محلل الطب الشرعي الرقمي</span></button>
+                  <p class="srb-role-meta"><span class="srb-cat-version"><span class="ltr-only">Forensics</span><span class="rtl-only">الطب الشرعي</span> · <span class="ltr-only">Role v0.8</span></span> · <span class="ltr-only">Hybrid · Entry</span><span class="rtl-only">هجين · مبتدئ</span></p>
+                </div>
+                <div class="srb-match-ring" style="--pct:36;width:52px;height:52px" role="img" aria-label="36% match">
+                  <div class="srb-match-inner"><strong style="font-size:13px">36%</strong></div>
+                </div>
+              </header>
+              <p class="srb-role-desc"><span class="ltr-only">Preserve, examine, and report on digital evidence for investigations.</span><span class="rtl-only">تحفظ الأدلة الرقمية وتفحصها وتفصّل تقارير عنها للتحقيقات.</span></p>
+              <div class="srb-chiprow">
+                <span class="srb-schip have"><span class="ltr-only">SIEM</span></span>
+                <span class="srb-schip gap"><span class="ltr-only">Forensics</span><span class="rtl-only">الطب الشرعي</span></span>
+              </div>
+              <div class="srb-pills">
+                <span class="srb-pill have"><span class="ltr-only">have · Critical Thinking</span><span class="rtl-only">متوفر · تفكير نقدي</span></span>
+                <span class="srb-pill gap"><span class="ltr-only">gap · Forensics</span><span class="rtl-only">فجوة · طب شرعي</span></span>
+                <span class="srb-pill missing"><span class="ltr-only">missing · Python</span><span class="rtl-only">مفقود · بايثون</span></span>
+              </div>
+              <footer class="srb-role-foot">
+                <button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button>
+                <button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button>
+                <label class="btn btn-sm srb-btn-outline" for="rd-view-12" style="margin-inline-start:auto"><span class="ltr-only">View details</span><span class="rtl-only">عرض التفاصيل</span></label>
+              </footer>
+            </article>
+          </div>
+
+          <div class="rd-pager">
+            <span class="rd-pager-info"><span class="ltr-only">Page 1 of 2 · 17 roles</span><span class="rtl-only">الصفحة 1 من 2 · 17 دورًا</span></span>
+            <div class="pager-group">
+              <button type="button" class="btn btn-sm" disabled>
+                <svg class="ic icon-directional" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></svg>
+                <span class="ltr-only">Prev</span><span class="rtl-only">السابق</span>
+              </button>
+              <button type="button" class="btn btn-sm">
+                <span class="ltr-only">Next</span><span class="rtl-only">التالي</span>
+                <svg class="ic icon-directional" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <footer class="app-footer">
+          <span class="ltr-only">SkillBridge – review mockup · Skills &amp; Roles · single-file, zero-JS.</span>
+          <span class="rtl-only">SkillBridge – نموذج مراجعة · المهارات والأدوار · ملف واحد بدون جافاسكربت.</span>
+        </footer>
+      </div>
+    </main>
+  </div>
+</div>
+
+<div class="rd-shell rd-shell-1">
+      <label class="rd-backdrop" for="rd-view-1" aria-hidden="true"></label>
+      <aside class="rd-drawer" role="dialog" aria-modal="true" aria-label="Cybersecurity Analyst">
+        <div class="rd-drawer-head">
+          <div class="rd-drawer-title">
+            <span class="srb-cat-version" style="align-self:flex-start"><span class="ltr-only">Security</span><span class="rtl-only">الأمن</span> · <span class="ltr-only">Role v2.1</span><span class="rtl-only">دور 2.1</span></span>
+            <h3><span class="ltr-only">Cybersecurity Analyst</span><span class="rtl-only">محللة أمن سيبراني</span></h3>
+          </div>
+          <label class="srb-close" for="rd-view-1" aria-label="close">✕</label>
+        </div>
+        <p class="rd-drawer-desc"><span class="ltr-only">Monitor alerts, triage incidents, and keep the security posture visible to leadership. Northstar Labs · Mid-level · Remote.</span><span class="rtl-only">تراقب التنبيهات وتصدر الحوادث وتحافظ على وضوح الوضع الأمني للإدارة. نورث ستار · مستوى متوسط · عن بُعد.</span></p>
+        <span class="rd-skills-head"><span class="ltr-only">Skills</span><span class="rtl-only">المهارات</span></span>
+        <div class="rd-skills">
+          <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Network Security</span><span class="rtl-only">أمن الشبكات</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">verified</span><span class="rtl-only">موثقة</span></span></span></div>
+          <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">SIEM</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+          <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Incident Response</span><span class="rtl-only">الاستجابة للحوادث</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+          <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Threat Detection</span><span class="rtl-only">كشف التهديدات</span></span><span class="rd-skill-right"><span class="srb-pill gap"><span class="ltr-only">gap</span><span class="rtl-only">فجوة</span></span></span></div>
+          <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Vulnerability Management</span><span class="rtl-only">إدارة الثغرات</span></span><span class="rd-skill-right"><span class="srb-pill missing"><span class="ltr-only">missing</span><span class="rtl-only">مفقودة</span></span></span></div>
+        </div>
+        <div class="rd-actions-row">
+          <button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button>
+          <button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button>
+        </div>
+        <span class="rd-provider"><span class="dot"></span><span class="ltr-only">Northstar Labs listing · updated 2 days ago</span><span class="rtl-only">قائمة نورث ستار · محدثة قبل يومين</span></span>
+      </aside>
+    </div>
+    <div class="rd-shell rd-shell-2"><label class="rd-backdrop" for="rd-view-2" aria-hidden="true"></label><aside class="rd-drawer" role="dialog" aria-modal="true" aria-label="Security Operations Analyst">
+      <div class="rd-drawer-head"><div class="rd-drawer-title"><span class="srb-cat-version" style="align-self:flex-start"><span class="ltr-only">Security</span><span class="rtl-only">الأمن</span> · <span class="ltr-only">Role v1.8</span></span><h3><span class="ltr-only">Security Operations Analyst</span><span class="rtl-only">محلل عمليات أمنية</span></h3></div><label class="srb-close" for="rd-view-2" aria-label="close">✕</label></div>
+      <p class="rd-drawer-desc"><span class="ltr-only">Run the day-to-day monitoring queue and document investigations for the shift team. Northstar Labs · Hybrid · Entry.</span><span class="rtl-only">تدير قائمة المراقبة اليومية وتوثق التحقيقات لفريق الوردية. نورث ستار · هجين · مبتدئ.</span></p>
+      <span class="rd-skills-head"><span class="ltr-only">Skills</span><span class="rtl-only">المهارات</span></span>
+      <div class="rd-skills">
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Threat Detection</span><span class="rtl-only">كشف التهديدات</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">SIEM</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Network Security</span><span class="rtl-only">أمن الشبكات</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Incident Response</span><span class="rtl-only">الاستجابة للحوادث</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Communication</span><span class="rtl-only">التواصل</span></span><span class="rd-skill-right"><span class="srb-pill gap"><span class="ltr-only">gap</span><span class="rtl-only">فجوة</span></span></span></div>
+      </div>
+      <div class="rd-actions-row"><button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button><button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button></div>
+      <span class="rd-provider"><span class="dot"></span><span class="ltr-only">Northstar Labs listing · updated 5 days ago</span><span class="rtl-only">قائمة نورث ستار · محدثة قبل 5 أيام</span></span>
+    </aside></div>
+    <div class="rd-shell rd-shell-3"><label class="rd-backdrop" for="rd-view-3" aria-hidden="true"></label><aside class="rd-drawer" role="dialog" aria-modal="true" aria-label="SOC Analyst Tier 1">
+      <div class="rd-drawer-head"><div class="rd-drawer-title"><span class="srb-cat-version" style="align-self:flex-start"><span class="ltr-only">Security</span><span class="rtl-only">الأمن</span> · <span class="ltr-only">Role v1.4</span></span><h3><span class="ltr-only">SOC Analyst Tier 1</span><span class="rtl-only">محلل مركز عمليات أمنية - المستوى 1</span></h3></div><label class="srb-close" for="rd-view-3" aria-label="close">✕</label></div>
+      <p class="rd-drawer-desc"><span class="ltr-only">First line of defense — triage raw alerts and escalate confirmed events to Tier 2. Northstar Labs · On-site · Entry.</span><span class="rtl-only">خط الدفاع الأول — تصنيف التنبيهات الخام ورفع الأحداث المؤكدة إلى المستوى 2. نورث ستار · حضور · مبتدئ.</span></p>
+      <span class="rd-skills-head"><span class="ltr-only">Skills</span><span class="rtl-only">المهارات</span></span>
+      <div class="rd-skills">
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Threat Detection</span><span class="rtl-only">كشف التهديدات</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">SIEM</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Critical Thinking</span><span class="rtl-only">التفكير النقدي</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Communication</span><span class="rtl-only">التواصل</span></span><span class="rd-skill-right"><span class="srb-pill gap"><span class="ltr-only">gap</span><span class="rtl-only">فجوة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Linux</span></span><span class="rd-skill-right"><span class="srb-pill missing"><span class="ltr-only">missing</span><span class="rtl-only">مفقودة</span></span></span></div>
+      </div>
+      <div class="rd-actions-row"><button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button><button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button></div>
+      <span class="rd-provider"><span class="dot"></span><span class="ltr-only">Northstar Labs listing · updated this week</span><span class="rtl-only">قائمة نورث ستار · محدثة هذا الأسبوع</span></span>
+    </aside></div>
+    <div class="rd-shell rd-shell-4"><label class="rd-backdrop" for="rd-view-4" aria-hidden="true"></label><aside class="rd-drawer" role="dialog" aria-modal="true" aria-label="SIEM Engineer">
+      <div class="rd-drawer-head"><div class="rd-drawer-title"><span class="srb-cat-version" style="align-self:flex-start"><span class="ltr-only">Security</span><span class="rtl-only">الأمن</span> · <span class="ltr-only">Role v1.2</span></span><h3><span class="ltr-only">SIEM Engineer</span><span class="rtl-only">مهندس SIEM</span></h3></div><label class="srb-close" for="rd-view-4" aria-label="close">✕</label></div>
+      <p class="rd-drawer-desc"><span class="ltr-only">Design detection rules and keep the SIEM pipelines healthy and queryable at scale. Northstar Labs · Remote · Mid.</span><span class="rtl-only">تصميم قواعد الكشف وتحافظ على سلامة خطوط SIEM وقابليتها للاستعلام على نطاق واسع. نورث ستار · عن بُعد · متوسط.</span></p>
+      <span class="rd-skills-head"><span class="ltr-only">Skills</span><span class="rtl-only">المهارات</span></span>
+      <div class="rd-skills">
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">SIEM</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Threat Detection</span><span class="rtl-only">كشف التهديدات</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Network Security</span><span class="rtl-only">أمن الشبكات</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Python</span></span><span class="rd-skill-right"><span class="srb-pill gap"><span class="ltr-only">gap</span><span class="rtl-only">فجوة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Linux</span></span><span class="rd-skill-right"><span class="srb-pill missing"><span class="ltr-only">missing</span><span class="rtl-only">مفقودة</span></span></span></div>
+      </div>
+      <div class="rd-actions-row"><button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button><button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button></div>
+      <span class="rd-provider"><span class="dot"></span><span class="ltr-only">Northstar Labs listing · updated 3 days ago</span><span class="rtl-only">قائمة نورث ستار · محدثة قبل 3 أيام</span></span>
+    </aside></div>
+    <div class="rd-shell rd-shell-5"><label class="rd-backdrop" for="rd-view-5" aria-hidden="true"></label><aside class="rd-drawer" role="dialog" aria-modal="true" aria-label="Vulnerability Management Analyst">
+      <div class="rd-drawer-head"><div class="rd-drawer-title"><span class="srb-cat-version" style="align-self:flex-start"><span class="ltr-only">Security</span><span class="rtl-only">الأمن</span> · <span class="ltr-only">Role v0.9</span></span><h3><span class="ltr-only">Vulnerability Management Analyst</span><span class="rtl-only">محلل إدارة الثغرات</span></h3></div><label class="srb-close" for="rd-view-5" aria-label="close">✕</label></div>
+      <p class="rd-drawer-desc"><span class="ltr-only">Own the patch-and-prioritization loop and make remediation deadlines defensible. Northstar Labs · Hybrid · Mid.</span><span class="rtl-only">تتولى حلقة التحديث والأولوية وتجعل مواعيد المعالجة قابلة للدفاع. نورث ستار · هجين · متوسط.</span></p>
+      <span class="rd-skills-head"><span class="ltr-only">Skills</span><span class="rtl-only">المهارات</span></span>
+      <div class="rd-skills">
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Vulnerability Mgmt</span><span class="rtl-only">إدارة الثغرات</span></span><span class="rd-skill-right"><span class="srb-pill gap"><span class="ltr-only">gap</span><span class="rtl-only">فجوة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Threat Detection</span><span class="rtl-only">كشف التهديدات</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Network Security</span><span class="rtl-only">أمن الشبكات</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Risk Assessment</span><span class="rtl-only">تقييم المخاطر</span></span><span class="rd-skill-right"><span class="srb-pill missing"><span class="ltr-only">missing</span><span class="rtl-only">مفقودة</span></span></span></div>
+      </div>
+      <div class="rd-actions-row"><button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button><button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button></div>
+      <span class="rd-provider"><span class="dot"></span><span class="ltr-only">Northstar Labs listing · updated 6 days ago</span><span class="rtl-only">قائمة نورث ستار · محدثة قبل 6 أيام</span></span>
+    </aside></div>
+    <div class="rd-shell rd-shell-6"><label class="rd-backdrop" for="rd-view-6" aria-hidden="true"></label><aside class="rd-drawer" role="dialog" aria-modal="true" aria-label="Network Security Engineer">
+      <div class="rd-drawer-head"><div class="rd-drawer-title"><span class="srb-cat-version" style="align-self:flex-start"><span class="ltr-only">Networking</span><span class="rtl-only">الشبكات</span> · <span class="ltr-only">Role v1.6</span></span><h3><span class="ltr-only">Network Security Engineer</span><span class="rtl-only">مهندس أمن الشبكات</span></h3></div><label class="srb-close" for="rd-view-6" aria-label="close">✕</label></div>
+      <p class="rd-drawer-desc"><span class="ltr-only">Harden the network edge — firewall policy, segmentation, and encrypted transport. Northstar Labs · On-site · Mid.</span><span class="rtl-only">تحصّن حافة الشبكة — سياسة الجدار الناري والتقسيم والنقل المشفر. نورث ستار · حضور · متوسط.</span></p>
+      <span class="rd-skills-head"><span class="ltr-only">Skills</span><span class="rtl-only">المهارات</span></span>
+      <div class="rd-skills">
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Network Security</span><span class="rtl-only">أمن الشبكات</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Active Directory</span></span><span class="rd-skill-right"><span class="srb-pill gap"><span class="ltr-only">gap</span><span class="rtl-only">فجوة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">SIEM</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Cloud Security</span><span class="rtl-only">أمن السحابة</span></span><span class="rd-skill-right"><span class="srb-pill missing"><span class="ltr-only">missing</span><span class="rtl-only">مفقودة</span></span></span></div>
+      </div>
+      <div class="rd-actions-row"><button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button><button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button></div>
+      <span class="rd-provider"><span class="dot"></span><span class="ltr-only">Northstar Labs listing · updated 4 days ago</span><span class="rtl-only">قائمة نورث ستار · محدثة قبل 4 أيام</span></span>
+    </aside></div>
+    <div class="rd-shell rd-shell-7"><label class="rd-backdrop" for="rd-view-7" aria-hidden="true"></label><aside class="rd-drawer" role="dialog" aria-modal="true" aria-label="Cyber Threat Hunter">
+      <div class="rd-drawer-head"><div class="rd-drawer-title"><span class="srb-cat-version" style="align-self:flex-start"><span class="ltr-only">Security</span><span class="rtl-only">الأمن</span> · <span class="ltr-only">Role v2.0</span></span><h3><span class="ltr-only">Cyber Threat Hunter</span><span class="rtl-only">خبير صيد التهديدات</span></h3></div><label class="srb-close" for="rd-view-7" aria-label="close">✕</label></div>
+      <p class="rd-drawer-desc"><span class="ltr-only">Proactively hunt for latent threats that automated detections missed. Virtual · Mid.</span><span class="rtl-only">تبحث استباقيًا عن تهديدات كامنة فاتتها الكشوفات الآلية. افتراضي · متوسط.</span></p>
+      <span class="rd-skills-head"><span class="ltr-only">Skills</span><span class="rtl-only">المهارات</span></span>
+      <div class="rd-skills">
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Threat Detection</span><span class="rtl-only">كشف التهديدات</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Critical Thinking</span><span class="rtl-only">التفكير النقدي</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">SIEM</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Python</span></span><span class="rd-skill-right"><span class="srb-pill missing"><span class="ltr-only">missing</span><span class="rtl-only">مفقودة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Forensics</span><span class="rtl-only">الطب الشرعي الرقمي</span></span><span class="rd-skill-right"><span class="srb-pill missing"><span class="ltr-only">missing</span><span class="rtl-only">مفقودة</span></span></span></div>
+      </div>
+      <div class="rd-actions-row"><button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button><button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button></div>
+      <span class="rd-provider"><span class="dot"></span><span class="ltr-only">Catalog role · not tied to a company</span><span class="rtl-only">دور كتالوج · غير مرتبط بشركة</span></span>
+    </aside></div>
+    <div class="rd-shell rd-shell-8"><label class="rd-backdrop" for="rd-view-8" aria-hidden="true"></label><aside class="rd-drawer" role="dialog" aria-modal="true" aria-label="IAM Analyst">
+      <div class="rd-drawer-head"><div class="rd-drawer-title"><span class="srb-cat-version" style="align-self:flex-start"><span class="ltr-only">Identity</span><span class="rtl-only">الهوية</span> · <span class="ltr-only">Role v1.3</span></span><h3><span class="ltr-only">IAM Analyst</span><span class="rtl-only">محلل إدارة الهوية والوصول</span></h3></div><label class="srb-close" for="rd-view-8" aria-label="close">✕</label></div>
+      <p class="rd-drawer-desc"><span class="ltr-only">Manage identities, access reviews, and least-privilege enforcement. Remote · Entry.</span><span class="rtl-only">تدير الهويات ومراجعات الوصول وتطبيق مبدأ الامتياز الأدنى. عن بُعد · مبتدئ.</span></p>
+      <span class="rd-skills-head"><span class="ltr-only">Skills</span><span class="rtl-only">المهارات</span></span>
+      <div class="rd-skills">
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Network Security</span><span class="rtl-only">أمن الشبكات</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">IAM</span></span><span class="rd-skill-right"><span class="srb-pill gap"><span class="ltr-only">gap</span><span class="rtl-only">فجوة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Communication</span><span class="rtl-only">التواصل</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Active Directory</span></span><span class="rd-skill-right"><span class="srb-pill missing"><span class="ltr-only">missing</span><span class="rtl-only">مفقودة</span></span></span></div>
+      </div>
+      <div class="rd-actions-row"><button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button><button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button></div>
+      <span class="rd-provider"><span class="dot"></span><span class="ltr-only">Catalog role · not tied to a company</span><span class="rtl-only">دور كتالوج · غير مرتبط بشركة</span></span>
+    </aside></div>
+    <div class="rd-shell rd-shell-9"><label class="rd-backdrop" for="rd-view-9" aria-hidden="true"></label><aside class="rd-drawer" role="dialog" aria-modal="true" aria-label="Security Compliance Analyst">
+      <div class="rd-drawer-head"><div class="rd-drawer-title"><span class="srb-cat-version" style="align-self:flex-start"><span class="ltr-only">Compliance</span><span class="rtl-only">الامتثال</span> · <span class="ltr-only">Role v1.1</span></span><h3><span class="ltr-only">Security Compliance Analyst</span><span class="rtl-only">محلل الامتثال الأمني</span></h3></div><label class="srb-close" for="rd-view-9" aria-label="close">✕</label></div>
+      <p class="rd-drawer-desc"><span class="ltr-only">Map controls to frameworks and keep evidence audit-ready. Hybrid · Mid.</span><span class="rtl-only">تربط الضوابط بالأطر المعيارية وتحافظ على الأدلة جاهزة للتدقيق. هجين · متوسط.</span></p>
+      <span class="rd-skills-head"><span class="ltr-only">Skills</span><span class="rtl-only">المهارات</span></span>
+      <div class="rd-skills">
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Communication</span><span class="rtl-only">التواصل</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Risk Assessment</span><span class="rtl-only">تقييم المخاطر</span></span><span class="rd-skill-right"><span class="srb-pill gap"><span class="ltr-only">gap</span><span class="rtl-only">فجوة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Critical Thinking</span><span class="rtl-only">التفكير النقدي</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Compliance</span><span class="rtl-only">الامتثال</span></span><span class="rd-skill-right"><span class="srb-pill missing"><span class="ltr-only">missing</span><span class="rtl-only">مفقودة</span></span></span></div>
+      </div>
+      <div class="rd-actions-row"><button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button><button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button></div>
+      <span class="rd-provider"><span class="dot"></span><span class="ltr-only">Catalog role · not tied to a company</span><span class="rtl-only">دور كتالوج · غير مرتبط بشركة</span></span>
+    </aside></div>
+    <div class="rd-shell rd-shell-10"><label class="rd-backdrop" for="rd-view-10" aria-hidden="true"></label><aside class="rd-drawer" role="dialog" aria-modal="true" aria-label="Junior Penetration Tester">
+      <div class="rd-drawer-head"><div class="rd-drawer-title"><span class="srb-cat-version" style="align-self:flex-start"><span class="ltr-only">Offensive</span><span class="rtl-only">الهجومية</span> · <span class="ltr-only">Role v1.5</span></span><h3><span class="ltr-only">Junior Penetration Tester</span><span class="rtl-only">مختبِر اختراق مبتدئ</span></h3></div><label class="srb-close" for="rd-view-10" aria-label="close">✕</label></div>
+      <p class="rd-drawer-desc"><span class="ltr-only">Execute scoped engagements under a lead tester and write findings reports. On-site · Entry.</span><span class="rtl-only">تنفذ اختبارات ضمن نطاق محدد تحت إشراف قائد فريق وتكتب تقارير النتائج. حضور · مبتدئ.</span></p>
+      <span class="rd-skills-head"><span class="ltr-only">Skills</span><span class="rtl-only">المهارات</span></span>
+      <div class="rd-skills">
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Network Security</span><span class="rtl-only">أمن الشبكات</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Critical Thinking</span><span class="rtl-only">التفكير النقدي</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Linux</span></span><span class="rd-skill-right"><span class="srb-pill gap"><span class="ltr-only">gap</span><span class="rtl-only">فجوة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Python</span></span><span class="rd-skill-right"><span class="srb-pill missing"><span class="ltr-only">missing</span><span class="rtl-only">مفقودة</span></span></span></div>
+      </div>
+      <div class="rd-actions-row"><button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button><button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button></div>
+      <span class="rd-provider"><span class="dot"></span><span class="ltr-only">Catalog role · not tied to a company</span><span class="rtl-only">دور كتالوج · غير مرتبط بشركة</span></span>
+    </aside></div>
+    <div class="rd-shell rd-shell-11"><label class="rd-backdrop" for="rd-view-11" aria-hidden="true"></label><aside class="rd-drawer" role="dialog" aria-modal="true" aria-label="Cloud Security Engineer">
+      <div class="rd-drawer-head"><div class="rd-drawer-title"><span class="srb-cat-version" style="align-self:flex-start"><span class="ltr-only">Cloud</span><span class="rtl-only">السحابة</span> · <span class="ltr-only">Role v1.7</span></span><h3><span class="ltr-only">Cloud Security Engineer</span><span class="rtl-only">مهندس أمن سحابي</span></h3></div><label class="srb-close" for="rd-view-11" aria-label="close">✕</label></div>
+      <p class="rd-drawer-desc"><span class="ltr-only">Secure cloud workloads — posture, identity, and infrastructure-as-code guardrails. Remote · Mid.</span><span class="rtl-only">تؤمّن أعباء العمل السحابية — الوضعية والهوية وضوابط البنية ككود. عن بُعد · متوسط.</span></p>
+      <span class="rd-skills-head"><span class="ltr-only">Skills</span><span class="rtl-only">المهارات</span></span>
+      <div class="rd-skills">
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Network Security</span><span class="rtl-only">أمن الشبكات</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Cloud Security</span><span class="rtl-only">أمن السحابة</span></span><span class="rd-skill-right"><span class="srb-pill gap"><span class="ltr-only">gap</span><span class="rtl-only">فجوة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">SIEM</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Linux</span></span><span class="rd-skill-right"><span class="srb-pill missing"><span class="ltr-only">missing</span><span class="rtl-only">مفقودة</span></span></span></div>
+      </div>
+      <div class="rd-actions-row"><button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button><button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button></div>
+      <span class="rd-provider"><span class="dot"></span><span class="ltr-only">Catalog role · not tied to a company</span><span class="rtl-only">دور كتالوج · غير مرتبط بشركة</span></span>
+    </aside></div>
+    <div class="rd-shell rd-shell-12"><label class="rd-backdrop" for="rd-view-12" aria-hidden="true"></label><aside class="rd-drawer" role="dialog" aria-modal="true" aria-label="Digital Forensics Analyst">
+      <div class="rd-drawer-head"><div class="rd-drawer-title"><span class="srb-cat-version" style="align-self:flex-start"><span class="ltr-only">Forensics</span><span class="rtl-only">الطب الشرعي</span> · <span class="ltr-only">Role v0.8</span></span><h3><span class="ltr-only">Digital Forensics Analyst</span><span class="rtl-only">محلل الطب الشرعي الرقمي</span></h3></div><label class="srb-close" for="rd-view-12" aria-label="close">✕</label></div>
+      <p class="rd-drawer-desc"><span class="ltr-only">Preserve, examine, and report on digital evidence for investigations. Hybrid · Entry.</span><span class="rtl-only">تحفظ الأدلة الرقمية وتفحصها وتفصّل تقارير عنها للتحقيقات. هجين · مبتدئ.</span></p>
+      <span class="rd-skills-head"><span class="ltr-only">Skills</span><span class="rtl-only">المهارات</span></span>
+      <div class="rd-skills">
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">SIEM</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Critical Thinking</span><span class="rtl-only">التفكير النقدي</span></span><span class="rd-skill-right"><span class="srb-pill have"><span class="ltr-only">have</span><span class="rtl-only">متوفرة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Forensics</span><span class="rtl-only">الطب الشرعي الرقمي</span></span><span class="rd-skill-right"><span class="srb-pill gap"><span class="ltr-only">gap</span><span class="rtl-only">فجوة</span></span></span></div>
+        <div class="rd-skill-row"><span class="rd-skill-name"><span class="ltr-only">Python</span></span><span class="rd-skill-right"><span class="srb-pill missing"><span class="ltr-only">missing</span><span class="rtl-only">مفقودة</span></span></span></div>
+      </div>
+      <div class="rd-actions-row"><button type="button" class="btn btn-sm btn-primary"><span class="ltr-only">Select as target</span><span class="rtl-only">اختيار كدور</span></button><button type="button" class="srb-save-btn"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M7 3h10a1.6 1.6 0 0 1 1.6 1.6V21L12 17.8 5.4 21V4.6A1.6 1.6 0 0 1 7 3z"/></svg><span class="ltr-only">Save</span><span class="rtl-only">حفظ</span></button></div>
+      <span class="rd-provider"><span class="dot"></span><span class="ltr-only">Catalog role · not tied to a company</span><span class="rtl-only">دور كتالوج · غير مرتبط بشركة</span></span>
+    </aside></div>
+
+</body>
+</html>

@@ -35,13 +35,19 @@ def _load_env():
     loader here those keys were never read, so every GenAI feature silently ran
     its deterministic fallback.
 
+    A file named `env` (no leading dot) is accepted as a fallback for setups
+    that check in secrets under that spelling; `.env` still wins when both exist.
+
     Never loads under pytest: the suite must stay byte-for-byte deterministic
     and must never send real provider credentials, even when a developer has a
     populated .env on disk.
     """
     if sys.modules.get("pytest") is not None:
         return
-    env_file = Path(__file__).resolve().parents[2] / ".env"
+    root = Path(__file__).resolve().parents[2]
+    env_file = root / ".env"
+    if not env_file.is_file():
+        env_file = root / "env"
     if not env_file.is_file():
         return
     for line in env_file.read_text().splitlines():
@@ -533,6 +539,42 @@ def api_demo_mode():
         "email_configured": mailer.email_configured(),
         "provider": genai.provider_status(),
         "jobs": jobs.provider_status(),
+    }
+
+
+@app.get("/api/debug/tutor-system")
+def api_debug_tutor_system(message: str = "", tutor_id: str = "nova",
+                           mode: str = "chat", language: str = "", spoken: bool = False):
+    """Return the EXACT system prompt that would be sent to the provider for a
+    tutor turn, so the prompt actually seen by the model can be verified.
+
+    GATED: only reachable when the server was started with
+    ``SKILLBRIDGE_ENABLE_DEBUG=1`` (never enabled by default). The message is
+    used to route the intent/confusion/length directives exactly like a real
+    tutor turn. No provider call is made.
+    """
+    if os.environ.get("SKILLBRIDGE_ENABLE_DEBUG", "0") != "1":
+        return {"ok": False, "detail": "debug endpoint disabled"}
+    from . import copilot
+    lang = copilot.resolve_language(language or "auto", message or "how are you")
+    resolved = lang if message else language or "auto"
+    persona = genai.TUTOR_PERSONAS.get((tutor_id or "nova").lower())
+    intent = genai._classify_tutor_turn(message, mode=mode)
+    system = genai._tutor_system(
+        lang, intent, mode or "chat", tutor_id or "nova", message, persona, None,
+        spoken=spoken,
+    )
+    return {
+        "ok": True,
+        "message": message,
+        "tutor_id": tutor_id,
+        "resolved_language": resolved,
+        "intent": intent,
+        "spoken": spoken,
+        "system": system,
+        "language_lock": genai._language_lock(lang),
+        "mirror_rule": genai._MIRROR_LANGUAGE_RULE,
+        "meta_phrases": list(genai._META_COMMENTARY_PHRASES),
     }
 
 
@@ -1416,6 +1458,16 @@ def api_tutor_chat(student_id: int, request: Request, body: dict):
         messages=pre_turn,
         conversation_id=conversation_id,
     )
+    # Fresh-thread gating (no prior messages): the student is talking to this
+    # mentor for the first time in this conversation, so the dashboard learning
+    # snapshot, current-skill and target-role labels must NOT enter the prompt —
+    # that is how an empty first turn turns into a fabricated "earlier in our
+    # session we were looking at X". Only persona, language, global rules and
+    # the user question reach the provider on a fresh thread.
+    if not pre_turn:
+        ctx_text = ""
+        skill_name = None
+        role = None
     models.add_tutor_message(student_id, tutor_id, skill_id, "user", question,
                              conversation_id=conversation_id)
     if mode == "interview":
@@ -1439,6 +1491,7 @@ def api_tutor_chat(student_id: int, request: Request, body: dict):
             language=language,
             personality=personality,
             conversation_memory=memory_block,
+            spoken=bool(body.get("spoken")),
         )
     msg = models.add_tutor_message(student_id, tutor_id, skill_id, "assistant", reply,
                                    conversation_id=conversation_id)

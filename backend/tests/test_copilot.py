@@ -50,6 +50,19 @@ def _first_gap(client, student_id):
     return analysis["skill_gaps"][0]
 
 
+def _prime(client, student_id, headers):
+    """Past the backend's fresh-thread context gating: a FIRST message is
+    intentionally persona/language-only (main.api_tutor_chat nulls the per-page
+    trusted context on a fresh thread so an empty first turn can never fabricate
+    "earlier in our session..." content). The NEXT turn then receives the trusted
+    per-page context these context-trust tests assert on."""
+    r = client.post(f"/api/students/{student_id}/tutor",
+                    json={"message": "Let's get started.", "page": "dashboard"},
+                    headers=headers)
+    assert r.status_code == 200
+    return r
+
+
 # ------------------------------------------------------------------ personas preserved
 
 def test_tutor_personas_are_preserved():
@@ -146,6 +159,7 @@ def test_preference_isolated_per_student(db, auth_headers, client):
 def test_dashboard_context_uses_backend_readiness(monkeypatch, client, student_id, auth_headers):
     captured = _capture_complete(monkeypatch)
     h = auth_headers("aisha@student.edu")
+    _prime(client, student_id, h)
     r = _tutor(client, student_id, h, {"page": "dashboard"})
     assert r.status_code == 200
     body = r.json()
@@ -172,6 +186,7 @@ def test_learning_context_resolves_skill_from_backend(monkeypatch, client, stude
     captured = _capture_complete(monkeypatch)
     h = auth_headers("aisha@student.edu")
     gap = _first_gap(client, student_id)
+    _prime(client, student_id, h)
     r = _tutor(client, student_id, h, {"page": "learning", "skill_id": gap["skill_id"]})
     assert r.status_code == 200
     assert gap["skill_name"] in captured["user"]
@@ -182,6 +197,7 @@ def test_client_cannot_inject_authoritative_context(monkeypatch, client, student
     captured = _capture_complete(monkeypatch)
     h = auth_headers("aisha@student.edu")
     gap = _first_gap(client, student_id)
+    _prime(client, student_id, h)
     r = _tutor(client, student_id, h, {
         "page": "learning",
         "skill_id": gap["skill_id"],
@@ -214,6 +230,7 @@ def test_tutor_context_uses_latest_assessment_evidence(monkeypatch, client, stud
 
     captured = _capture_complete(monkeypatch)
     h = auth_headers("aisha@student.edu")
+    _prime(client, student_id, h)
     r = _tutor(client, student_id, h, {"page": "learning", "skill_id": gap["skill_id"]})
     assert r.status_code == 200
     assert "Latest assessment" in captured["user"]
@@ -239,6 +256,7 @@ def test_jobs_context_uses_backend_match(monkeypatch, client, student_id, auth_h
             "location": "London", "url": "https://example.com/jr-ai",
             "match_pct": 87, "match_reason": "Python + ML match",
         }]})
+    _prime(client, student_id, h)
     r = _tutor(client, student_id, h, {"page": "jobs", "job_title": "Junior AI Engineer",
                                        "job_url": "https://example.com/jr-ai"})
     assert r.status_code == 200
@@ -252,6 +270,7 @@ def test_career_roadmap_context_has_phases(client, student_id, auth_headers, mon
     h = auth_headers("aisha@student.edu")
     roadmap = client.get(f"/api/students/{student_id}/career-roadmap", headers=h)
     assert roadmap.status_code == 200
+    _prime(client, student_id, h)
     r = _tutor(client, student_id, h, {"page": "career_roadmap"})
     assert r.status_code == 200
     assert "Career roadmap" in captured["user"]
@@ -261,6 +280,7 @@ def test_career_roadmap_context_has_phases(client, student_id, auth_headers, mon
 def test_mock_interview_page_context(client, student_id, auth_headers, monkeypatch):
     captured = _capture_complete(monkeypatch)
     h = auth_headers("aisha@student.edu")
+    _prime(client, student_id, h)
     r = _tutor(client, student_id, h, {"page": "mock_interview"})
     assert r.status_code == 200
     assert "mock interview" in captured["user"]

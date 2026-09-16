@@ -23,6 +23,24 @@ function browserWindow(): BrowserSpeechWindow | null {
   return typeof window === 'undefined' ? null : (window as BrowserSpeechWindow)
 }
 
+/** Last explicitly selected Live speech language, persisted locally so an Auto
+ *  chat preference re-opens Live in the user's last choice. */
+const LIVE_LANG_KEY = 'sb_live_lang'
+
+/** Resolve the EXPLICIT Live speech language at the moment Live opens.
+ *  An already-explicit chat preference (English / Arabic) decides directly; an
+ *  Auto chat preference is never silently treated as English — the last
+ *  explicitly selected Live language is reused when one is saved locally, else a
+ *  clear deterministic default (English) with the visible EN | عربي control. */
+export function resolveInitialLiveLang(pref: string): 'en' | 'ar' {
+  if (pref === 'ar') return 'ar'
+  if (pref === 'en') return 'en'
+  try {
+    if (typeof window !== 'undefined' && window.localStorage.getItem(LIVE_LANG_KEY) === 'ar') return 'ar'
+  } catch { /* storage unavailable */ }
+  return 'en'
+}
+
 function buildRecognitionAdapter(win: BrowserSpeechWindow, supported: boolean): SpeechRecognitionAdapter {
   const Recognition = win.SpeechRecognition || win.webkitSpeechRecognition
   const secureEnough = () =>
@@ -54,6 +72,10 @@ function buildRecognitionAdapter(win: BrowserSpeechWindow, supported: boolean): 
       rec.onstart = () => { entry.cancelled = false }
       rec.onresult = (event: any) => {
         if (entry.cancelled) return
+        // The interrupt recognizer must NEVER self-trigger from a plain final
+        // (room noise / speaker echo of the mentor): only a real VAD
+        // onSpeechStart below may barge in. Secondary results stay inert.
+        if (opts.mode !== 'primary') return
         let finalText = ''
         if (event && event.results) {
           for (let i = event.resultIndex || 0; i < event.results.length; i += 1) {
@@ -63,8 +85,7 @@ function buildRecognitionAdapter(win: BrowserSpeechWindow, supported: boolean): 
         }
         const text = finalText.trim()
         if (!text) return
-        if (opts.mode === 'primary') opts.onFinal?.(text)
-        else opts.onSpeechStart?.()
+        opts.onFinal?.(text)
       }
       rec.onspeechstart = () => { if (!entry.cancelled) opts.onSpeechStart?.() }
       rec.onerror = () => { if (!entry.cancelled) opts.onError?.() }
@@ -77,13 +98,21 @@ function buildRecognitionAdapter(win: BrowserSpeechWindow, supported: boolean): 
 export interface UseVoiceSessionOptions {
   studentId: number
   tutor: string
-  /** Resolved conversation language ('en' | 'ar') — selects the recognizer lang. */
+  /** The explicit Live speech language ('en' | 'ar'). Live Voice has NO Auto
+   *  mode: the user picks English or Arabic, and this fixes the recognizer
+   *  locale for the whole session. Mid-session switches go through
+   *  `api.setLanguage` (never recreates the session). */
   language: 'en' | 'ar'
   recognitionSupported: boolean
-  /** Abortable api.tutorSendAbortable wrapper; must resolve the reply text. */
-  send: (text: string, signal: AbortSignal) => Promise<string>
+  /** Abortable api.tutorSendAbortable wrapper; must resolve the reply text.
+   *  `opts.language` = the explicit Live language to send ('en' | 'ar'). */
+  send: (text: string, signal: AbortSignal, opts?: { language?: 'en' | 'ar' }) => Promise<string>
   onAssistantReply?: (text: string) => void
   onUserMessage?: (text: string) => void
+  onTrace?: (stage: string, meta?: Record<string, unknown>) => void
+  /** Persists the last chosen Live speech language locally (localStorage) so an
+   *  Auto chat preference re-opens Live in the last-used language. */
+  onLiveLanguageChange?: (lang: 'en' | 'ar') => void
 }
 
 export interface VoiceSessionApi {
@@ -93,6 +122,12 @@ export interface VoiceSessionApi {
   transcript: VoiceTranscriptItem[]
   supported: boolean
   replaying: boolean
+  /** The explicit Live speech language ('en' | 'ar'). */
+  language: 'en' | 'ar'
+  /** Switch the Live speech language mid-session (EN | عربي). Safe: hushes the
+   *  current recognizer, applies after playback when the mentor is speaking,
+   *  and never recreates the session. */
+  setLanguage(lang: 'en' | 'ar'): void
   open(): void
   close(): void
   start(): void
@@ -106,12 +141,13 @@ export function useVoiceSession(opts: UseVoiceSessionOptions): VoiceSessionApi {
   const [state, setState] = useState<VoiceState>('idle')
   const [errorState, setErrorState] = useState<{ kind: VoiceErrorKind; message: string } | null>(null)
   const [transcript, setTranscript] = useState<VoiceTranscriptItem[]>([])
+  const [detectedLang, setDetectedLang] = useState<'en' | 'ar'>(opts.language === 'ar' ? 'ar' : 'en')
 
   const sessionRef = useRef<VoiceSession | null>(null)
   const optsRef = useRef(opts)
   optsRef.current = opts
-  const callbacksRef = useRef({ onAssistantReply: opts.onAssistantReply, onUserMessage: opts.onUserMessage })
-  callbacksRef.current = { onAssistantReply: opts.onAssistantReply, onUserMessage: opts.onUserMessage }
+  const callbacksRef = useRef({ onAssistantReply: opts.onAssistantReply, onUserMessage: opts.onUserMessage, onTrace: opts.onTrace })
+  callbacksRef.current = { onAssistantReply: opts.onAssistantReply, onUserMessage: opts.onUserMessage, onTrace: opts.onTrace }
 
   const player = useTTSPlayer(opts.studentId, opts.tutor)
 
@@ -122,12 +158,25 @@ export function useVoiceSession(opts: UseVoiceSessionOptions): VoiceSessionApi {
     const adapters: VoiceSessionAdapters = {
       recognition: buildRecognitionAdapter(win, opts.recognitionSupported),
       tts: player.adapter,
-      send: (text, signal) => optsRef.current.send(text, signal),
+      send: (text, signal, sessionOpts) => optsRef.current.send(text, signal, sessionOpts),
       schedule: (cb, ms) => window.setTimeout(cb, ms),
       cancelSchedule: (id) => window.clearTimeout(id),
     }
     const session = new VoiceSession(adapters, {
       language: opts.language,
+      // Phase 4B.1 Live: after the mentor's reply finishes playing, return to
+      // listening automatically — the user never restarts the mic per turn.
+      resumeAfterPlaybackEnd: true,
+      resumeDelayMs: 150,
+      // Explicit Live language: surface every change (initial + switch) so
+      // VoiceMode mirrors direction + captions live.
+      onLanguageDetected: (lang) => setDetectedLang(lang),
+      // Developer diagnostics: every Live-pipeline stage is logged with the
+      // mentor + safe meta. NEVER logs transcripts or secrets.
+      onTrace: (stage, meta) => {
+        console.info('[voice-live]', stage, { mentor: opts.tutor, lang: opts.language, ...meta })
+        callbacksRef.current.onTrace?.(stage, meta)
+      },
       onState: (s) => setState(s),
       onTranscript: (item) => {
         setTranscript((prev) => [...prev, item])
@@ -172,6 +221,20 @@ export function useVoiceSession(opts: UseVoiceSessionOptions): VoiceSessionApi {
     sessionRef.current?.interrupt()
   }, [])
 
+  /** Switch the Live speech language mid-session. The engine applies it safely
+   *  (immediately while listening/idle, after playback when speaking); the UI
+   *  language updates right away either way, and the last choice is persisted
+   *  locally so an Auto chat preference re-opens Live in this language. */
+  const setLanguage = useCallback((lang: 'en' | 'ar') => {
+    const next = lang === 'ar' ? 'ar' : 'en'
+    setDetectedLang(next)
+    sessionRef.current?.setLanguage(next)
+    try {
+      if (typeof window !== 'undefined') window.localStorage.setItem(LIVE_LANG_KEY, next)
+    } catch { /* storage unavailable — in-memory state still works */ }
+    optsRef.current.onLiveLanguageChange?.(next)
+  }, [])
+
   const replay = useCallback(
     (text: string) => player.replay(text),
     [player],
@@ -188,6 +251,8 @@ export function useVoiceSession(opts: UseVoiceSessionOptions): VoiceSessionApi {
     transcript,
     supported: opts.recognitionSupported,
     replaying: player.replaying,
+    language: detectedLang,
+    setLanguage,
     open,
     close,
     start,
