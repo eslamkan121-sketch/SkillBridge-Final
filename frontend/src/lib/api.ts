@@ -182,6 +182,8 @@ export const api = {
     req<DiagnosticResult>(`/api/students/${studentId}/learning/${skillId}/diagnostic/submit`, { method: 'POST', body: JSON.stringify(body) }),
   latestDiagnostic: (studentId: number, skillId: number) =>
     req<DiagnosticResult>(`/api/students/${studentId}/learning/${skillId}/diagnostic/latest`),
+  learningAgentNext: (studentId: number, skillId: number) =>
+    req<import('./types').LearningAgentDecision>(`/api/students/${studentId}/learning/${skillId}/orchestrator/next`),
 
   personalizedPath: (studentId: number, skillId: number) =>
     req<PersonalizedPathResponse>(`/api/students/${studentId}/learning/${skillId}/personalized-path`),

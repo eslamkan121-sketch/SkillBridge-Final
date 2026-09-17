@@ -2294,6 +2294,20 @@ def get_latest_diagnostic(student_id, skill_id):
             (student_id, skill_id)).fetchone())
 
 
+def get_latest_completed_diagnostic(student_id, skill_id):
+    """The most recent COMPLETED diagnostic for a (student, skill).
+
+    Only a completed diagnostic defines a topic-level result a personalized path
+    may belong to, so path-currency is judged against this, never against an
+    abandoned in-progress row."""
+    with get_cursor() as c:
+        return _row(c.execute(
+            """SELECT * FROM learning_diagnostics
+               WHERE student_id=? AND skill_id=? AND completed_at IS NOT NULL
+               ORDER BY id DESC LIMIT 1""",
+            (student_id, skill_id)).fetchone())
+
+
 def list_diagnostics(student_id, skill_id=None, completed_only=True):
     sql = "SELECT * FROM learning_diagnostics WHERE student_id=?"
     args = [student_id]
@@ -2403,6 +2417,7 @@ def _path_dict(d):
     for row in all_rows:
         key = row.get("id") or row.get("competency") or row.get("stage")
         row["state"] = "done" if key in progress else (row.get("state") or "not_started")
+    latest_diag = get_latest_completed_diagnostic(d["student_id"], d["skill_id"])
     return {
         "id": d["id"],
         "student_id": d["student_id"],
@@ -2414,6 +2429,13 @@ def _path_dict(d):
         "skipped_mastered": _json_loads(d.get("skipped_mastered")) or [],
         "progress": progress,
         "created_at": d.get("created_at"),
+        # Path-currency rule: a path belongs to the diagnostic it was built from.
+        # When a NEWER completed diagnostic exists for the same skill, the path is
+        # stale and must be regenerated (or explicitly refreshed) before it is
+        # taught again. Exposed so the UI can offer the explicit recovery action.
+        "latest_diagnostic_id": latest_diag["id"] if latest_diag else d["diagnostic_id"],
+        "stale": bool(latest_diag and d.get("diagnostic_id") is not None
+                      and latest_diag["id"] != d["diagnostic_id"]),
     }
 
 

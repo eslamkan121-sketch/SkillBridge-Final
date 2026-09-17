@@ -23,7 +23,7 @@ student progress.
 import hashlib
 import re
 
-BLUEPRINT_VERSION = "skill-blueprint-v1"
+BLUEPRINT_VERSION = "skill-blueprint-v2"
 
 # Bump DERIVED_VERSION when the derivation logic, prompt, or validation rules
 # change.  Old cached entries keyed under a prior version are ignored.
@@ -37,6 +37,14 @@ _DEFAULT_COMPETENCIES = 5
 # ------------------------------------------------------------------ TRUSTED
 
 BLUEPRINT = {
+    # Phase 1 curated vertical slice. Do not ask an LLM to extend this graph.
+    "python": {
+        # Curated sequence: Error Handling depends on callable functions, so a
+        # weak Error Handling score must never move ahead of Functions.
+        "Beginner": ["Python Functions", "Python Error Handling"],
+        "Intermediate": [],
+        "Advanced": [],
+    },
     "docker": {
         "Beginner": ["Containers", "Images", "Basic commands"],
         "Intermediate": ["Dockerfile", "Ports", "Volumes", "Networking"],

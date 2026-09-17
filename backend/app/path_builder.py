@@ -12,6 +12,7 @@ Rules (see requirements):
 """
 from . import diagnostics as dx
 from . import skill_blueprint as sb
+from . import knowledge_base
 
 # centralized constants (no magic numbers scattered)
 ESTIMATED_MINUTES = {"learn": 30, "review": 20, "milestone": 20}
@@ -52,6 +53,24 @@ def build_personalized_path(skill, diagnostic, required_level=None):
 
     blueprint_order = _blueprint_order(skill.get("name") or "")
 
+    # Only a declared trusted prerequisite may override the usual weak-before-
+    # developing priority. This avoids inventing graph edges for other topics.
+    topic_labels = {str(t.get("label") or "").strip().lower() for t in topics}
+    topic_labels.update(str(t.get("competency") or "").replace("_", " ").strip().lower() for t in topics)
+    prerequisite_rank = {}
+    for t in topics:
+        label = str(t.get("label") or "").strip()
+        curated = knowledge_base.complete_lesson(skill.get("name"), label.replace("_", " "))
+        canonical_name = (curated or {}).get("competency") or label
+        prereqs = knowledge_base.prerequisites_for(skill.get("name"), canonical_name)
+        def has_prerequisite_topic(prerequisite):
+            wanted = str(prerequisite or "").strip().lower()
+            wanted_short = wanted.removeprefix("python ")
+            return any(name == wanted or name.removeprefix("python ") == wanted_short for name in topic_labels)
+        if any(has_prerequisite_topic(p.get("competency")) for p in prereqs):
+            # The curated name, not a legacy display label, is the stable graph id.
+            prerequisite_rank[label.lower()] = blueprint_order.get(canonical_name.lower(), 1)
+
     selected = []
     skipped = []
     for t in topics:
@@ -70,8 +89,9 @@ def build_personalized_path(skill, diagnostic, required_level=None):
             "status": status,
             "score": score,
             "action": action,
-            # status first, then prerequisite/blueprint order, then lower score first
-            "sort_key": (STATUS_RANK.get(status, 2), b_order, score),
+            # A declared prerequisite comes first; otherwise retain the
+            # established weak-before-developing ordering.
+            "sort_key": (prerequisite_rank.get(label.strip().lower(), 0), STATUS_RANK.get(status, 2), b_order, score),
         })
 
     selected.sort(key=lambda r: r["sort_key"])

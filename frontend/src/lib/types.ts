@@ -967,6 +967,8 @@ export interface PersonalizedPath {
   skipped_mastered: string[]
   progress: string[]
   created_at: string
+  latest_diagnostic_id?: number | null
+  stale?: boolean | null
 }
 
 export type PersonalizedPathResponse = PersonalizedPath | { diagnostic_required: true; path: null }
@@ -996,6 +998,7 @@ export interface LessonQuestion {
   explanation?: string
   competency?: string
   difficulty?: string
+  misconception_hint?: string
 }
 
 export interface LessonGroundingSource {
@@ -1033,6 +1036,15 @@ export interface LessonPractice {
   response_type?: string
   competency?: string
   questions?: LessonQuestion[]
+  starter_code?: string
+  automated_tests?: { input: unknown[]; expected: unknown }[]
+}
+
+export interface CanonicalLessonMetadata {
+  source: string
+  version: string
+  prerequisites: { competency: string; relationship: string; why: string }[]
+  roadmap_rationale: string
 }
 
 export interface LessonContent {
@@ -1041,7 +1053,14 @@ export interface LessonContent {
   practice: LessonPractice
   resources?: LearningResource[] | null
   mini_check: { questions: LessonQuestion[] }
+  /** Reviewed display translations; scoring still uses the canonical questions. */
+  locales?: Partial<Record<'ar', {
+    learn?: LessonSection
+    example?: LessonSection
+    practice?: LessonPractice
+  }>>
   self_check?: LessonSelfCheck
+  canonical?: CanonicalLessonMetadata
 }
 
 export interface MiniCheckResult {
@@ -1070,6 +1089,7 @@ export interface PracticeTask {
   source_attempt_id: number | null
   type: string
   questions: PracticeTaskQuestion[]
+  static_check?: { status: 'looks_structurally_sound' | 'needs_fix'; checks: string[]; note: string } | null
 }
 
 export interface RemediationReview {
@@ -1120,6 +1140,16 @@ export interface Lesson {
   mini_check_result: MiniCheckResult | null
   created_at: string
   completed_at: string | null
+}
+
+export type LearningAgentActionType = 'EXPLAIN' | 'PRACTICE' | 'GIVE_HINT' | 'REVIEW_PREREQUISITE' | 'MINI_CHECK' | 'ADVANCE' | 'REQUEST_REASSESSMENT'
+export interface LearningAgentDecision {
+  action_type: LearningAgentActionType
+  topic_id: string | null
+  objective: string
+  evidence: { kind: string; detail: string }[]
+  decision_reason: string
+  next_step: string
 }
 
 // ------------------------------------------------------------------ global AI copilot context

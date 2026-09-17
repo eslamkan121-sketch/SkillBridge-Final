@@ -70,7 +70,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse, JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import models, matching, genai, integrity, seed, auth as auth_mod, mailer, activity, jobs, career_roadmap, diagnostics, path_builder, lessons, coverage, skill_blueprint, tts, copilot, escoe, practice, recommendations, scenarios, esco_import, role_mapping, match_explain, tutor_memory
+from . import models, matching, genai, integrity, seed, auth as auth_mod, mailer, activity, jobs, career_roadmap, diagnostics, path_builder, lessons, coverage, skill_blueprint, tts, copilot, escoe, practice, recommendations, scenarios, esco_import, role_mapping, match_explain, tutor_memory, learning_orchestrator
 from .resources import _CHECK_CACHE, annotate_resources
 from .database import init_db, get_cursor, applied_migrations
 
@@ -2472,6 +2472,17 @@ def api_latest_diagnostic(student_id: int, skill_id: int, request: Request):
     return models.public_diagnostic(diag)
 
 
+@app.get("/api/students/{student_id}/learning/{skill_id}/orchestrator/next")
+def api_learning_orchestrator_next(student_id: int, skill_id: int, request: Request):
+    """Observe persisted learning state and return the guarded next agent action."""
+    user = _current_user(request)
+    _own_diagnostic(user, student_id)
+    skill = models.get_skill(skill_id)
+    if not skill:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    return learning_orchestrator.observe_and_decide(student_id, skill)
+
+
 # ---------------------------------------------------------------- personalized learning path
 
 def _path_required_level(student, role, skill_id):
@@ -2755,6 +2766,9 @@ def api_submit_practice(student_id: int, skill_id: int, competency: str,
     student = models.get_student(student_id)
     previous_attempts = models.list_practice_attempts(student_id, lesson["id"], limit=3)
     practice_task = _practice_task_for_submission(student_id, lesson, body)
+    static_check = practice.python_functions_static_check(lesson, answer)
+    if static_check:
+        practice_task = {**practice_task, "static_check": static_check}
     context = practice.build_evaluation_context(
         student=student,
         skill=skill,

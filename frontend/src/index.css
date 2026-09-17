@@ -996,6 +996,9 @@ textarea.free-text:focus { outline: 2px solid var(--sb-indigo); outline-offset: 
 .chip-btn { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--slate-200); background: var(--white); color: var(--slate-700); cursor: pointer; }
 .chip-btn:hover { border-color: var(--sb-indigo); color: var(--sb-indigo-dark); }
 .chip-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.lesson-language-control { display: flex; gap: 6px; justify-content: flex-end; margin-bottom: 8px; }
+.lesson-language-control .active { border-color: var(--sb-indigo); color: var(--sb-indigo-dark); background: var(--slate-50); }
+.lesson-view[dir="rtl"] pre, .lesson-view[dir="rtl"] code, .lesson-view[dir="rtl"] .lesson-example-content { direction: ltr; text-align: left; unicode-bidi: plaintext; }
 .chip-share-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
 
 /* ------------------------------------------------------------------ Learning progress */
@@ -2707,6 +2710,11 @@ textarea.free-text:focus { outline: 2px solid var(--sb-indigo); outline-offset: 
 .pp-required-level { color: var(--sb-indigo-dark); border-color: var(--sb-indigo); background: var(--sb-indigo-soft); cursor: default; }
 .pp-create-call { margin-top: 10px; }
 .pp-create-call .btn { display: inline-flex; align-items: center; gap: 7px; margin-top: 6px; }
+.pp-stale-call {
+  margin-top: 12px; padding: 12px 14px; border: 1px solid var(--sb-amber, #d97706);
+  border-radius: var(--radius-sm); background: rgba(217, 119, 6, 0.08);
+}
+.pp-stale-call .btn { display: inline-flex; align-items: center; gap: 7px; margin-top: 6px; }
 .pp-progress-summary {
   margin-top: 12px; padding: 12px 14px; border: 1px solid var(--slate-200);
   border-radius: var(--radius-sm); background: var(--slate-50);

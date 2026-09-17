@@ -24,8 +24,8 @@ ok(/import \{ humanizeTopicLabel \} from '\.\.\/lib\/topicLabels'/.test(learning
    'LearningPage: imports the shared label helper (no ad-hoc per-site replacements)')
 ok(/import \{ humanizeTopicLabel \} from '\.\.\/lib\/topicLabels'/.test(learnComp),
    'learning.tsx: ContinueLearningCard uses the shared label helper')
-ok((learning.match(/humanizeTopicLabel\(/g) || []).length >= 7,
-   'LearningPage: helper applied at breadcrumb, discuss, path items, stages, coverage, mastered chips')
+ok((learning.match(/humanizeTopicLabel\(/g) || []).length >= 6,
+   'LearningPage: helper applied at breadcrumb, path items, stages, coverage, mastered chips')
 ok(/lesson-breadcrumb">\{skillName\} &gt; \{humanizeTopicLabel\(competency\)\}/.test(learning),
    'LearningPage: breadcrumb renders the humanized competency label')
 ok(/plan-comp-name">\{humanizeTopicLabel\(slug\)\}/.test(learning),
@@ -89,6 +89,12 @@ ok(/pp-action-available \{/.test(css) && /\.pp-stage-final/.test(css),
    'index.css: final-assessment "available" chip + stage styling exist')
 ok(/lockState = isDone \? 'done' : 'locked'/.test(learning) && /pp-action-locked/.test(css),
    'LearningPage: only the (non-final) Practical Challenge stage stays LOCKED')
+
+// ---- 6. stale-path recovery: refreshed from the latest diagnostic, never taught silently
+ok(/path\.stale &&/.test(learning) && /pp-stale-call/.test(learning) && /Refresh path from latest diagnostic/.test(learning),
+   'LearningPage: a stale path renders an explicit recovery action (refresh from the latest diagnostic)')
+ok(/pp-stale-call \{/.test(css),
+   'index.css: stale-path callout styling is defined')
 
 if (problems.length) {
   console.error('Learning Polish contract violations:')

@@ -4,8 +4,8 @@ import { useApp } from '../AppContext'
 import { api } from '../lib/api'
 import { humanizeTopicLabel } from '../lib/topicLabels'
 import type { ActivitySummary, Analysis, CareerRoadmap, DiagnosticQuestion, DiagnosticResult, 
-GeneratedDiagnostic, FinalAssessmentStatus, LearningItem, LearningResource, Lesson, LessonPractice, PersonalizedPath, PersonalizedPathItem, PersonalizedPathResponse, PracticeAttempt, ScenarioLibrary, ScenarioCard, SkillGap, 
-TopicResult } from '../lib/types'
+GeneratedDiagnostic, FinalAssessmentStatus, LearningItem, LearningResource, Lesson, LessonContent, LessonPractice, PersonalizedPath, PersonalizedPathItem, PersonalizedPathResponse, PracticeAttempt, ScenarioLibrary, ScenarioCard, SkillGap,
+TopicResult, LearningAgentDecision, Student } from '../lib/types'
 import {
   CareerProgress,
   ContinueLearningCard,
@@ -65,6 +65,8 @@ function categoryToneFor(category: string) {
   return 'slate'
 }
 
+type LearningSkill = SkillGap & { profileSource?: 'claimed' | 'verified' }
+
 export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed, backTo }: {
   onNavigate?: (section: string, focus?: { skillId: number; roleTitle: string }) => void
   initialFocus?: { skillId: number; roleTitle: string } | null
@@ -74,6 +76,7 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
   const { me, applyCopilot } = useApp()
   const studentId = me?.student?.id ?? 0
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
+  const [studentProfile, setStudentProfile] = useState<Student | null>(me?.student ?? null)
   const [items, setItems] = useState<LearningItem[]>([])
   const [selectedSkillId, setSelectedSkillId] = useState<number | null>(null)
   const [pathsBySkill, setPathsBySkill] = useState<Record<number, PersonalizedPath | null>>({})
@@ -120,7 +123,9 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
 
   const load = async () => {
     setLoadError('')
-    const [aResult, lResult] = await Promise.allSettled([api.analysis(studentId), api.learning(studentId)])
+    const [aResult, lResult, studentResult] = await Promise.allSettled([
+      api.analysis(studentId), api.learning(studentId), api.student(studentId),
+    ])
     if (aResult.status === 'fulfilled') setAnalysis(aResult.value)
     else {
       setAnalysis(null)
@@ -131,6 +136,8 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
       setItems([])
       setLoadError((prev) => prev || lResult.reason?.message || 'Learning content is not available yet.')
     }
+    if (studentResult.status === 'fulfilled') setStudentProfile(studentResult.value)
+    else setStudentProfile(me?.student ?? null)
   }
 
   useEffect(() => { if (studentId) void load() }, [studentId])
@@ -147,14 +154,49 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
   const itemBySkill = useMemo(() => new Map(items.map((item) => [item.skill_id, item])), [items])
   const allGaps = analysis?.skill_gaps || []
   const openGaps = allGaps.filter((gap) => gap.status !== 'strong')
-  const openGapSkillKey = openGaps.map((gap) => gap.skill_id).join(',')
+  const profileSkills = useMemo<LearningSkill[]>(() => {
+    const byId = new Map<number, LearningSkill>()
+    for (const skill of studentProfile?.self_reported_skills ?? []) {
+      byId.set(skill.skill_id, {
+        skill_id: skill.skill_id,
+        skill_name: skill.name,
+        category: skill.category,
+        required_level: 'Profile evidence',
+        student_level: skill.level || null,
+        status: 'gap',
+        verified: false,
+        profileSource: 'claimed',
+      })
+    }
+    // A verified record wins if the same skill also appears as a CV/profile claim.
+    for (const skill of studentProfile?.verified_skills ?? []) {
+      byId.set(skill.skill_id, {
+        skill_id: skill.skill_id,
+        skill_name: skill.name,
+        category: skill.category,
+        required_level: 'Profile evidence',
+        student_level: skill.level || null,
+        status: 'strong',
+        verified: true,
+        profileSource: 'verified',
+      })
+    }
+    return [...byId.values()].sort((a, b) => a.skill_name.localeCompare(b.skill_name))
+  }, [studentProfile])
+  const learningSkills = useMemo<LearningSkill[]>(() => {
+    const byId = new Map<number, LearningSkill>()
+    for (const gap of openGaps) byId.set(gap.skill_id, gap)
+    for (const skill of profileSkills) if (!byId.has(skill.skill_id)) byId.set(skill.skill_id, skill)
+    return [...byId.values()]
+  }, [openGaps, profileSkills])
+  const learningSkillKey = learningSkills.map((skill) => skill.skill_id).sort((a, b) => a - b).join(',')
   const knownPaths = Object.values(pathsBySkill).filter((path): path is PersonalizedPath => !!path)
   const doneTopics = knownPaths.reduce((sum, path) => sum + topicProgressFor(path).done, 0)
   const totalTopics = knownPaths.reduce((sum, path) => sum + topicProgressFor(path).total, 0)
 
   useEffect(() => {
     let alive = true
-    const ids = openGaps.map((gap) => gap.skill_id)
+    const ids = learningSkills.map((skill) => skill.skill_id)
     if (!studentId || !ids.length) {
       setPathsBySkill({})
       return () => { alive = false }
@@ -171,47 +213,40 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
       setPathsBySkill(Object.fromEntries(entries))
     })
     return () => { alive = false }
-  }, [studentId, openGapSkillKey])
+  }, [studentId, learningSkillKey])
 
-  const continueGaps = openGaps.filter((gap) => {
-    const path = pathsBySkill[gap.skill_id]
+  const continueSkills = learningSkills.filter((skill) => {
+    const path = pathsBySkill[skill.skill_id]
     const progress = topicProgressFor(path)
     return !!path && progress.hasTopics && !progress.complete
   })
-  const completedLearningCount = openGaps.filter((gap) => {
-    const path = pathsBySkill[gap.skill_id]
+  const completedLearningSkills = learningSkills.filter((skill) => {
+    const path = pathsBySkill[skill.skill_id]
     const progress = topicProgressFor(path)
     return !!path && progress.hasTopics && progress.complete
-  }).length
-  const inProgressCount = openGaps.filter((gap) => {
-    const path = pathsBySkill[gap.skill_id]
+  })
+  const completedLearningCount = completedLearningSkills.length
+  const inProgressCount = learningSkills.filter((skill) => {
+    const path = pathsBySkill[skill.skill_id]
     const progress = topicProgressFor(path)
     return !!path && progress.hasTopics && progress.done > 0 && !progress.complete
   }).length
-  const completedCount = allGaps.filter((gap) => gap.status === 'strong').length + completedLearningCount
+  const completedCount = completedLearningCount
   const notStartedCount = openGaps.length - inProgressCount - completedLearningCount
 
   const tabCounts: Record<LearningTab, number> = {
     'for-you': openGaps.length,
-    'my-skills': allGaps.length,
-    continue: continueGaps.length,
+    'my-skills': profileSkills.length,
+    continue: continueSkills.length,
     completed: completedCount,
   }
 
-  const skillsForTab = useMemo(() => {
-    if (activeTab === 'my-skills') return allGaps
-    if (activeTab === 'continue') {
-      const ids = new Set(continueGaps.map((gap) => gap.skill_id))
-      return openGaps.filter((gap) => ids.has(gap.skill_id))
-    }
-    if (activeTab === 'completed') {
-      return allGaps.filter((gap) => {
-        const progress = topicProgressFor(pathsBySkill[gap.skill_id])
-        return gap.status === 'strong' || (!!pathsBySkill[gap.skill_id] && progress.complete)
-      })
-    }
+  const skillsForTab = useMemo<LearningSkill[]>(() => {
+    if (activeTab === 'my-skills') return profileSkills
+    if (activeTab === 'continue') return continueSkills
+    if (activeTab === 'completed') return completedLearningSkills
     return openGaps
-  }, [activeTab, allGaps, openGaps, continueGaps, pathsBySkill])
+  }, [activeTab, profileSkills, continueSkills, completedLearningSkills, openGaps])
 
   const filteredSkills = skillsForTab.filter((gap) => {
     const q = query.trim().toLowerCase()
@@ -224,17 +259,26 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
     )
   })
 
+  const allVisibleSkills = useMemo(() => {
+    const byId = new Map<number, LearningSkill>()
+    for (const gap of allGaps) byId.set(gap.skill_id, gap)
+    for (const skill of profileSkills) if (!byId.has(skill.skill_id)) byId.set(skill.skill_id, skill)
+    return [...byId.values()]
+  }, [allGaps, profileSkills])
+
   useEffect(() => {
     // A deep link from Skills & Roles wins over the automatic first-gap select.
     if (focusInfo) return
-    const preferred = openGaps[0] || allGaps[0]
+    const preferred = openGaps[0] || profileSkills[0] || allGaps[0]
     if (!preferred) return
-    if (!selectedSkillId || !allGaps.some((gap) => gap.skill_id === selectedSkillId)) {
+    if (!selectedSkillId || !allVisibleSkills.some((gap) => gap.skill_id === selectedSkillId)) {
       setSelectedSkillId(preferred.skill_id)
     }
-  }, [analysis?.role_id, allGaps.length, openGaps.length, selectedSkillId, focusInfo])
+  }, [analysis?.role_id, allVisibleSkills, allGaps.length, openGaps.length, profileSkills, selectedSkillId, focusInfo])
 
-  const selectedGap = allGaps.find((gap) => gap.skill_id === selectedSkillId) || filteredSkills[0] || openGaps[0] || allGaps[0]
+  const selectedGap = skillsForTab.find((gap) => gap.skill_id === selectedSkillId)
+    || allVisibleSkills.find((gap) => gap.skill_id === selectedSkillId)
+    || filteredSkills[0] || openGaps[0] || profileSkills[0] || allGaps[0]
 
   // Phase 5: for the currently focused skill, surface the role-specific
   // practice scenarios written for it (matched by skill name on the cards).
@@ -303,7 +347,7 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
   const studyGoalPct = plannedMinutes > 0 ? Math.min(100, Math.round((plannedMinutes / STUDY_GOAL_MINUTES) * 100)) : 0
   const streakGoalPct = activity ? Math.min(100, Math.round((activity.streak_days / STREAK_GOAL_DAYS) * 100)) : 0
 
-  const stepperRows = openGaps.map((gap) => {
+  const stepperRows = skillsForTab.map((gap) => {
     const path = pathsBySkill[gap.skill_id]
     const progress = topicProgressFor(path)
     const doneSet = new Set(path?.progress ?? [])
@@ -320,7 +364,7 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
   })
   const currentSkillId = stepperRows.find((r) => r.status !== 'done')?.gap.skill_id ?? null
 
-  const topicCategories = [...new Set(openGaps.map((g) => g.category).filter(Boolean))]
+  const topicCategories = [...new Set(skillsForTab.map((g) => g.category).filter(Boolean))]
   const visibleStepperRows = topicFilter === 'all' ? stepperRows : stepperRows.filter((r) => r.gap.category === topicFilter)
   const shownStepperRows = visibleStepperRows.slice(0, 8)
   const moreModulesCount = visibleStepperRows.length - shownStepperRows.length
@@ -345,8 +389,17 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
   }
   const goAssessments = () => onNavigate?.('assessments')
   const viewAllModules = () => {
-    setActiveTab('for-you')
+    selectLearningTab('for-you')
     document.getElementById('learning-home')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+  const selectLearningTab = (tab: LearningTab) => {
+    setActiveTab(tab)
+    setTopicFilter('all')
+    const nextSkills = tab === 'my-skills' ? profileSkills
+      : tab === 'continue' ? continueSkills
+        : tab === 'completed' ? completedLearningSkills
+          : openGaps
+    if (nextSkills[0]) setSelectedSkillId(nextSkills[0].skill_id)
   }
 
   if (!studentId) return <div className="empty">Log in as a student to view your learning path.</div>
@@ -356,6 +409,33 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
     analysis?.company ||
     me?.student?.target_role?.company_name ||
     (targetTitle ? 'Current target from your profile' : 'Choose one from Skills & Roles')
+  const tabCopy: Record<LearningTab, { title: string; subtitle: string; emptyTitle: string; emptyBody: string }> = {
+    'for-you': {
+      title: 'Your skill gaps',
+      subtitle: 'Target-role recommendations and gaps. Start a diagnostic to build a personalized path.',
+      emptyTitle: 'No target-role gaps',
+      emptyBody: 'Select a target role on Skills & Roles to see learning recommendations.',
+    },
+    'my-skills': {
+      title: 'My profile skills',
+      subtitle: 'Skills stored on your profile. Profile claims are not verified; only Final Assessment creates an officially verified skill.',
+      emptyTitle: 'No profile skills yet',
+      emptyBody: 'No skills are stored on this profile. Add them through your existing profile or CV flow.',
+    },
+    continue: {
+      title: 'Continue learning',
+      subtitle: 'Learning paths with unfinished persisted topics.',
+      emptyTitle: 'No learning path in progress',
+      emptyBody: 'Start a diagnostic from For You or My Skills to create a learning path.',
+    },
+    completed: {
+      title: 'Completed learning',
+      subtitle: 'Learning paths completed through their Mini Checks. Completion is separate from official skill verification.',
+      emptyTitle: 'No completed learning paths',
+      emptyBody: 'Complete every topic Mini Check in a path to see it here.',
+    },
+  }
+  const currentTabCopy = tabCopy[activeTab]
 
   return (
     <div className="learning-page">
@@ -427,7 +507,7 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
           onChange={setQuery}
           placeholder="Search a skill, topic, or ask AI Tutor..."
         />
-        <LearningTabs active={activeTab} counts={tabCounts} onChange={setActiveTab} />
+        <LearningTabs active={activeTab} counts={tabCounts} onChange={selectLearningTab} />
       </section>
 
       <section className="lp-stat-grid" aria-label="Learning stats">
@@ -492,9 +572,9 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
             <div>
               <div className="panel-title-row">
                 <span className="panel-title-icon"><IconTarget size={15} /></span>
-                <h3 className="panel-title">Your skill gaps</h3>
+              <h3 className="panel-title">{currentTabCopy.title}</h3>
               </div>
-              <p className="panel-subtitle">One row per skill gap. Start a diagnostic on a gap to build its personalized path, then complete every Mini Check to finish it.</p>
+              <p className="panel-subtitle">{currentTabCopy.subtitle}</p>
             </div>
             <select className="lp-filter" value={topicFilter} onChange={(e) => setTopicFilter(e.target.value)} aria-label="Filter path by topic category">
               <option value="all">All topics</option>
@@ -503,7 +583,7 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
           </div>
 
           {visibleStepperRows.length === 0 ? (
-            <EmptyLearningState title="No skill gaps yet" body="Select a target role on Skills & Roles to see your gaps and their personalized paths." />
+            <EmptyLearningState title={currentTabCopy.emptyTitle} body={currentTabCopy.emptyBody} />
           ) : (
             <>
               <ol className="path-list">
@@ -632,11 +712,11 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
         </aside>
       </div>
 
-      {continueGaps.length > 0 && (
+      {continueSkills.length > 0 && activeTab !== 'continue' && (
         <section className="learning-section">
-          <SectionTitle eyebrow="Continue Learning" title="Pick up where you left off" meta={`${continueGaps.length} active path${continueGaps.length === 1 ? '' : 's'}`} />
+          <SectionTitle eyebrow="Continue Learning" title="Pick up where you left off" meta={`${continueSkills.length} active path${continueSkills.length === 1 ? '' : 's'}`} />
           <div className="continue-grid">
-            {continueGaps.slice(0, 3).map((gap) => (
+            {continueSkills.slice(0, 3).map((gap) => (
               <ContinueLearningCard
                 key={gap.skill_id}
                 gap={gap}
@@ -651,8 +731,8 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
       <div className="learning-home-grid" id="learning-home">
         <section className="learning-section">
           <SectionTitle
-            eyebrow="Recommended Skills"
-            title={activeTab === 'my-skills' ? 'Skill map' : activeTab === 'continue' ? 'In-progress paths' : activeTab === 'completed' ? 'Completed skills' : 'Recommended for you'}
+            eyebrow={activeTab === 'my-skills' ? 'Profile skills' : activeTab === 'completed' ? 'Learning history' : activeTab === 'continue' ? 'Active paths' : 'Recommended skills'}
+            title={currentTabCopy.title}
             meta={`${filteredSkills.length} shown`}
           />
           {loadError && <div className="error learning-error">{loadError}</div>}
@@ -663,6 +743,7 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
                 gap={gap}
                 path={pathsBySkill[gap.skill_id]}
                 selected={selectedGap?.skill_id === gap.skill_id}
+                profileSource={gap.profileSource}
                 onSelect={() => setSelectedSkillId(gap.skill_id)}
                 onStart={() => startLearning(gap.skill_id)}
               />
@@ -670,8 +751,8 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
           </div>
           {filteredSkills.length === 0 && (
             <EmptyLearningState
-              title={query ? 'No skills match that search' : 'No learning items here yet'}
-              body={query ? 'Try another skill, category, or topic.' : 'Select a target role on Skills & Roles to unlock dynamic learning recommendations.'}
+              title={query ? 'No skills match that search' : currentTabCopy.emptyTitle}
+              body={query ? 'Try another skill, category, or topic.' : currentTabCopy.emptyBody}
             />
           )}
         </section>
@@ -718,7 +799,7 @@ export default function LearningPage({ onNavigate, initialFocus, onFocusConsumed
 
 function SkillDetailPanel({ studentId, gap, item, path, roleTitle, startSignal, focusSignal, onPathChange, onToggleStep, onCompetencyChange }: {
   studentId: number
-  gap: SkillGap
+  gap: LearningSkill
   item?: LearningItem
   path?: PersonalizedPath | null
   roleTitle?: string
@@ -735,7 +816,8 @@ function SkillDetailPanel({ studentId, gap, item, path, roleTitle, startSignal, 
         gap={gap}
         item={item}
         roleTitle={roleTitle}
-        topicProgress={topicProgressFor(path, gap.status === 'strong' ? 100 : 0)}
+        topicProgress={topicProgressFor(path, gap.profileSource === 'verified' || gap.status === 'strong' ? 100 : 0)}
+        profileSource={gap.profileSource}
       />
 
       <DiagnosticPanel studentId={studentId} skillId={gap.skill_id} skillName={gap.skill_name} startSignal={startSignal} onComplete={() => setDiagRefreshKey(k => k + 1)} />
@@ -1027,12 +1109,21 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
   const [practiceAttemptCount, setPracticeAttemptCount] = useState(0)
   const [practiceSubmitting, setPracticeSubmitting] = useState(false)
   const [practiceError, setPracticeError] = useState('')
+  const [agentDecision, setAgentDecision] = useState<LearningAgentDecision | null>(null)
+  const [agentError, setAgentError] = useState('')
+  const [retryKey, setRetryKey] = useState(0)
+  const [learningLanguage, setLearningLanguage] = useState<'en' | 'ar'>(() => localStorage.getItem('sb_learning_language') === 'ar' ? 'ar' : 'en')
   const practiceInputRef = useRef<HTMLTextAreaElement | null>(null)
+  const ar = learningLanguage === 'ar'
+
+  useEffect(() => { localStorage.setItem('sb_learning_language', learningLanguage) }, [learningLanguage])
 
   // A focus signal can re-target an already-open lesson (Practice scenarios
   // quick-action or Continue) without remounting — apply the requested tab.
   useEffect(() => {
-    setTab(initialTab)
+    // The unified journey keeps discussion optional in the global copilot;
+    // a legacy deep-link to it opens the understandable first step instead.
+    setTab(initialTab === 'discuss' ? 'learn' : initialTab)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialTab])
 
@@ -1055,11 +1146,7 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
       .catch((e) => { if (alive) setError(e?.message || 'Could not load lesson') })
       .finally(() => { if (alive) setLoading(false) })
     return () => { alive = false }
-  }, [studentId, skillId, competency])
-
-  useEffect(() => {
-    if (tab === 'discuss') window.dispatchEvent(new CustomEvent('copilot:focus'))
-  }, [tab])
+  }, [studentId, skillId, competency, retryKey])
 
   useEffect(() => {
     if (!lesson) return
@@ -1078,6 +1165,23 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
     return () => { alive = false }
   }, [lesson?.id, studentId, skillId, competency])
 
+  const refreshAgent = useCallback(() => {
+    setAgentError('')
+    api.learningAgentNext(studentId, skillId)
+      .then(setAgentDecision)
+      .catch((e: unknown) => {
+        // Keep network/parser detail available to developers without putting a
+        // technical (and potentially misleading) failure into the student UI.
+        console.error('[Learning agent recommendation]', e)
+        setAgentDecision(null)
+        setAgentError(ar
+          ? 'تعذر تحميل توصية التعلّم. حاول مرة أخرى.'
+          : 'Recommendation unavailable. Please retry.')
+      })
+  }, [studentId, skillId, ar])
+
+  useEffect(() => { if (lesson) refreshAgent() }, [lesson?.id, refreshAgent])
+
   const submitPractice = async (sourceAttemptId?: number | null) => {
     const answer = (sourceAttemptId ? followUpAnswer : practiceAnswer).trim()
     if (!lesson || !answer) return
@@ -1087,6 +1191,7 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
       const res = await api.lessonSubmitPractice(studentId, skillId, competency, answer, sourceAttemptId ?? null)
       setPracticeAttempt(res.attempt)
       setPracticeAttemptCount(res.attempts_count)
+      refreshAgent()
       if (sourceAttemptId) setFollowUpAnswer('')
       else setPracticeAnswer('')
     } catch (e: unknown) {
@@ -1113,6 +1218,7 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
       setResult(res.lesson.mini_check_result || { score: 0, passed: false, correct: 0, total: questions.length })
       setLesson(res.lesson)
       onStateChange?.(res.lesson.state)
+      refreshAgent()
       if (res.lesson.mini_check_result?.passed) onComplete()
     } catch (e: unknown) {
       setError((e as Error)?.message || 'Submission failed')
@@ -1127,8 +1233,10 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
     ? `You understand the basics, but your diagnostic identified gaps to close (${pathItem.topic_status}, ${diagnosticPct}%).`
     : `Your diagnostic showed this topic needs improvement (${pathItem.topic_status}, ${diagnosticPct}%).`
 
-  const tabs = ['learn', 'example', 'practice', 'discuss', 'mini_check'] as const
-  const tabLabels: Record<string, string> = { learn: 'Learn', example: 'Example', practice: 'Practice', discuss: 'Discuss with AI', mini_check: 'Mini Check' }
+  const tabs = ['learn', 'example', 'practice', 'mini_check'] as const
+  const tabLabels: Record<string, string> = ar
+    ? { learn: 'افهم', example: 'مثال', practice: 'تدريب', mini_check: 'تحقق سريع' }
+    : { learn: 'Understand', example: 'Example', practice: 'Practice', mini_check: 'Quick Check' }
 
   if (loading) {
     return (
@@ -1140,7 +1248,7 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
           </div>
         </div>
         <div className="lesson-nav">
-          {['Learn', 'Example', 'Practice', 'Discuss', 'Mini Check'].map((t) => (
+          {['Understand', 'Example', 'Practice', 'Mini Check'].map((t) => (
             <span key={t} className="skeleton" style={{ width: 74, height: 34, marginRight: 10, borderRadius: 6 }} />
           ))}
         </div>
@@ -1153,13 +1261,24 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
       </div>
     )
   }
-  if (error) return <div className="error learning-error">{error}<button className="btn-link" onClick={onClose}>Back to path</button></div>
+  if (error) return <div className="error learning-error">{error}<button className="btn-link" onClick={() => { setError(''); setRetryKey((key) => key + 1) }}>Retry</button><button className="btn-link" onClick={onClose}>Back to path</button></div>
   if (!lesson) return null
 
-  const content = lesson.content
+  // The canonical question set is deliberately retained: its answer values
+  // are what the persisted Mini Check evaluates. Reviewed Arabic display
+  // fields only replace the lesson, example, and task presentation.
+  const localizedContent = ar ? lesson.content.locales?.ar : undefined
+  const content: LessonContent = localizedContent
+    ? { ...lesson.content, ...localizedContent }
+    : lesson.content
   const recommendedResources = content.resources || []
-  const nextTab = () => { const idx = tabs.indexOf(tab); if (idx < tabs.length - 1) setTab(tabs[idx + 1]) }
+  const nextTab = () => {
+    const current = tab === 'discuss' ? 'learn' : tab
+    const idx = tabs.indexOf(current)
+    if (idx < tabs.length - 1) setTab(tabs[idx + 1])
+  }
   const practiceData = (content.practice ?? {}) as LessonPractice
+  const canonicalContent = content.canonical
   const practiceTitle = typeof practiceData.title === 'string' && practiceData.title.trim()
     ? practiceData.title
     : 'Practice task'
@@ -1182,11 +1301,24 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
   const followUpSourceAttemptId = latestRemediation?.practice_attempt_id ?? null
   const answeringFollowUp = !!latestRemediation
   const activePracticeAnswer = answeringFollowUp ? followUpAnswer : practiceAnswer
+  const agentActionArabic: Record<LearningAgentDecision['action_type'], string> = {
+    EXPLAIN: 'اقرأ الشرح والمثال أولاً.',
+    PRACTICE: 'نفّذ المهمة العملية ثم أرسل إجابتك للمراجعة.',
+    GIVE_HINT: 'استخدم التلميح المحدد ثم أعد المحاولة.',
+    REVIEW_PREREQUISITE: 'راجع المتطلب السابق المسجل ثم أعد المحاولة.',
+    MINI_CHECK: 'أكمل التحقق السريع عندما تكون مستعدًا.',
+    ADVANCE: 'انتقل إلى الخطوة التالية في المسار.',
+    REQUEST_REASSESSMENT: 'أكمل أو أعد التقييم التشخيصي أولاً.',
+  }
 
   return (
-    <div className="lesson-view">
+    <div className="lesson-view" dir={ar ? 'rtl' : 'ltr'}>
       <div className="lesson-header">
-        <button className="btn-link lesson-back" onClick={onClose}>&larr; Back to path</button>
+        <div className="lesson-language-control" aria-label="Learning language">
+          <button className={`chip-btn ${!ar ? 'active' : ''}`} onClick={() => setLearningLanguage('en')}>English</button>
+          <button className={`chip-btn ${ar ? 'active' : ''}`} onClick={() => setLearningLanguage('ar')}>العربية المصرية</button>
+        </div>
+        <button className="btn-link lesson-back" onClick={onClose}>&larr; {ar ? 'عرض المسار الكامل' : 'View full roadmap'}</button>
         <div className="lesson-title-row">
           <span className="lesson-breadcrumb">{skillName} &gt; {humanizeTopicLabel(competency)}</span>
           <span className={`chip-btn lesson-mode-chip lesson-mode-${lesson.action}`}>{lesson.action}</span>
@@ -1194,14 +1326,24 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
         <div className="lesson-reason">
           <span className="muted small">{reasonForLearning}</span>
         </div>
+        {agentDecision && (
+          <section className="lesson-quality-section" aria-label="Learning agent feedback">
+            <div className="lesson-quality-label">{ar ? 'الخطوة التالية:' : 'Next step:'} {agentDecision.action_type.replace(/_/g, ' ')}</div>
+            <p><strong>{ar ? 'الهدف:' : 'Objective:'}</strong> {agentDecision.objective}</p>
+            <p>{agentDecision.decision_reason}</p>
+            <p className="muted small">{agentDecision.next_step}</p>
+            <p className="muted small" dir="rtl">{agentActionArabic[agentDecision.action_type]}</p>
+            <details><summary>{ar ? 'لماذا هذه الخطوة؟' : 'Why this step?'}</summary><ul>{agentDecision.evidence.map((item, i) => <li key={i}>{item.detail}</li>)}</ul></details>
+          </section>
+        )}
+        {agentError && <div className="lesson-quality-section" role="alert">{agentError} <button className="btn-link" onClick={refreshAgent}>Retry recommendation</button></div>}
         {isCompleted && <div className="lesson-completed-banner"><IconCheck size={16} /> Topic completed</div>}
       </div>
 
       <div className="lesson-nav">
         {tabs.map((t) => (
           <button key={t} className={`lesson-tab ${tab === t ? 'active' : ''}`}
-            onClick={() => { if (!isCompleted || t === tab) setTab(t) }}
-            disabled={isCompleted && t !== tab}>
+            onClick={() => setTab(t)}>
             {tabLabels[t]}
           </button>
         ))}
@@ -1252,6 +1394,18 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
             {content.learn.version_note && (
               <div className="lesson-version-note">{content.learn.version_note}</div>
             )}
+            {(canonicalContent?.prerequisites?.length ?? 0) > 0 && (
+              <div className="lesson-quality-section">
+                <div className="lesson-quality-label">Prerequisites</div>
+                <ul>{canonicalContent!.prerequisites.map((item) => <li key={item.competency}><strong>{item.competency}</strong> — {item.relationship}: {item.why}</li>)}</ul>
+              </div>
+            )}
+            {canonicalContent?.roadmap_rationale && (
+              <div className="lesson-quality-section">
+                <div className="lesson-quality-label">Why this is in your roadmap</div>
+                <p>{canonicalContent.roadmap_rationale}</p>
+              </div>
+            )}
             {content.learn.grounding_sources && content.learn.grounding_sources.length > 0 && (
               <div className="lesson-grounding-sources">
                 Sources: {content.learn.grounding_sources.map((s, i) => (
@@ -1286,7 +1440,7 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
                 </div>
               </section>
             )}
-            {!isCompleted && <button className="btn btn-primary" onClick={nextTab}>Continue</button>}
+            {!isCompleted && <button className="btn btn-primary" onClick={nextTab}>Continue to example / متابعة إلى المثال</button>}
           </div>
         )}
         {tab === 'example' && (
@@ -1295,7 +1449,7 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
             <div className="lesson-example-type"><span className="chip-btn">{content.example.type}</span></div>
             <div className="lesson-example-content"><SafeMarkdown>{content.example.content}</SafeMarkdown></div>
             <div className="lesson-explanation"><SafeMarkdown>{content.example.explanation}</SafeMarkdown></div>
-            {!isCompleted && <button className="btn btn-primary" onClick={nextTab}>Continue</button>}
+            {!isCompleted && <button className="btn btn-primary" onClick={nextTab}>Continue to practice / متابعة إلى التدريب</button>}
           </div>
         )}
         {tab === 'practice' && (
@@ -1336,6 +1490,14 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
                 </div>
                 {practiceTitle && <h4 className="practice-task-title">{practiceTitle}</h4>}
                 <p className="lesson-q-text practice-task-text">{practiceTaskText}</p>
+                {practiceData.starter_code && <div className="lesson-example-content"><SafeMarkdown>{`\`\`\`python\n${practiceData.starter_code}\n\`\`\``}</SafeMarkdown></div>}
+                {practiceData.automated_tests && practiceData.automated_tests.length > 0 && (
+                  <div className="lesson-quality-section">
+                    <div className="lesson-quality-label">Expected test cases</div>
+                    <ul>{practiceData.automated_tests.map((test, i) => <li key={i}>Input: {JSON.stringify(test.input)} → expected: {JSON.stringify(test.expected)}</li>)}</ul>
+                    <p className="muted small">These cases describe expected behavior. This practice submission is reviewed by the existing evaluator; Python code is not executed here.</p>
+                  </div>
+                )}
               </div>
             )}
             <label className="practice-response-label" htmlFor={`practice-${lesson.id}`}>
@@ -1387,9 +1549,17 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
                 <div className="practice-source">
                   {practiceAttempt.source === 'ai' ? 'AI practice evaluation' : 'Basic automated review'}
                 </div>
+                {practiceAttempt.practice_task?.static_check && (
+                  <div className="lesson-quality-section">
+                    <div className="lesson-quality-label">Static code check / فحص ثابت للكود</div>
+                    <p>{practiceAttempt.practice_task.static_check.status === 'looks_structurally_sound' ? 'The submitted function has a sound visible structure.' : 'The submitted code needs a structural revision.'}</p>
+                    <ul>{practiceAttempt.practice_task.static_check.checks.map((check, i) => <li key={i}>{check}</li>)}</ul>
+                    <p className="muted small">{practiceAttempt.practice_task.static_check.note}</p>
+                  </div>
+                )}
                 <p className="practice-feedback">{practiceAttempt.feedback}</p>
-                {practiceAttempt.status === 'ready' && (
-                  <div className="practice-ready-banner"><IconCheck size={16} /> Ready for Mini Check</div>
+                {(practiceAttempt.status === 'ready' || practiceAttempt.practice_task?.static_check?.status === 'looks_structurally_sound') && (
+                  <div className="practice-ready-banner"><IconCheck size={16} /> {practiceAttempt.status === 'ready' ? 'Ready for Mini Check' : 'Static check supports trying the Mini Check (not runtime execution)'}</div>
                 )}
                 <div className="practice-review-grid">
                   <div>
@@ -1416,33 +1586,11 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
                 )}
               </div>
             )}
-            {!isCompleted && practiceAttempt?.status === 'ready' ? (
-              <button className="btn btn-primary" onClick={nextTab}>Continue to Mini Check</button>
+            {!isCompleted && (practiceAttempt?.status === 'ready' || practiceAttempt?.practice_task?.static_check?.status === 'looks_structurally_sound') ? (
+              <button className="btn btn-primary" onClick={nextTab}>Continue to Mini Check / متابعة إلى التحقق</button>
             ) : !isCompleted ? (
               <button className="btn" onClick={nextTab}>Continue</button>
             ) : null}
-          </div>
-        )}
-        {tab === 'discuss' && (
-          <div className="lesson-discuss">
-            <div className="lesson-discuss-head">
-              <h3>Discuss with AI</h3>
-              <p className="muted small">Ask the tutor anything about {humanizeTopicLabel(competency)} — your background, skill, and this exact step are already in the tutor's context.</p>
-            </div>
-            <div className="lesson-discuss-goto">
-              <p className="muted small">
-                The AI Tutor lives in the panel at the bottom-right of every page. Open it — it already knows
-                you're learning <strong>{humanizeTopicLabel(competency)}</strong> on <strong>{skillName}</strong>.
-              </p>
-              <button
-                className="btn btn-primary"
-                onClick={() => window.dispatchEvent(new CustomEvent('copilot:focus'))}
-                type="button"
-              >
-                <IconChat size={15} /> Open AI Tutor
-              </button>
-            </div>
-            {!isCompleted && <button className="btn btn-primary" onClick={nextTab} style={{ marginTop: 12 }}>Continue to Mini Check</button>}
           </div>
         )}
         {tab === 'mini_check' && (
@@ -1483,6 +1631,7 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
                         onChange={(e) => setMiniAnswers({ ...miniAnswers, [q.id]: e.target.value })}
                         placeholder="Type your answer..." />
                     )}
+                    {q.misconception_hint && <p className="muted small">Hint: {q.misconception_hint}</p>}
                   </div>
                 ))}
                 <button className="btn btn-primary" onClick={submitMiniCheck} disabled={submitting}>
@@ -1729,6 +1878,18 @@ function PersonalizedPathPanel({ studentId, skillId, skillName, refreshKey = 0, 
 
       {path && (
         <>
+          {path.stale && (
+            <div className="pp-stale-call" role="alert">
+              <p className="section-copy">
+                This path was built from an older diagnostic (diagnostic #{path.diagnostic_id}).
+                A newer completed diagnostic supersedes it — refresh the path before continuing so
+                lessons match your current gaps.
+              </p>
+              <button className="btn btn-primary" onClick={() => void create(false)} disabled={busy}>
+                <IconBolt size={16} /> {busy ? 'Refreshing...' : 'Refresh path from latest diagnostic'}
+              </button>
+            </div>
+          )}
           <div className="pp-progress-summary">
             <div>
               <strong>{progress.done} / {progress.total} topics complete</strong>

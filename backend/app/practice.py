@@ -4,6 +4,7 @@ Practice feedback is deliberately separate from Final Assessment grading. It
 can help a learner decide whether they are ready for the Mini Check, but it
 never verifies a skill and never completes a path topic.
 """
+import ast
 import json
 import re
 
@@ -100,6 +101,49 @@ def lesson_practice_task(lesson):
         "type": ((content.get("practice") or {}).get("type") or "practice"),
         "questions": _practice_questions(content),
     }
+
+
+def python_functions_static_check(lesson, student_answer):
+    """Safely inspect the Phase 1 Python Functions submission without running it.
+
+    This is deliberately supplemental: it checks parseable structure only and
+    never changes the evaluator score/status or claims runtime correctness.
+    """
+    content = (lesson or {}).get("content") or {}
+    canonical = content.get("canonical") or {}
+    practice = content.get("practice") or {}
+    if canonical.get("source") != "trusted_cs_knowledge_base" or practice.get("competency") != "Python Functions":
+        return None
+    answer = str(student_answer or "")
+    fenced = re.search(r"```(?:python)?\s*\n(.*?)```", answer, flags=re.I | re.S)
+    source = fenced.group(1) if fenced else answer
+    # Keep only a Python function block when explanatory prose surrounds it.
+    block = re.search(r"(?ms)^def\s+celsius_to_fahrenheit\s*\(.*?(?=^\S|\Z)", source)
+    source = block.group(0).strip() if block else source.strip()
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return {"status": "needs_fix", "checks": ["A parseable Python function was not found."],
+                "note": "Static check only — code was not executed and this does not score the practice attempt."}
+    func = next((node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "celsius_to_fahrenheit"), None)
+    if not func:
+        return {"status": "needs_fix", "checks": ["Define a function named celsius_to_fahrenheit."],
+                "note": "Static check only — code was not executed and this does not score the practice attempt."}
+    checks = []
+    if len(func.args.args) == 1:
+        checks.append("Function accepts one input.")
+    else:
+        checks.append("Function should accept one Celsius input.")
+    returns = [node for node in ast.walk(func) if isinstance(node, ast.Return)]
+    checks.append("Returns a value." if returns else "Add a return statement instead of only displaying a value.")
+    prints = [node for node in ast.walk(func) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "print"]
+    checks.append("Does not print inside the function." if not prints else "Remove print from inside the function.")
+    constants = {node.value for node in ast.walk(func) if isinstance(node, ast.Constant) and isinstance(node.value, (int, float))}
+    has_conversion_constants = ({9, 5, 32} <= constants) or (32 in constants and any(value in constants for value in (1.8, 1.80)))
+    checks.append("Includes recognizable Celsius-to-Fahrenheit conversion constants." if has_conversion_constants else "Check the conversion formula constants.")
+    status = "looks_structurally_sound" if len(func.args.args) == 1 and returns and not prints and has_conversion_constants else "needs_fix"
+    return {"status": status, "checks": checks,
+            "note": "Static check only — code was not executed and this does not prove runtime correctness or change your practice score."}
 
 
 def remediation_practice_task(source_attempt):

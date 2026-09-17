@@ -18,6 +18,7 @@ import re
 from . import diagnostics as dx
 from . import genai
 from . import resources as resource_catalog
+from . import knowledge_base
 
 
 MINI_CHECK_PASS_THRESHOLD = 0.7
@@ -236,7 +237,7 @@ def canonical_practice(practice_data, competency, default_title=None, prefer_typ
         response_type = "explanation"
     if not comp:
         comp = human
-    return {
+    canonical = {
         "type": "practical",
         "title": title or default_title or f"Apply {human}",
         "task": task,
@@ -252,6 +253,17 @@ def canonical_practice(practice_data, competency, default_title=None, prefer_typ
             "difficulty": "intermediate",
         }],
     }
+    # Optional, declarative coding-task details are safe to carry through the
+    # legacy practice normalizer. They are displayed to the learner; execution
+    # remains outside the web server.
+    if data.get("starter_code"):
+        canonical["starter_code"] = str(data["starter_code"])
+    if isinstance(data.get("automated_tests"), list):
+        canonical["automated_tests"] = [
+            {"input": list(case.get("input") or []), "expected": case.get("expected")}
+            for case in data["automated_tests"] if isinstance(case, dict)
+        ]
+    return canonical
 
 
 def normalize_lesson_practice(lesson, competency):
@@ -482,6 +494,26 @@ def normalize_lesson(lesson, competency, skill_name=None, skill_category=None,
     """
     if not isinstance(lesson, dict) or not isinstance(lesson.get("content"), dict):
         return lesson
+    # A previously persisted generated lesson can contain fallback template
+    # prose. Serve a reviewed replacement for a complete trusted topic unless
+    # it already has a scored Mini Check (whose stored answers must stay
+    # traceable to the content the learner answered).
+    curated = knowledge_base.complete_lesson(skill_name, competency) if skill_name else None
+    if curated and not lesson.get("mini_check_result"):
+        lesson = dict(lesson)
+        lesson["content"] = {
+            "learn": curated["learn"],
+            "example": curated["example"],
+            "practice": canonical_practice(curated["practice"], competency, prefer_type="code"),
+            "mini_check": curated["mini_check"],
+            "locales": curated.get("locales", {}),
+            "canonical": {
+                "source": "trusted_cs_knowledge_base",
+                "version": knowledge_base.KNOWLEDGE_BASE_VERSION,
+                "prerequisites": curated["prerequisites"],
+                "roadmap_rationale": curated["roadmap_rationale"],
+            },
+        }
     normalized = normalize_lesson_practice(lesson, competency)
     content = normalized["content"]
     content = dict(content)
@@ -633,6 +665,28 @@ def generate_lesson(skill_name, competency, action, topic_status=None,
     action = action if action in ("learn", "review") else "learn"
     human = _lesson_human(competency)
     required = required_level or "Intermediate"
+
+    # Canonical CS entries are always served verbatim. This intentionally runs
+    # before the provider check so a configured LLM can never invent curriculum
+    # facts, prerequisites, examples, or Mini Check answers for this topic.
+    canonical = knowledge_base.complete_lesson(skill_name, human)
+    if canonical:
+        content = {
+            "learn": canonical["learn"],
+            "example": canonical["example"],
+            "practice": canonical_practice(canonical["practice"], human, prefer_type="code"),
+            "mini_check": canonical["mini_check"],
+            "locales": canonical.get("locales", {}),
+            "canonical": {
+                "source": "trusted_cs_knowledge_base",
+                "version": knowledge_base.KNOWLEDGE_BASE_VERSION,
+                "prerequisites": canonical["prerequisites"],
+                "roadmap_rationale": canonical["roadmap_rationale"],
+            },
+        }
+        content["self_check"] = _self_check_lesson(
+            content, skill_name, human, target_role, action)
+        return content
 
     def fallback():
         return _lesson_fallback(skill_name, human, action, topic_status,
