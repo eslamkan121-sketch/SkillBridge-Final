@@ -1,5 +1,7 @@
 # SkillBridge — Complete Learning Handoff
 
+> Latest focused handoff: [docs/HANDOFF_2026-09-17.md](docs/HANDOFF_2026-09-17.md). It records the curated Python reliability and browser-review work, actual CS coverage, validation, and tomorrow's acceptance boundary. The historical material below remains useful for earlier phases.
+
 You are receiving the CURRENT working SkillBridge project from another developer.
 This project already contains substantial completed work.
 

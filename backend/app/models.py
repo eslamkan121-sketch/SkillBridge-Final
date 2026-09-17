@@ -2598,6 +2598,24 @@ def list_practice_attempts(student_id, lesson_id, limit=None):
         return [_practice_attempt_dict(_row(r)) for r in rows]
 
 
+def find_matching_practice_attempt(student_id, lesson_id, answer, practice_task):
+    """Return a prior valid evaluation for the exact same saved task and answer.
+
+    This is an evaluation cache, not a completion shortcut: it is scoped to the
+    student and lesson, compares the canonical task JSON as well as the answer,
+    and never includes incomplete/error rows because those are not persisted.
+    """
+    with get_cursor() as c:
+        row = c.execute(
+            """SELECT * FROM learning_practice_attempts
+               WHERE student_id=? AND lesson_id=? AND answer=? AND practice_task_json=?
+                 AND source IN ('ai', 'fallback')
+               ORDER BY id DESC LIMIT 1""",
+            (student_id, lesson_id, answer, _json_dumps(practice_task)),
+        ).fetchone()
+        return _practice_attempt_dict(_row(row))
+
+
 # ---------------------------------------------------------------- scenarios
 
 def _scenario_attempt_dict(d):

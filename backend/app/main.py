@@ -2507,8 +2507,10 @@ def api_generate_personalized_path(student_id: int, skill_id: int, request: Requ
     if not skill:
         raise HTTPException(status_code=404, detail="Skill not found")
 
-    diag = models.get_latest_diagnostic(student_id, skill_id)
-    if not diag or not diag.get("completed_at"):
+    # An abandoned/newly-open diagnostic must not hide the latest completed
+    # evidence or make its existing path impossible to regenerate.
+    diag = models.get_latest_completed_diagnostic(student_id, skill_id)
+    if not diag:
         return {"diagnostic_required": True, "path": None}
 
     existing = models.get_personalized_path_for_diagnostic(student_id, skill_id, diag["id"])
@@ -2767,8 +2769,16 @@ def api_submit_practice(student_id: int, skill_id: int, competency: str,
     previous_attempts = models.list_practice_attempts(student_id, lesson["id"], limit=3)
     practice_task = _practice_task_for_submission(student_id, lesson, body)
     static_check = practice.python_functions_static_check(lesson, answer)
+    if static_check is None:
+        static_check = practice.python_error_handling_static_check(lesson, answer)
     if static_check:
         practice_task = {**practice_task, "static_check": static_check}
+    cached = models.find_matching_practice_attempt(student_id, lesson["id"], answer, practice_task)
+    if cached:
+        # Exact answer + exact server-resolved task only.  Reusing this result
+        # avoids an unnecessary provider call; a changed answer always reaches
+        # the evaluator below.
+        return {"attempt": cached, "attempts_count": len(previous_attempts), "reused": True}
     context = practice.build_evaluation_context(
         student=student,
         skill=skill,
@@ -2778,7 +2788,10 @@ def api_submit_practice(student_id: int, skill_id: int, competency: str,
         previous_attempts=previous_attempts,
         practice_task=practice_task,
     )
-    result = practice.evaluate_practice(context, answer)
+    try:
+        result = practice.evaluate_practice(context, answer)
+    except practice.PracticeGraderUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     remediation = practice.generate_remediation(context, result, answer)
     attempt = models.create_practice_attempt(
         student_id=student_id,

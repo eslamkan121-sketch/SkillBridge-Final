@@ -98,6 +98,29 @@ PYTHON_FUNCTIONS = {
             {"id": "m3", "type": "mcq", "question": "What does `delivery_total(20, 5)` evaluate to in the lesson example?", "options": ["20", "5", "25", "It only prints a value"], "correct_answer": "25", "competency": "Python Functions", "difficulty": "beginner", "misconception_hint": "The function adds both arguments and returns their sum; the caller can then use that value."},
         ]
     },
+    # Display translations deliberately retain canonical English answer values.
+    # The client uses these question strings/options only for presentation; the
+    # persisted Mini Check continues to grade its immutable canonical set.
+    "locales": {
+        "ar": {
+            "learn": {
+                "title": "دوال بايثون",
+                "explanation": "الدالة هي وصفة لها اسم لمهمة صغيرة. نستخدم `def` لتعريفها، والمعاملات تستقبل المدخلات، و`return` يرجّع النتيجة للكود الذي استدعى الدالة.",
+                "key_ideas": ["عرّف الدالة بـ `def name(parameters):` واكتب جسمها بمسافة بادئة.", "المعامل اسمه داخل تعريف الدالة، أما القيمة التي نمررها عند الاستدعاء فهي argument.", "استخدم `return` عندما يحتاج الكود التالي للنتيجة؛ `print` يعرضها فقط."],
+                "key_terms": {"دالة": "كتلة كود لها اسم ويمكن إعادة استخدامها.", "معامل": "اسم داخل تعريف الدالة يستقبل مدخلاً.", "قيمة مُعادة": "قيمة ترسلها الدالة إلى المستدعي."},
+                "job_relevance": "الدوال تجعل أجزاء الكود في التطبيقات والتحليل والأتمتة قابلة لإعادة الاستخدام والاختبار.",
+                "common_mistake": "لا تخلط بين `print(total)` و`return total`: الأولى تعرض القيمة فقط، والثانية تسمح للكود التالي باستخدامها.",
+                "worked_example": "المثال يحسب إجمالي التوصيل من سعر ورسوم، ثم يتحقق من القيمة المعادة بأكثر من مدخل.",
+            },
+            "example": {"title": "دالة قابلة لإعادة الاستخدام لحساب إجمالي التوصيل", "type": "code", "content": "def delivery_total(price, delivery_fee):\n    return price + delivery_fee\n\nassert delivery_total(20, 5) == 25\nassert delivery_total(0, 5) == 5\nassert delivery_total(12.5, 2.5) == 15.0\n\nprint(delivery_total(20, 5))  # 25", "explanation": "`price` و`delivery_fee` معاملان. كل استدعاء يمرر قيماً، و`return` يجعل المجموع متاحاً لـ `assert` و`print`."},
+            "practice": {"title": "اكتب دالة لتحويل الحرارة", "task": "اكتب `celsius_to_fahrenheit(celsius)` لترجع قيمة فهرنهايت باستخدام `(celsius * 9 / 5) + 32`. لا تستخدم `print` داخل الدالة. أضف الدالة وجملة قصيرة تشرح لماذا نستخدم `return`.", "response_type": "code", "competency": "Python Functions", "starter_code": "def celsius_to_fahrenheit(celsius):\n    # اكتب الكود هنا\n    pass\n"},
+            "mini_check": {"questions": [
+                {"id": "m1", "question": "أي سطر يعيد قيمة محسوبة إلى الكود الذي استدعى الدالة؟", "options": ["print(total)", "return total", "def total", "total = input()"], "misconception_hint": "`print` يعرض القيمة؛ `return` يعيدها إلى الكود المستدعي."},
+                {"id": "m2", "question": "في `def greet(name):`، ما هو `name`؟", "options": ["An argument", "A parameter", "A return value", "A module"], "misconception_hint": "الـ parameter يُكتب في التعريف؛ والـ argument قيمة نمررها عند الاستدعاء."},
+                {"id": "m3", "question": "ما القيمة التي ترجعها `delivery_total(20, 5)` في مثال الدرس؟", "options": ["20", "5", "25", "It only prints a value"], "misconception_hint": "الدالة تجمع القيمتين وترجع الناتج ليستعمله المستدعي."},
+            ]},
+        },
+    },
 }
 
 
@@ -163,10 +186,46 @@ PYTHON_ERROR_HANDLING = {
             "practice": {
                 "title": "حلّل درجة من دون توقف البرنامج",
                 "task": "اكتب `parse_score(text)`. يجب أن تعيد `int(text)` للنص الرقمي مثل `\"85\"`. إذا لم يكن النص عددًا صحيحًا مثل `\"eighty\"`، التقط `ValueError` فقط وأعد `None`. أضف جملة تشرح لماذا لا نستخدم `except:` بلا اسم.",
+                "response_type": "code", "competency": "Python Error Handling",
+                "starter_code": "def parse_score(text):\n    # حوّل النص بأمان هنا\n    pass\n",
             },
+            "mini_check": {"questions": [
+                {"id": "e1", "question": "أي استثناء ينتج من `int(\"eighty\")`؟", "options": ["ValueError", "TypeError", "KeyError", "No exception"], "misconception_hint": "النص من نوع string، لكنه لا يمثل عدداً صحيحاً صالحاً."},
+                {"id": "e2", "question": "ماذا ترجع `parse_age(\"twenty\")` في المثال؟", "options": ["24", "None", "\"twenty\"", "The program must crash"], "misconception_hint": "كتلة `except ValueError` المطابقة ترجع `None`."},
+                {"id": "e3", "question": "لماذا `except ValueError:` أكثر أماناً من `except:` بلا اسم هنا؟", "options": ["It handles the expected invalid-number input without hiding every other bug", "It runs faster", "It converts all text to integers", "It removes the need for try"], "misconception_hint": "التقط الخطأ المتوقع فقط؛ يجب أن تظل أخطاء البرمجة الأخرى ظاهرة."},
+            ]},
         },
     },
 }
+
+
+def curated_diagnostic_questions(skill_name, competencies):
+    """Return reviewed diagnostic questions for the curated Python slice.
+
+    Questions are authored against one canonical competency each.  This is
+    intentionally narrower than the general skill-level bank: callers must
+    never tag a question about one Python topic as another merely for coverage.
+    """
+    requested = {_key(item) for item in (competencies or [])}
+    if _key(skill_name) not in PYTHON_FUNCTIONS["skill_aliases"]:
+        return []
+    banks = {
+        "python functions": [
+            {"type": "mcq", "question": "In `def add(a, b): return a + b`, what does `return` do?", "options": ["Displays the sum only", "Sends the sum back to the caller", "Defines a parameter", "Stops Python forever"], "correct_answer": "Sends the sum back to the caller", "competency": "python_functions", "difficulty": "beginner"},
+            {"type": "mcq", "question": "In `def greet(name):`, `name` is a:", "options": ["parameter", "argument", "module", "exception"], "correct_answer": "parameter", "competency": "python_functions", "difficulty": "beginner"},
+            {"type": "mcq", "question": "Which call correctly supplies two arguments to `delivery_total(price, delivery_fee)`?", "options": ["delivery_total(20, 5)", "delivery_total(price)", "def delivery_total(20, 5)", "return delivery_total"], "correct_answer": "delivery_total(20, 5)", "competency": "python_functions", "difficulty": "beginner"},
+        ],
+        "python error handling": [
+            {"type": "mcq", "question": "Which exception can `int(\"eighty\")` raise?", "options": ["ValueError", "KeyError", "ImportError", "No exception"], "correct_answer": "ValueError", "competency": "python_error_handling", "difficulty": "beginner"},
+            {"type": "mcq", "question": "Where should `int(text)` go when it may fail because the text is not numeric?", "options": ["Inside `try`", "Only inside `except ValueError`", "After `return None`", "Inside a bare `except`"], "correct_answer": "Inside `try`", "competency": "python_error_handling", "difficulty": "beginner"},
+            {"type": "mcq", "question": "Why catch `ValueError` rather than using bare `except:` in `parse_score`?", "options": ["It handles invalid numeric text without hiding unrelated bugs", "It converts every string", "It avoids using return", "It executes faster"], "correct_answer": "It handles invalid numeric text without hiding unrelated bugs", "competency": "python_error_handling", "difficulty": "beginner"},
+        ],
+    }
+    out = []
+    for key, questions in banks.items():
+        if key in requested:
+            out.extend(questions)
+    return deepcopy(out)
 
 
 # These declarations reserve stable identifiers and schema for later curation.

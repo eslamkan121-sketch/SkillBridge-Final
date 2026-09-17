@@ -1058,6 +1058,8 @@ export interface LessonContent {
     learn?: LessonSection
     example?: LessonSection
     practice?: LessonPractice
+    /** Display-only translations keyed by the immutable canonical question id. */
+    mini_check?: { questions: Array<Partial<LessonQuestion> & { id: string }> }
   }>>
   self_check?: LessonSelfCheck
   canonical?: CanonicalLessonMetadata

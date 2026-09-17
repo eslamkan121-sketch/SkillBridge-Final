@@ -27,6 +27,16 @@ function SafeMarkdown({ children }: { children: React.ReactNode }) {
   return <Markdown>{String(children ?? '')}</Markdown>
 }
 
+/** Remove the known legacy resource-pack claim; it was generated from a profile
+ * context but never evidenced student capability. New packs no longer generate it. */
+function safeLegacyPackText(value: unknown) {
+  return String(value ?? '')
+    .replace(/\n{0,2}You already have relevant foundations to build on\s*\([^)]*\),?\s*so the priority is applying[\s\S]*?shipping something small\./gi,
+      '\n\nBuild foundations through practice, then apply the skill through small, concrete exercises.')
+    .replace(/\bStudying at\s+[^;.)]+[;.)]?/gi, '')
+    .replace(/\bfocused on becoming\s+(?:a|an)\s+[^;.)]+[;.)]?/gi, '')
+}
+
 function resourceTypeLabel(resource: LearningResource) {
   const label = resource.type_label || resource.type || 'Resource'
   if (label === 'doc') return 'Documentation'
@@ -845,17 +855,17 @@ function SkillDetailPanel({ studentId, gap, item, path, roleTitle, startSignal, 
             <article className="learning-copy-card">
               <span>Learn</span>
               <h3>Explanation</h3>
-              <div className="md-body"><SafeMarkdown>{item.explanation}</SafeMarkdown></div>
+              <div className="md-body"><SafeMarkdown>{safeLegacyPackText(item.explanation)}</SafeMarkdown></div>
             </article>
             <article className="learning-copy-card">
               <span>Practice</span>
               <h3>Practice exercise</h3>
-              <div className="md-body"><SafeMarkdown>{item.practice_exercise}</SafeMarkdown></div>
+              <div className="md-body"><SafeMarkdown>{safeLegacyPackText(item.practice_exercise)}</SafeMarkdown></div>
             </article>
             <article className="learning-copy-card">
               <span>Build</span>
               <h3>Mini-project</h3>
-              <div className="md-body"><SafeMarkdown>{item.mini_project}</SafeMarkdown></div>
+              <div className="md-body"><SafeMarkdown>{safeLegacyPackText(item.mini_project)}</SafeMarkdown></div>
             </article>
           </div>
 
@@ -1101,6 +1111,7 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
   const [error, setError] = useState('')
   const [tab, setTab] = useState<'learn' | 'example' | 'practice' | 'discuss' | 'mini_check'>(initialTab)
   const [miniAnswers, setMiniAnswers] = useState<Record<string, string>>({})
+  const [revealedMiniHints, setRevealedMiniHints] = useState<Set<string>>(() => new Set())
   const [result, setResult] = useState<{ score: number; passed: boolean; correct: number; total: number } | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [practiceAnswer, setPracticeAnswer] = useState('')
@@ -1269,7 +1280,12 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
   // fields only replace the lesson, example, and task presentation.
   const localizedContent = ar ? lesson.content.locales?.ar : undefined
   const content: LessonContent = localizedContent
-    ? { ...lesson.content, ...localizedContent }
+    ? {
+      ...lesson.content,
+      learn: localizedContent.learn ?? lesson.content.learn,
+      example: localizedContent.example ?? lesson.content.example,
+      practice: localizedContent.practice ?? lesson.content.practice,
+    }
     : lesson.content
   const recommendedResources = content.resources || []
   const nextTab = () => {
@@ -1278,6 +1294,18 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
     if (idx < tabs.length - 1) setTab(tabs[idx + 1])
   }
   const practiceData = (content.practice ?? {}) as LessonPractice
+  // Arabic question copy is display-only.  Preserve IDs and canonical answer
+  // values so the server scores precisely the questions it persisted.
+  const localizedQuestions = ar ? lesson.content.locales?.ar?.mini_check?.questions : undefined
+  const miniQuestions = lesson.content.mini_check.questions.map((question) => {
+    const display = localizedQuestions?.find((item) => item.id === question.id)
+    return display ? {
+      ...question,
+      question: display.question ?? question.question,
+      options: display.options ?? question.options,
+      misconception_hint: display.misconception_hint ?? question.misconception_hint,
+    } : question
+  })
   const canonicalContent = content.canonical
   const practiceTitle = typeof practiceData.title === 'string' && practiceData.title.trim()
     ? practiceData.title
@@ -1310,6 +1338,11 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
     ADVANCE: 'انتقل إلى الخطوة التالية في المسار.',
     REQUEST_REASSESSMENT: 'أكمل أو أعد التقييم التشخيصي أولاً.',
   }
+  const reviewedPracticeFeedback = !practiceAttempt ? '' : (!ar
+    ? practiceAttempt.feedback
+    : practiceAttempt.status === 'ready'
+      ? 'مراجعة التدريب تشير إلى أن إجابتك تغطي النقاط الأساسية ويمكنك الانتقال إلى التحقق السريع. هذه ليست نتيجة اختبار تشغيل للكود ولا تحقق مهارة رسمياً.'
+      : 'مراجعة التدريب تشير إلى أن الإجابة تحتاج توضيحاً أو تطبيقاً أدق قبل التحقق السريع. راجع النقاط الناقصة ثم أعد المحاولة. هذه ليست نتيجة اختبار تشغيل للكود ولا تحقق مهارة رسمياً.')
 
   return (
     <div className="lesson-view" dir={ar ? 'rtl' : 'ltr'}>
@@ -1332,7 +1365,7 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
             <p><strong>{ar ? 'الهدف:' : 'Objective:'}</strong> {agentDecision.objective}</p>
             <p>{agentDecision.decision_reason}</p>
             <p className="muted small">{agentDecision.next_step}</p>
-            <p className="muted small" dir="rtl">{agentActionArabic[agentDecision.action_type]}</p>
+            {ar && <p className="muted small" dir="rtl">{agentActionArabic[agentDecision.action_type]}</p>}
             <details><summary>{ar ? 'لماذا هذه الخطوة؟' : 'Why this step?'}</summary><ul>{agentDecision.evidence.map((item, i) => <li key={i}>{item.detail}</li>)}</ul></details>
           </section>
         )}
@@ -1440,7 +1473,7 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
                 </div>
               </section>
             )}
-            {!isCompleted && <button className="btn btn-primary" onClick={nextTab}>Continue to example / متابعة إلى المثال</button>}
+            {!isCompleted && <button className="btn btn-primary" onClick={nextTab}>{ar ? 'المتابعة إلى المثال' : 'Continue to example'}</button>}
           </div>
         )}
         {tab === 'example' && (
@@ -1449,12 +1482,12 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
             <div className="lesson-example-type"><span className="chip-btn">{content.example.type}</span></div>
             <div className="lesson-example-content"><SafeMarkdown>{content.example.content}</SafeMarkdown></div>
             <div className="lesson-explanation"><SafeMarkdown>{content.example.explanation}</SafeMarkdown></div>
-            {!isCompleted && <button className="btn btn-primary" onClick={nextTab}>Continue to practice / متابعة إلى التدريب</button>}
+            {!isCompleted && <button className="btn btn-primary" onClick={nextTab}>{ar ? 'المتابعة إلى التدريب' : 'Continue to practice'}</button>}
           </div>
         )}
         {tab === 'practice' && (
           <div className="lesson-practice">
-            <h3>Practice</h3>
+            <h3>{ar ? 'تدريب' : 'Practice'}</h3>
             {latestRemediation ? (
               <div className="remediation-panel">
                 <div className="remediation-head">
@@ -1501,7 +1534,7 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
               </div>
             )}
             <label className="practice-response-label" htmlFor={`practice-${lesson.id}`}>
-              Your {answeringFollowUp ? 'follow-up' : 'practice'} response
+              {ar ? 'اكتب إجابتك للتدريب هنا' : `Your ${answeringFollowUp ? 'follow-up' : 'practice'} response`}
             </label>
             <textarea
               id={`practice-${lesson.id}`}
@@ -1519,7 +1552,7 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
                 disabled={practiceSubmitting || !activePracticeAnswer.trim() || isCompleted}
                 type="button"
               >
-                {practiceSubmitting ? 'Evaluating...' : 'Submit Practice'}
+                {practiceSubmitting ? (ar ? 'جارٍ المراجعة...' : 'Evaluating...') : (ar ? 'أرسل التدريب' : 'Submit Practice')}
               </button>
               {previousPracticeCount > 0 && (
                 <span className="muted small">{previousPracticeCount} previous practice {previousPracticeCount === 1 ? 'attempt' : 'attempts'}</span>
@@ -1528,7 +1561,7 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
             {practiceSubmitting && (
               <div className="practice-status evaluating" role="status">
                 <span className="practice-spinner" aria-hidden="true" />
-                <span>Evaluating your practice...</span>
+                <span>{ar ? 'جارٍ مراجعة تدريبك...' : 'Evaluating your practice...'}</span>
               </div>
             )}
             {practiceError && (
@@ -1551,13 +1584,13 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
                 </div>
                 {practiceAttempt.practice_task?.static_check && (
                   <div className="lesson-quality-section">
-                    <div className="lesson-quality-label">Static code check / فحص ثابت للكود</div>
+                    <div className="lesson-quality-label">{ar ? 'فحص ثابت للكود' : 'Static code check'}</div>
                     <p>{practiceAttempt.practice_task.static_check.status === 'looks_structurally_sound' ? 'The submitted function has a sound visible structure.' : 'The submitted code needs a structural revision.'}</p>
                     <ul>{practiceAttempt.practice_task.static_check.checks.map((check, i) => <li key={i}>{check}</li>)}</ul>
                     <p className="muted small">{practiceAttempt.practice_task.static_check.note}</p>
                   </div>
                 )}
-                <p className="practice-feedback">{practiceAttempt.feedback}</p>
+                <p className="practice-feedback">{reviewedPracticeFeedback}</p>
                 {(practiceAttempt.status === 'ready' || practiceAttempt.practice_task?.static_check?.status === 'looks_structurally_sound') && (
                   <div className="practice-ready-banner"><IconCheck size={16} /> {practiceAttempt.status === 'ready' ? 'Ready for Mini Check' : 'Static check supports trying the Mini Check (not runtime execution)'}</div>
                 )}
@@ -1587,7 +1620,7 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
               </div>
             )}
             {!isCompleted && (practiceAttempt?.status === 'ready' || practiceAttempt?.practice_task?.static_check?.status === 'looks_structurally_sound') ? (
-              <button className="btn btn-primary" onClick={nextTab}>Continue to Mini Check / متابعة إلى التحقق</button>
+              <button className="btn btn-primary" onClick={nextTab}>{ar ? 'المتابعة إلى التحقق السريع' : 'Continue to Mini Check'}</button>
             ) : !isCompleted ? (
               <button className="btn" onClick={nextTab}>Continue</button>
             ) : null}
@@ -1595,7 +1628,7 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
         )}
         {tab === 'mini_check' && (
           <div className="lesson-mini-check">
-            <h3>Mini Check</h3>
+            <h3>{ar ? 'تحقق سريع' : 'Mini Check'}</h3>
             {result ? (
               <div className={`lesson-result ${result.passed ? 'passed' : 'failed'}`}>
                 <div className="lesson-result-score">{Math.round(result.score * 100)}%</div>
@@ -1613,7 +1646,7 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
               </div>
             ) : (
               <>
-                {content.mini_check.questions.map((q) => (
+                {miniQuestions.map((q) => (
                   <div className="lesson-question" key={q.id}>
                     <p className="lesson-q-text">{q.question}</p>
                     {q.type === 'mcq' && q.options && (
@@ -1631,11 +1664,18 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
                         onChange={(e) => setMiniAnswers({ ...miniAnswers, [q.id]: e.target.value })}
                         placeholder="Type your answer..." />
                     )}
-                    {q.misconception_hint && <p className="muted small">Hint: {q.misconception_hint}</p>}
+                    {q.misconception_hint && (
+                      revealedMiniHints.has(q.id)
+                        ? <p className="muted small">{ar ? 'تلميح: ' : 'Hint: '}{q.misconception_hint}</p>
+                        : <button className="btn-link mini-hint-toggle" type="button"
+                            onClick={() => setRevealedMiniHints((shown) => new Set(shown).add(q.id))}>
+                            {ar ? 'أحتاج تلميحًا' : 'Need a hint?'}
+                          </button>
+                    )}
                   </div>
                 ))}
                 <button className="btn btn-primary" onClick={submitMiniCheck} disabled={submitting}>
-                  {submitting ? 'Scoring...' : 'Submit Mini Check'}
+                  {submitting ? (ar ? 'جارٍ التصحيح...' : 'Scoring...') : (ar ? 'أرسل التحقق السريع' : 'Submit Mini Check')}
                 </button>
               </>
             )}
@@ -1919,7 +1959,11 @@ function PersonalizedPathPanel({ studentId, skillId, skillName, refreshKey = 0, 
                     </div>
                     <h4>{humanizeTopicLabel(item.title)}</h4>
                     <p className="muted small">
-                      Added because your diagnostic score was <strong>{Math.round(item.diagnostic_score)}%</strong>.
+                      {path.stale ? (
+                        <>This older roadmap belongs to diagnostic #{path.diagnostic_id}; its scores are hidden until you refresh from diagnostic #{path.latest_diagnostic_id}.</>
+                      ) : (
+                        <>Added because your diagnostic score was <strong>{Math.round(item.diagnostic_score)}%</strong>.</>
+                      )}
                       {' '}<span className="pp-est"><IconClock size={13} /> ~{item.estimated_minutes} min</span>
                     </p>
                   </div>

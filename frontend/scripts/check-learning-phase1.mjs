@@ -72,6 +72,19 @@ ok(!/final-assessment\/status/.test(assessments),
 ok(/always\s+available from the Assessments page/.test(learning),
    'LearningPage: readiness is informational and assessment remains available')
 
+// Review return: stale paths must not present old percentages as current, and
+// Mini Check hints must be an optional learner action rather than answer-adjacent copy.
+ok(/path\.stale \? \(/.test(learning) && /scores are hidden until you refresh/.test(learning),
+   'LearningPage: stale roadmap scores are clearly withheld pending refresh')
+ok(/revealedMiniHints/.test(learning) && /Need a hint\?/.test(learning) && /setRevealedMiniHints/.test(learning),
+   'LearningPage: Mini Check hints are opt-in')
+ok(!/\{q\.misconception_hint && <p/.test(learning),
+   'LearningPage: Mini Check hints do not render by default')
+ok(/\{ar && <p className="muted small" dir="rtl">\{agentActionArabic/.test(learning),
+   'LearningPage: English mode does not render Arabic agent copy')
+ok(/safeLegacyPackText/.test(learning),
+   'LearningPage: legacy generated packs remove unsupported profile claims')
+
 if (problems.length) {
   console.error('Learning Phase 1 frontend contract violations:')
   for (const problem of problems) console.error(`  - ${problem}`)

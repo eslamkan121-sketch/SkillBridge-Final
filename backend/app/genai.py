@@ -22,7 +22,7 @@ import time
 
 import truststore
 
-from . import tts
+from . import tts, knowledge_base
 
 PROVIDER = "anthropic_model"
 CLAUDE_MODEL = os.environ.get("SKILLBRIDGE_CLAUDE_MODEL", "claude-3-5-sonnet-20241022")
@@ -647,6 +647,26 @@ def _role_context_blurb(skill_name, target_role):
             f"fluency that maps directly to the job, not around generic tutorials.")
 
 
+_UNSUPPORTED_LEARNING_PROFILE_TERMS = (
+    "university", "college", "student background", "your profile",
+    "you already have", "your prior experience", "you have experience",
+    "you completed", "your completed", "relevant foundations",
+)
+
+
+def _without_unsupported_learning_profile_claims(value):
+    """Keep generated resource-pack copy role-aware without asserting learner facts.
+
+    The resource pack has no evidence authority for education, prior work, or
+    capability.  A provider can still ignore its prompt, so strip those claims
+    from every visible generated field rather than trusting the instruction.
+    """
+    text = str(value or "").strip()
+    kept = [sentence for sentence in re.split(r"(?<=[.!?])\s+", text)
+            if not any(term in sentence.lower() for term in _UNSUPPORTED_LEARNING_PROFILE_TERMS)]
+    return " ".join(kept).strip()
+
+
 def _deterministic_modules(skill_name, target_role, from_level, to_level, required):
     """Build modules strictly from the required competency list — coverage is
     guaranteed by construction.
@@ -1116,12 +1136,15 @@ def generate_learning_item(skill_name, skill_category, target_role, student_cont
         "the student to assessment-ready. DO NOT include any URLs, links, or resource "
         "lists anywhere in your response — the platform attaches vetted, verified "
         "learning resources to each step itself. Do not invent web addresses. "
+        "Do not claim that the student attends a university, has prior foundations, "
+        "has completed work, or has any other profile fact. Tailor only to the "
+        "provided target role and frame practice as an opportunity, not proof of "
+        "the student's background. "
         "Return ONLY the JSON object, no prose."
     )
     user = (
         f"Skill to learn: {skill_name} ({skill_category})\n"
         f"Target role: {target_role}\n"
-        f"Student background: {student_context or 'no additional background provided'}\n\n"
         "Generate the JSON learning item."
     )
 
@@ -1136,8 +1159,7 @@ def generate_learning_item(skill_name, skill_category, target_role, student_cont
             skill_name, skill_category, target_role, live_check=False, max_items=8)
         explanation = (
             f"{_role_context_blurb(skill_name, target_role)}\n\n"
-            f"You already have relevant foundations to build on "
-            f"('{student_context or 'being built'}'), so the priority is applying {skill_name} "
+            f"Build foundations through practice, then apply {skill_name} "
             f"to the kinds of problems a {target_role} encounters — reading real systems, "
             f"reproducing them, and shipping something small."
         )
@@ -1192,19 +1214,27 @@ def generate_learning_item(skill_name, skill_category, target_role, student_cont
     # real, direct, on-topic links ranked from the merged pool, with steps left
     # resource-unavailable rather than citing a channel/search/category page.
     roadmap = _finalize_roadmap(roadmap, resources, skill_name, skill_category, target_role)
+    roadmap["summary"] = _without_unsupported_learning_profile_claims(roadmap.get("summary"))
+    for step in roadmap.get("steps") or []:
+        for field in ("title", "objective", "practice", "checkpoint"):
+            step[field] = _without_unsupported_learning_profile_claims(step.get(field))
+        for resource in step.get("resources") or []:
+            for field in ("reason", "helpfulness", "learning_objective"):
+                if field in resource:
+                    resource[field] = _without_unsupported_learning_profile_claims(resource.get(field))
 
     # --- Skill Blueprint plan ---
     from .skill_blueprint import required_competencies as bp_required, modules_cover
     from_level = "Beginner"
     to_level = "Advanced"
     plan = plan_learning_path(skill_name, skill_category, from_level, to_level,
-                              target_role, student_context)
+                              target_role)
     covered, missing = modules_cover(plan["modules"], skill_name, from_level, to_level)
 
     return {
-        "explanation": str(parsed.get("explanation") or default["explanation"]),
-        "practice_exercise": str(parsed.get("practice_exercise") or default["practice_exercise"]),
-        "mini_project": str(parsed.get("mini_project") or default["mini_project"]),
+        "explanation": _without_unsupported_learning_profile_claims(parsed.get("explanation") or default["explanation"]),
+        "practice_exercise": _without_unsupported_learning_profile_claims(parsed.get("practice_exercise") or default["practice_exercise"]),
+        "mini_project": _without_unsupported_learning_profile_claims(parsed.get("mini_project") or default["mini_project"]),
         "resources": resources,
         "roadmap": roadmap,
         "modules": plan["modules"],
@@ -6017,6 +6047,18 @@ def generate_diagnostic(skill_name, competencies, target_role=None, num_question
     """
     from . import diagnostics as dx
     comps = list(competencies or [])
+
+    # The curated Python slice has reviewed questions for its two canonical
+    # competencies.  Serve them before considering a provider or the broad
+    # skill-level bank: round-robin tagging would turn a Functions result into
+    # an Error Handling claim (or vice versa).
+    curated = knowledge_base.curated_diagnostic_questions(skill_name, comps)
+    if curated:
+        return [
+            _diag_item(question, question["competency"], index,
+                       difficulty=question.get("difficulty") or "beginner")
+            for index, question in enumerate(curated)
+        ]
 
     def fallback():
         return _diag_fallback(skill_name, comps, target_role, num_questions)

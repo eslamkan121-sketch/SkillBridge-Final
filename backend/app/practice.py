@@ -22,6 +22,15 @@ REMEDIATION_FALLBACK_NOTICE = (
     "and your practice coverage."
 )
 
+
+class PracticeGraderUnavailable(RuntimeError):
+    """The configured live reviewer failed before producing a valid result.
+
+    A provider outage is not evidence about the student's work.  Callers must
+    leave the attempt unpersisted and invite a retry rather than fabricate a
+    score from the outage.
+    """
+
 _STOPWORDS = {
     "about", "above", "after", "again", "against", "also", "because", "before",
     "being", "below", "between", "could", "every", "first", "from", "have",
@@ -143,6 +152,47 @@ def python_functions_static_check(lesson, student_answer):
     checks.append("Includes recognizable Celsius-to-Fahrenheit conversion constants." if has_conversion_constants else "Check the conversion formula constants.")
     status = "looks_structurally_sound" if len(func.args.args) == 1 and returns and not prints and has_conversion_constants else "needs_fix"
     return {"status": status, "checks": checks,
+            "note": "Static check only — code was not executed and this does not prove runtime correctness or change your practice score."}
+
+
+def python_error_handling_static_check(lesson, student_answer):
+    """Inspect the curated parse_score exercise without executing student code."""
+    content = (lesson or {}).get("content") or {}
+    canonical = content.get("canonical") or {}
+    practice = content.get("practice") or {}
+    if canonical.get("source") != "trusted_cs_knowledge_base" or practice.get("competency") != "Python Error Handling":
+        return None
+    answer = str(student_answer or "")
+    fenced = re.search(r"```(?:python)?\s*\n(.*?)```", answer, flags=re.I | re.S)
+    source = fenced.group(1) if fenced else answer
+    block = re.search(r"(?ms)^def\s+parse_score\s*\(.*?(?=^\S|\Z)", source)
+    source = block.group(0).strip() if block else source.strip()
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return {"status": "needs_fix", "checks": ["A parseable Python function was not found."],
+                "note": "Static check only — code was not executed and this does not prove runtime correctness or change your practice score."}
+    func = next((node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "parse_score"), None)
+    if not func:
+        return {"status": "needs_fix", "checks": ["Define a function named parse_score."],
+                "note": "Static check only — code was not executed and this does not prove runtime correctness or change your practice score."}
+    tries = [node for node in ast.walk(func) if isinstance(node, ast.Try)]
+    catches_value_error = any(
+        isinstance(handler.type, ast.Name) and handler.type.id == "ValueError"
+        for attempt in tries for handler in attempt.handlers
+    )
+    returns = [node for node in ast.walk(func) if isinstance(node, ast.Return)]
+    calls_int = any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "int"
+                    for node in ast.walk(func))
+    returns_none = any(isinstance(node.value, ast.Constant) and node.value.value is None for node in returns)
+    checks = [
+        "Function accepts one input." if len(func.args.args) == 1 else "Function should accept one text input.",
+        "Uses a try block around conversion." if tries else "Add a try block around the conversion.",
+        "Catches ValueError specifically." if catches_value_error else "Catch ValueError specifically rather than a bare except.",
+        "Calls int(...) and has a None return path." if calls_int and returns_none else "Convert with int(...) and return None for invalid text.",
+    ]
+    sound = len(func.args.args) == 1 and bool(tries) and catches_value_error and calls_int and returns_none
+    return {"status": "looks_structurally_sound" if sound else "needs_fix", "checks": checks,
             "note": "Static check only — code was not executed and this does not prove runtime correctness or change your practice score."}
 
 
@@ -529,7 +579,7 @@ def generate_remediation(context, evaluation, student_answer):
 
 
 def evaluate_practice(context, student_answer):
-    """Evaluate a practice answer with GenAI, falling back transparently."""
+    """Evaluate a practice answer without converting a live-provider failure into a grade."""
     if not genai.genai_enabled():
         return fallback_evaluate_practice(context, student_answer)
 
@@ -560,8 +610,8 @@ def evaluate_practice(context, student_answer):
         raw = genai.complete(system, user, max_tokens=1200, timeout=120)
         parsed = genai._extract_json(raw)
         normalized = _normalize_ai_result(parsed)
-    except Exception:
-        normalized = None
+    except Exception as exc:
+        raise PracticeGraderUnavailable("The practice reviewer is temporarily unavailable. Please retry shortly.") from exc
     if normalized is None:
-        return fallback_evaluate_practice(context, student_answer)
+        raise PracticeGraderUnavailable("The practice reviewer returned an unusable result. Please retry shortly.")
     return normalized

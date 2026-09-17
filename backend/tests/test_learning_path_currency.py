@@ -13,7 +13,7 @@ No test here fabricates scores, completes lessons, or touches verified_skills.
 """
 from urllib.parse import quote
 
-from app import genai, knowledge_base, models
+from app import genai, knowledge_base, models, path_builder
 
 
 def _make_items(*slugs, status="weak"):
@@ -95,6 +95,43 @@ def test_new_path_is_current_and_canonical_and_older_path_goes_stale(client, stu
     refreshed = client.post(f"/api/students/{student_id}/learning/{python['id']}/personalized-path/generate", json={}, headers=headers).json()
     assert refreshed["stale"] is False
     assert refreshed["diagnostic_id"] == b_res["id"]
+
+
+def test_refreshed_path_keeps_scores_attached_to_their_competency(client, student_id, auth_headers):
+    """A stale path can have older values, but a refreshed path may never swap them."""
+    headers = auth_headers("aisha@student.edu")
+    python = models.get_skill_by_name("Python")
+    topic_ids = ["python_functions", "python_error_handling"]
+
+    def complete_with_scores(functions, errors):
+        diag = models.create_diagnostic(student_id, python["id"], [])
+        topics = [
+            {"competency": "python_functions", "label": "Python Functions", "score": functions,
+             "status": "weak", "correct": 0, "total": 3},
+            {"competency": "python_error_handling", "label": "Python Error Handling", "score": errors,
+             "status": "weak", "correct": 0, "total": 3},
+        ]
+        return models.complete_diagnostic(diag["id"], [], (functions + errors) / 2,
+                                          {"overall_score": (functions + errors) / 2, "topics": topics,
+                                           "weak_topics": topic_ids, "strong_topics": []})
+
+    older = complete_with_scores(0.0, 33.3)
+    old_path = path_builder.build_personalized_path(python, models.public_diagnostic(older), "Intermediate")
+    models.create_personalized_path(student_id, python["id"], older["id"], "Intermediate",
+                                    old_path["path"], old_path["skipped_mastered"], old_path["stages"])
+    newer = complete_with_scores(33.3, 0.0)
+
+    stale = client.get(f"/api/students/{student_id}/learning/{python['id']}/personalized-path", headers=headers).json()
+    assert stale["stale"] is True
+    assert stale["diagnostic_id"] == older["id"]
+    assert stale["latest_diagnostic_id"] == newer["id"]
+
+    refreshed = client.post(f"/api/students/{student_id}/learning/{python['id']}/personalized-path/generate",
+                            json={}, headers=headers).json()
+    assert refreshed["diagnostic_id"] == newer["id"] and refreshed["stale"] is False
+    assert {item["competency"]: item["diagnostic_score"] for item in refreshed["items"]} == {
+        "python_functions": 33.3, "python_error_handling": 0.0,
+    }
 
 
 def test_legacy_function_design_identifier_is_surfaced_not_silently_skipped(client, student_id, auth_headers, monkeypatch):

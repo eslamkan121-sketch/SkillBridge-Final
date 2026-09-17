@@ -33,6 +33,42 @@ def test_learning_item_generation_shape():
             assert not genai._is_generic_resource_url(r["url"]), f"step cites generic {r['url']}"
         assert s["resource_ranks"] and len(s["resource_ranks"]) == len(s["resources"])
     assert item["roadmap"]["resource_version"] == genai.RESOURCE_VERSION
+
+
+def test_learning_item_does_not_turn_profile_context_into_capability_claim(monkeypatch):
+    """Resource-pack copy may be role-aware, but not claim profile facts as proof."""
+    monkeypatch.setattr(genai, "genai_enabled", lambda: False)
+    profile_context = "Studying at Unsupported University; completed advanced Python work"
+    item = genai.generate_learning_item(
+        "Python", "Programming", "Junior AI Engineer", profile_context)
+    visible_copy = " ".join([
+        item["explanation"], item["practice_exercise"], item["mini_project"],
+        item["roadmap"]["summary"],
+        *[f"{step['title']} {step['objective']} {step['practice']}"
+          for step in item["roadmap"]["steps"]],
+    ])
+    assert profile_context not in visible_copy
+    assert "Unsupported University" not in visible_copy
+    assert "already have relevant foundations" not in visible_copy.lower()
+
+
+def test_learning_item_strips_provider_profile_claims(monkeypatch):
+    """A provider instruction is not sufficient: unsupported claims are removed on output."""
+    monkeypatch.setattr(genai, "genai_enabled", lambda: True)
+    provider_item = {
+        "explanation": "You studied at Imaginary University. Learn Python for the target role.",
+        "practice_exercise": "Because you already have relevant foundations, write a small script.",
+        "mini_project": "Create a small Python project.",
+        "roadmap": {"summary": "Your profile proves you are ready.", "steps": [{
+            "step": 1, "title": "Foundation", "objective": "Your prior experience makes this easy.",
+            "practice": "Write a script.", "checkpoint": "Describe the result.", "resource_type": "exercise",
+        }]},
+    }
+    monkeypatch.setattr(genai, "complete", lambda *args, **kwargs: json.dumps(provider_item))
+    item = genai.generate_learning_item("Python", "Programming", "Junior AI Engineer")
+    visible_copy = json.dumps({key: item[key] for key in ("explanation", "practice_exercise", "mini_project", "roadmap")})
+    for claim in ("Imaginary University", "already have relevant foundations", "Your profile", "prior experience"):
+        assert claim.lower() not in visible_copy.lower()
     # blueprint modules are genuine, sufficient, and version-stamped
     assert isinstance(item["modules"], list) and item["modules"]
     assert isinstance(item["blueprint_version"], str) and item["blueprint_version"]
