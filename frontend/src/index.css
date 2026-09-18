@@ -998,7 +998,7 @@ textarea.free-text:focus { outline: 2px solid var(--sb-indigo); outline-offset: 
 .chip-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .lesson-language-control { display: flex; gap: 6px; justify-content: flex-end; margin-bottom: 8px; }
 .lesson-language-control .active { border-color: var(--sb-indigo); color: var(--sb-indigo-dark); background: var(--slate-50); }
-.lesson-view[dir="rtl"] pre, .lesson-view[dir="rtl"] code, .lesson-view[dir="rtl"] .lesson-example-content { direction: ltr; text-align: left; unicode-bidi: plaintext; }
+.lesson-content[dir="rtl"] pre, .lesson-content[dir="rtl"] code, .lesson-content[dir="rtl"] .lesson-example-content { direction: ltr; text-align: left; unicode-bidi: plaintext; }
 .chip-share-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
 
 /* ------------------------------------------------------------------ Learning progress */

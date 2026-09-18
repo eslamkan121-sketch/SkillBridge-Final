@@ -258,6 +258,10 @@ def canonical_practice(practice_data, competency, default_title=None, prefer_typ
     # remains outside the web server.
     if data.get("starter_code"):
         canonical["starter_code"] = str(data["starter_code"])
+    if data.get("language"):
+        canonical["language"] = str(data["language"])
+    if data.get("evaluation_note"):
+        canonical["evaluation_note"] = str(data["evaluation_note"])
     if isinstance(data.get("automated_tests"), list):
         canonical["automated_tests"] = [
             {"input": list(case.get("input") or []), "expected": case.get("expected")}

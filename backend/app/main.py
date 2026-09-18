@@ -2771,6 +2771,8 @@ def api_submit_practice(student_id: int, skill_id: int, competency: str,
     static_check = practice.python_functions_static_check(lesson, answer)
     if static_check is None:
         static_check = practice.python_error_handling_static_check(lesson, answer)
+    if static_check is None:
+        static_check = practice.sql_queries_filtering_static_check(lesson, answer)
     if static_check:
         practice_task = {**practice_task, "static_check": static_check}
     cached = models.find_matching_practice_attempt(student_id, lesson["id"], answer, practice_task)

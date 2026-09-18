@@ -2479,13 +2479,20 @@ def _lesson_dict(d):
 
 def create_lesson(student_id, skill_id, path_id, competency, title, action, content_json):
     with get_cursor() as c:
-        cur = c.execute(
-            """INSERT INTO learning_lessons
+        # A lesson is unique per learner, path, and competency.  The browser can
+        # legitimately issue overlapping generate requests while a development
+        # React effect is remounted; make that race idempotent instead of
+        # turning the second request into a misleading 500.
+        c.execute(
+            """INSERT OR IGNORE INTO learning_lessons
                (student_id, skill_id, personalized_path_id, competency, title, action, content_json)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (student_id, skill_id, path_id, competency, title, action, _json_dumps(content_json)))
         return _lesson_dict(_row(c.execute(
-            "SELECT * FROM learning_lessons WHERE id=?", (cur.lastrowid,)).fetchone()))
+            """SELECT * FROM learning_lessons
+               WHERE student_id=? AND personalized_path_id=? AND competency=?
+               ORDER BY id DESC LIMIT 1""",
+            (student_id, path_id, competency)).fetchone()))
 
 
 def get_lesson(student_id, path_id, competency):

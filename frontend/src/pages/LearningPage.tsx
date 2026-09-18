@@ -37,14 +37,15 @@ function safeLegacyPackText(value: unknown) {
     .replace(/\bfocused on becoming\s+(?:a|an)\s+[^;.)]+[;.)]?/gi, '')
 }
 
-function resourceTypeLabel(resource: LearningResource) {
+function resourceTypeLabel(resource: LearningResource, ar = false) {
+  if (ar) return resource.type === 'video' ? 'فيديو' : resource.type === 'article' ? 'مقال' : 'مصدر'
   const label = resource.type_label || resource.type || 'Resource'
   if (label === 'doc') return 'Documentation'
   if (label === 'course') return 'Tutorial'
   return label.replace(/_/g, ' ').split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
 }
 
-function resourceStatus(resource: LearningResource) {
+function resourceStatus(resource: LearningResource, ar = false) {
   const label = resource.status
     || (resource.available === true
       ? 'Checked'
@@ -52,7 +53,7 @@ function resourceStatus(resource: LearningResource) {
   const key = label.toLowerCase().includes('unavailable')
     ? 'unavailable'
     : label.toLowerCase().includes('checked') ? 'checked' : 'unknown'
-  return { label, key }
+  return { label: ar ? (key === 'checked' ? 'تمت المراجعة' : key === 'unavailable' ? 'غير متاح' : 'الحالة غير معروفة') : label, key }
 }
 
 function formatMinutes(mins: number) {
@@ -830,12 +831,16 @@ function SkillDetailPanel({ studentId, gap, item, path, roleTitle, startSignal, 
         profileSource={gap.profileSource}
       />
 
-      <DiagnosticPanel studentId={studentId} skillId={gap.skill_id} skillName={gap.skill_name} startSignal={startSignal} onComplete={() => setDiagRefreshKey(k => k + 1)} />
+      {/* A path-start signal belongs to the path panel.  Passing it to the
+          diagnostic panel races a valid path lookup and creates an abandoned
+          newer diagnostic that masks the path. */}
+      <DiagnosticPanel studentId={studentId} skillId={gap.skill_id} skillName={gap.skill_name} startSignal={0} hasUsablePath={!!path && !path.stale} onComplete={() => setDiagRefreshKey(k => k + 1)} />
 
       <PersonalizedPathPanel
         studentId={studentId}
         skillId={gap.skill_id}
         skillName={gap.skill_name}
+        knownPath={path}
         refreshKey={diagRefreshKey}
         startSignal={startSignal}
         focusSignal={focusSignal}
@@ -913,11 +918,12 @@ function SkillDetailPanel({ studentId, gap, item, path, roleTitle, startSignal, 
   )
 }
 
-function DiagnosticPanel({ studentId, skillId, skillName, startSignal = 0, onComplete }: {
+function DiagnosticPanel({ studentId, skillId, skillName, startSignal = 0, hasUsablePath = false, onComplete }: {
   studentId: number
   skillId: number
   skillName: string
   startSignal?: number
+  hasUsablePath?: boolean
   onComplete?: () => void
 }) {
   const [phase, setPhase] = useState<'browse' | 'take' | 'result' | 'loading'>('loading')
@@ -990,6 +996,8 @@ function DiagnosticPanel({ studentId, skillId, skillName, startSignal = 0, onCom
       setBusy(false)
     }
   }
+
+  if (hasUsablePath) return null
 
   if (phase === 'loading') {
     return (
@@ -1240,7 +1248,9 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
 
   const isCompleted = lesson?.state === 'completed'
   const diagnosticPct = Math.round(pathItem.diagnostic_score)
-  const reasonForLearning = pathItem.action === 'review'
+  const reasonForLearning = ar ? (pathItem.action === 'review'
+    ? `عندك الأساسيات، لكن التشخيص وضّح نقاط محتاجة مراجعة (${diagnosticPct}%).`
+    : `التشخيص وضّح إن الموضوع ده محتاج تدريب (${diagnosticPct}%).`) : pathItem.action === 'review'
     ? `You understand the basics, but your diagnostic identified gaps to close (${pathItem.topic_status}, ${diagnosticPct}%).`
     : `Your diagnostic showed this topic needs improvement (${pathItem.topic_status}, ${diagnosticPct}%).`
 
@@ -1277,7 +1287,8 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
 
   // The canonical question set is deliberately retained: its answer values
   // are what the persisted Mini Check evaluates. Reviewed Arabic display
-  // fields only replace the lesson, example, and task presentation.
+  // fields only replace presentation. Answers remain canonical values, selected
+  // by index below, so translated options cannot change persisted scoring.
   const localizedContent = ar ? lesson.content.locales?.ar : undefined
   const content: LessonContent = localizedContent
     ? {
@@ -1302,9 +1313,9 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
     return display ? {
       ...question,
       question: display.question ?? question.question,
-      options: display.options ?? question.options,
+      displayOptions: display.options ?? question.options,
       misconception_hint: display.misconception_hint ?? question.misconception_hint,
-    } : question
+    } : { ...question, displayOptions: question.options }
   })
   const canonicalContent = content.canonical
   const practiceTitle = typeof practiceData.title === 'string' && practiceData.title.trim()
@@ -1345,7 +1356,7 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
       : 'مراجعة التدريب تشير إلى أن الإجابة تحتاج توضيحاً أو تطبيقاً أدق قبل التحقق السريع. راجع النقاط الناقصة ثم أعد المحاولة. هذه ليست نتيجة اختبار تشغيل للكود ولا تحقق مهارة رسمياً.')
 
   return (
-    <div className="lesson-view" dir={ar ? 'rtl' : 'ltr'}>
+    <div className="lesson-view">
       <div className="lesson-header">
         <div className="lesson-language-control" aria-label="Learning language">
           <button className={`chip-btn ${!ar ? 'active' : ''}`} onClick={() => setLearningLanguage('en')}>English</button>
@@ -1362,11 +1373,11 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
         {agentDecision && (
           <section className="lesson-quality-section" aria-label="Learning agent feedback">
             <div className="lesson-quality-label">{ar ? 'الخطوة التالية:' : 'Next step:'} {agentDecision.action_type.replace(/_/g, ' ')}</div>
-            <p><strong>{ar ? 'الهدف:' : 'Objective:'}</strong> {agentDecision.objective}</p>
-            <p>{agentDecision.decision_reason}</p>
-            <p className="muted small">{agentDecision.next_step}</p>
-            {ar && <p className="muted small" dir="rtl">{agentActionArabic[agentDecision.action_type]}</p>}
-            <details><summary>{ar ? 'لماذا هذه الخطوة؟' : 'Why this step?'}</summary><ul>{agentDecision.evidence.map((item, i) => <li key={i}>{item.detail}</li>)}</ul></details>
+            {ar ? <p dir="rtl">{agentActionArabic[agentDecision.action_type]}</p> : <>
+              <p><strong>Objective:</strong> {agentDecision.objective}</p>
+              <p>{agentDecision.decision_reason}</p><p className="muted small">{agentDecision.next_step}</p>
+              <details><summary>Why this step?</summary><ul>{agentDecision.evidence.map((item, i) => <li key={i}>{item.detail}</li>)}</ul></details>
+            </>}
           </section>
         )}
         {agentError && <div className="lesson-quality-section" role="alert">{agentError} <button className="btn-link" onClick={refreshAgent}>Retry recommendation</button></div>}
@@ -1382,20 +1393,20 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
         ))}
       </div>
 
-      <div className="lesson-content">
+      <div className="lesson-content" dir={ar ? 'rtl' : 'ltr'}>
         {tab === 'learn' && (
           <div className="lesson-learn">
             <h3>{content.learn.title}</h3>
             <div className="lesson-explanation"><SafeMarkdown>{content.learn.explanation}</SafeMarkdown></div>
             {content.learn.key_ideas && content.learn.key_ideas.length > 0 && (
               <div className="lesson-key-ideas">
-                <h4>Key Ideas</h4>
+                <h4>{ar ? 'أفكار أساسية' : 'Key Ideas'}</h4>
                 <ul>{content.learn.key_ideas.map((idea, i) => <li key={i}>{idea}</li>)}</ul>
               </div>
             )}
             {content.learn.key_terms && Object.keys(content.learn.key_terms).length > 0 && (
               <div className="lesson-key-terms">
-                <h4>Key Terms</h4>
+                <h4>{ar ? 'مصطلحات أساسية' : 'Key Terms'}</h4>
                 {Object.entries(content.learn.key_terms).map(([term, def]) => (
                   <div className="lesson-term" key={term}><strong>{term}</strong>: {def}</div>
                 ))}
@@ -1403,19 +1414,19 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
             )}
             {content.learn.job_relevance && (
               <div className="lesson-quality-section">
-                <div className="lesson-quality-label">Why this matters for your role</div>
+                <div className="lesson-quality-label">{ar ? 'ليه ده مهم في شغلك' : 'Why this matters for your role'}</div>
                 <p>{content.learn.job_relevance}</p>
               </div>
             )}
             {content.learn.common_mistake && (
               <div className="lesson-quality-section">
-                <div className="lesson-quality-label">Common mistake</div>
+                <div className="lesson-quality-label">{ar ? 'غلطة شائعة' : 'Common mistake'}</div>
                 <p>{content.learn.common_mistake}</p>
               </div>
             )}
             {content.learn.worked_example && (
               <div className="lesson-quality-section">
-                <div className="lesson-quality-label">Worked example</div>
+                <div className="lesson-quality-label">{ar ? 'مثال محلول' : 'Worked example'}</div>
                 <p>{content.learn.worked_example}</p>
               </div>
             )}
@@ -1429,29 +1440,29 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
             )}
             {(canonicalContent?.prerequisites?.length ?? 0) > 0 && (
               <div className="lesson-quality-section">
-                <div className="lesson-quality-label">Prerequisites</div>
+                <div className="lesson-quality-label">{ar ? 'متطلبات سابقة' : 'Prerequisites'}</div>
                 <ul>{canonicalContent!.prerequisites.map((item) => <li key={item.competency}><strong>{item.competency}</strong> — {item.relationship}: {item.why}</li>)}</ul>
               </div>
             )}
             {canonicalContent?.roadmap_rationale && (
               <div className="lesson-quality-section">
-                <div className="lesson-quality-label">Why this is in your roadmap</div>
+                <div className="lesson-quality-label">{ar ? 'ليه ده في مسارك' : 'Why this is in your roadmap'}</div>
                 <p>{canonicalContent.roadmap_rationale}</p>
               </div>
             )}
             {content.learn.grounding_sources && content.learn.grounding_sources.length > 0 && (
               <div className="lesson-grounding-sources">
-                Sources: {content.learn.grounding_sources.map((s, i) => (
+                {ar ? 'المصادر: ' : 'Sources: '}{content.learn.grounding_sources.map((s, i) => (
                   <span key={i}>{i > 0 && ' · '}<a href={s.url} target="_blank" rel="noopener noreferrer">{s.title || s.source || 'Source'}</a></span>
                 ))}
               </div>
             )}
             {recommendedResources.length > 0 && (
-              <section className="lesson-resource-panel" aria-label="Recommended Resources">
+              <section className="lesson-resource-panel" aria-label={ar ? 'مصادر مقترحة' : 'Recommended Resources'}>
                 <div className="lesson-resource-head">
                   <div>
-                    <span>Recommended Resources</span>
-                    <strong>{recommendedResources.length} curated source{recommendedResources.length === 1 ? '' : 's'}</strong>
+                    <span>{ar ? 'مصادر مقترحة' : 'Recommended Resources'}</span>
+                    <strong>{ar ? `${recommendedResources.length} مصدر مُراجع` : `${recommendedResources.length} curated source${recommendedResources.length === 1 ? '' : 's'}`}</strong>
                   </div>
                 </div>
                 <div className="lesson-resource-list">
@@ -1523,14 +1534,15 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
                 </div>
                 {practiceTitle && <h4 className="practice-task-title">{practiceTitle}</h4>}
                 <p className="lesson-q-text practice-task-text">{practiceTaskText}</p>
-                {practiceData.starter_code && <div className="lesson-example-content"><SafeMarkdown>{`\`\`\`python\n${practiceData.starter_code}\n\`\`\``}</SafeMarkdown></div>}
+                {practiceData.starter_code && <div className="lesson-example-content"><SafeMarkdown>{`\`\`\`${practiceData.language || 'python'}\n${practiceData.starter_code}\n\`\`\``}</SafeMarkdown></div>}
                 {practiceData.automated_tests && practiceData.automated_tests.length > 0 && (
                   <div className="lesson-quality-section">
-                    <div className="lesson-quality-label">Expected test cases</div>
+                    <div className="lesson-quality-label">{ar ? 'حالات متوقعة' : 'Expected test cases'}</div>
                     <ul>{practiceData.automated_tests.map((test, i) => <li key={i}>Input: {JSON.stringify(test.input)} → expected: {JSON.stringify(test.expected)}</li>)}</ul>
-                    <p className="muted small">These cases describe expected behavior. This practice submission is reviewed by the existing evaluator; Python code is not executed here.</p>
+                    <p className="muted small">{ar ? 'الأمثلة دي بتوضح السلوك المتوقع. كود المتعلم لا يتم تنفيذه هنا.' : 'These cases describe expected behavior. This practice submission is reviewed by the existing evaluator; learner code is not executed here.'}</p>
                   </div>
                 )}
+                {practiceData.evaluation_note && <p className="muted small">{practiceData.evaluation_note}</p>}
               </div>
             )}
             <label className="practice-response-label" htmlFor={`practice-${lesson.id}`}>
@@ -1542,7 +1554,8 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
               className="practice-response"
               value={activePracticeAnswer}
               onChange={(e) => { if (answeringFollowUp) setFollowUpAnswer(e.target.value); else setPracticeAnswer(e.target.value) }}
-              placeholder={answeringFollowUp ? 'Write your follow-up response to the targeted task.' : 'Write your explanation, steps, commands, or troubleshooting plan.'}
+              placeholder={ar ? (answeringFollowUp ? 'اكتب إجابتك الجديدة للمهمة الموجهة.' : 'اكتب شرحك أو خطواتك أو الكود المطلوب.') : (answeringFollowUp ? 'Write your follow-up response to the targeted task.' : 'Write your explanation, steps, commands, or troubleshooting plan.')}
+              dir={ar ? 'rtl' : 'ltr'}
               disabled={practiceSubmitting || isCompleted}
             />
             <div className="practice-actions">
@@ -1571,50 +1584,50 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
               <div className={`practice-review ${practiceAttempt.status}`}>
                 <div className="practice-review-head">
                   <div>
-                    <span className="practice-task-label">{latestPracticeLabel}</span>
-                    <h4>Practice Review</h4>
+                    <span className="practice-task-label">{ar ? 'آخر محاولة' : latestPracticeLabel}</span>
+                    <h4>{ar ? 'مراجعة التدريب' : 'Practice Review'}</h4>
                   </div>
                   <div className="practice-score">
                     <strong>{Math.round(practiceAttempt.score)}%</strong>
-                    <span>{practiceAttempt.status === 'ready' ? 'Ready' : 'Needs review'}</span>
+                    <span>{ar ? (practiceAttempt.status === 'ready' ? 'جاهز' : 'محتاج مراجعة') : (practiceAttempt.status === 'ready' ? 'Ready' : 'Needs review')}</span>
                   </div>
                 </div>
                 <div className="practice-source">
-                  {practiceAttempt.source === 'ai' ? 'AI practice evaluation' : 'Basic automated review'}
+                  {ar ? 'مراجعة تدريب' : (practiceAttempt.source === 'ai' ? 'AI practice evaluation' : 'Basic automated review')}
                 </div>
                 {practiceAttempt.practice_task?.static_check && (
                   <div className="lesson-quality-section">
-                    <div className="lesson-quality-label">{ar ? 'فحص ثابت للكود' : 'Static code check'}</div>
-                    <p>{practiceAttempt.practice_task.static_check.status === 'looks_structurally_sound' ? 'The submitted function has a sound visible structure.' : 'The submitted code needs a structural revision.'}</p>
+                    <div className="lesson-quality-label">{practiceAttempt.practice_task.static_check.kind === 'sql_text' ? (ar ? 'فحص ثابت لنص SQL' : 'Static SQL text check') : (ar ? 'فحص ثابت للكود' : 'Static code check')}</div>
+                    <p>{practiceAttempt.practice_task.static_check.status === 'looks_structurally_sound' ? (practiceAttempt.practice_task.static_check.kind === 'sql_text' ? (ar ? 'نص الاستعلام يطابق البنية المطلوبة بشكل ظاهر.' : 'The submitted query has the required visible structure.') : 'The submitted function has a sound visible structure.') : (practiceAttempt.practice_task.static_check.kind === 'sql_text' ? (ar ? 'نص الاستعلام يحتاج مراجعة بنيوية.' : 'The submitted query needs a structural revision.') : 'The submitted code needs a structural revision.')}</p>
                     <ul>{practiceAttempt.practice_task.static_check.checks.map((check, i) => <li key={i}>{check}</li>)}</ul>
                     <p className="muted small">{practiceAttempt.practice_task.static_check.note}</p>
                   </div>
                 )}
                 <p className="practice-feedback">{reviewedPracticeFeedback}</p>
                 {(practiceAttempt.status === 'ready' || practiceAttempt.practice_task?.static_check?.status === 'looks_structurally_sound') && (
-                  <div className="practice-ready-banner"><IconCheck size={16} /> {practiceAttempt.status === 'ready' ? 'Ready for Mini Check' : 'Static check supports trying the Mini Check (not runtime execution)'}</div>
+                  <div className="practice-ready-banner"><IconCheck size={16} /> {ar ? (practiceAttempt.status === 'ready' ? 'جاهز للتحقق السريع' : 'الفحص الثابت يسمح بتجربة التحقق السريع، وليس تشغيل للكود') : (practiceAttempt.status === 'ready' ? 'Ready for Mini Check' : 'Static check supports trying the Mini Check (not runtime execution)')}</div>
                 )}
                 <div className="practice-review-grid">
                   <div>
-                    <h5>Strengths</h5>
+                    <h5>{ar ? 'نقاط قوية' : 'Strengths'}</h5>
                     <ul>
                       {practiceAttempt.strengths.map((item, i) => <li key={i}>{item}</li>)}
                     </ul>
                   </div>
                   <div>
-                    <h5>Needs improvement</h5>
+                    <h5>{ar ? 'يحتاج تحسين' : 'Needs improvement'}</h5>
                     <ul>
                       {practiceAttempt.missing_points.map((item, i) => <li key={i}>{item}</li>)}
                     </ul>
                   </div>
                 </div>
                 <div className="practice-next-action">
-                  <strong>Next action</strong>
-                  <span>{practiceAttempt.next_action}</span>
+                  <strong>{ar ? 'الخطوة الجاية' : 'Next action'}</strong>
+                  <span>{ar ? 'راجع المهمة وعدّل إجابتك حسب النقاط الناقصة.' : practiceAttempt.next_action}</span>
                 </div>
                 {!isCompleted && (
                   <button className="btn btn-primary" onClick={retryPractice} type="button">
-                    Try Again
+                    {ar ? 'حاول تاني' : 'Try Again'}
                   </button>
                 )}
               </div>
@@ -1651,9 +1664,9 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
                     <p className="lesson-q-text">{q.question}</p>
                     {q.type === 'mcq' && q.options && (
                       <div className="lesson-options">
-                        {q.options.map((opt, i) => (
-                          <button key={i} className={`lesson-option ${miniAnswers[q.id] === opt ? 'selected' : ''}`}
-                            onClick={() => setMiniAnswers({ ...miniAnswers, [q.id]: opt })}>
+                        {(q.displayOptions || q.options).map((opt, i) => (
+                          <button key={i} className={`lesson-option ${miniAnswers[q.id] === q.options![i] ? 'selected' : ''}`}
+                            onClick={() => setMiniAnswers({ ...miniAnswers, [q.id]: q.options![i] })}>
                             {opt}
                           </button>
                         ))}
@@ -1686,18 +1699,22 @@ function LessonView({ studentId, skillId, skillName, competency, pathItem, pathI
   )
 }
 
-function PersonalizedPathPanel({ studentId, skillId, skillName, refreshKey = 0, startSignal = 0, focusSignal, onPathChange, onCompetencyChange }: {
+function PersonalizedPathPanel({ studentId, skillId, skillName, knownPath = null, refreshKey = 0, startSignal = 0, focusSignal, onPathChange, onCompetencyChange }: {
   studentId: number
   skillId: number
   skillName: string
+  knownPath?: PersonalizedPath | null
   refreshKey?: number
   startSignal?: number
   focusSignal?: { competency: string; signal: number; tab?: 'learn' | 'example' | 'practice' | 'discuss' | 'mini_check' } | null
   onPathChange?: (path: PersonalizedPath | null) => void
   onCompetencyChange?: (competency: string | null) => void
 }) {
-  const [path, setPath] = useState<PersonalizedPath | null>(null)
-  const [ready, setReady] = useState(false)
+  // The parent already has the current path for a Continue Learning card.
+  // Seed from it so the one-shot navigation signal cannot be lost while this
+  // panel independently refreshes the same path from the API.
+  const [path, setPath] = useState<PersonalizedPath | null>(knownPath)
+  const [ready, setReady] = useState(!!knownPath)
   const [diagnosticDone, setDiagnosticDone] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -1743,6 +1760,7 @@ function PersonalizedPathPanel({ studentId, skillId, skillName, refreshKey = 0, 
   }
 
   const openCurrentTopic = (nextPath: PersonalizedPath, states: Record<string, Lesson['state']> = lessonStates) => {
+    if (nextPath.stale) return
     const completed = new Set(nextPath.progress ?? [])
     const current =
       nextPath.items.find((item) => states[item.competency] === 'in_progress' && !completed.has(item.id)) ||
@@ -1831,7 +1849,7 @@ function PersonalizedPathPanel({ studentId, skillId, skillName, refreshKey = 0, 
     if (!ready || !startSignal || handledStartSignal.current === startSignal) return
     if (path) {
       handledStartSignal.current = startSignal
-      openCurrentTopic(path)
+      if (!path.stale) openCurrentTopic(path)
       return
     }
     if (diagnosticDone) {

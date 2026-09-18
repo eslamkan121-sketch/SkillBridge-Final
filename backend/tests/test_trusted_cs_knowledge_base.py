@@ -22,7 +22,8 @@ def test_planned_topics_are_not_served_as_complete_content():
 def test_python_functions_content_has_bilingual_explanation_and_validated_checks():
     content = lessons.generate_lesson("Python", "Python Functions", "learn")
     assert content["canonical"]["source"] == "trusted_cs_knowledge_base"
-    assert "بالعربية" in content["learn"]["explanation"]
+    assert "بالعربية" not in content["learn"]["explanation"]
+    assert "الدالة" in content["locales"]["ar"]["learn"]["explanation"]
     assert len(content["mini_check"]["questions"]) == 3
     assert all(q["correct_answer"] and q["misconception_hint"] for q in content["mini_check"]["questions"])
     answers = [q["correct_answer"] for q in content["mini_check"]["questions"]]

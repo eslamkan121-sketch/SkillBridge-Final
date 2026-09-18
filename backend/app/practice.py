@@ -196,6 +196,51 @@ def python_error_handling_static_check(lesson, student_answer):
             "note": "Static check only — code was not executed and this does not prove runtime correctness or change your practice score."}
 
 
+def sql_queries_filtering_static_check(lesson, student_answer):
+    """Review the curated SQL task as text only; never connect or execute SQL.
+
+    The review intentionally recognizes the narrow exercise shape instead of
+    accepting broad SQL coverage as proof.  It is supplemental evidence for
+    the Mini Check and never changes the practice evaluator's score/status.
+    """
+    content = (lesson or {}).get("content") or {}
+    canonical = content.get("canonical") or {}
+    task = content.get("practice") or {}
+    if canonical.get("source") != "trusted_cs_knowledge_base" or task.get("competency") != "SQL Queries & Filtering":
+        return None
+    answer = str(student_answer or "")
+    fenced = re.search(r"```(?:sql)?\s*\n(.*?)```", answer, flags=re.I | re.S)
+    source = (fenced.group(1) if fenced else answer).strip()
+    # Learners also submit a required prose explanation. If a terminated SELECT
+    # statement is present, review that statement rather than treating words
+    # such as "delete" in the explanation as SQL mutation commands.
+    statement = re.search(r"(?is)\bselect\b.*?;", source)
+    query = (statement.group(0) if statement else source).strip().lower()
+    # Reject mutation keywords before checking the requested read shape. This
+    # is a text classification, not a SQL parser or execution sandbox.
+    mutating = bool(re.search(r"\b(insert|update|delete|drop|alter|create|replace|truncate|merge)\b", query))
+    starts_select = bool(re.search(r"\bselect\b", query))
+    has_from_customers = bool(re.search(r"\bfrom\s+customers\b", query))
+    has_name = bool(re.search(r"\bname\b", query))
+    has_email = bool(re.search(r"\bemail\b", query))
+    has_city_filter = bool(re.search(r"\bwhere\b[\s\S]*\bcity\s*=\s*'cairo'", query))
+    has_status_filter = bool(re.search(r"\b(?:and|where)\b[\s\S]*\bstatus\s*=\s*'active'", query))
+    checks = [
+        "Uses SELECT rather than a data-changing statement." if starts_select and not mutating else "Use one read-only SELECT statement; do not include data-changing SQL.",
+        "Reads from the customers table." if has_from_customers else "Read from the customers table with FROM customers.",
+        "Requests both name and email columns." if has_name and has_email else "Request both name and email columns.",
+        "Filters city to Cairo." if has_city_filter else "Filter with city = 'Cairo'.",
+        "Filters status to active." if has_status_filter else "Filter with status = 'active'.",
+    ]
+    sound = starts_select and not mutating and has_from_customers and has_name and has_email and has_city_filter and has_status_filter
+    return {
+        "kind": "sql_text",
+        "status": "looks_structurally_sound" if sound else "needs_fix",
+        "checks": checks,
+        "note": "Static SQL text check only — SkillBridge did not connect to a database or execute this query. It cannot prove runtime results or change the practice score.",
+    }
+
+
 def remediation_practice_task(source_attempt):
     remediation = (source_attempt or {}).get("remediation") or {}
     follow_up = str(remediation.get("follow_up_task") or "").strip()

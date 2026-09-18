@@ -1037,6 +1037,8 @@ export interface LessonPractice {
   competency?: string
   questions?: LessonQuestion[]
   starter_code?: string
+  language?: string
+  evaluation_note?: string
   automated_tests?: { input: unknown[]; expected: unknown }[]
 }
 
@@ -1091,7 +1093,7 @@ export interface PracticeTask {
   source_attempt_id: number | null
   type: string
   questions: PracticeTaskQuestion[]
-  static_check?: { status: 'looks_structurally_sound' | 'needs_fix'; checks: string[]; note: string } | null
+  static_check?: { kind?: 'sql_text' | string; status: 'looks_structurally_sound' | 'needs_fix'; checks: string[]; note: string } | null
 }
 
 export interface RemediationReview {

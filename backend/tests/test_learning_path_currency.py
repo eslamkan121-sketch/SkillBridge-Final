@@ -205,3 +205,67 @@ def test_stale_path_never_teaches_nor_claims_progress(client, student_id, auth_h
     # No progress was written by the agent for the stale path.
     path = models.get_personalized_path(student_id, skill_id)
     assert (models.public_personalized_path(path)["progress"] or []) == []
+
+
+def test_path_availability_states_are_unambiguous_for_learning_navigation(
+        client, student_id, auth_headers):
+    """The frontend can distinguish every Continue Learning destination.
+
+    A current path is safe to open; a newer *completed* diagnostic makes that
+    path stale; a newer unanswered diagnostic does neither; and an absent path
+    explicitly asks for a diagnostic.  These data states are skill-generic and
+    deliberately exercise the public API rather than a Python-only UI branch.
+    """
+    headers = auth_headers("aisha@student.edu")
+    python = models.get_skill_by_name("Python")
+    endpoint = f"/api/students/{student_id}/learning/{python['id']}/personalized-path"
+
+    # No existing path: the UI must offer diagnostic/path generation, not a lesson.
+    absent = client.get(endpoint, headers=headers).json()
+    assert absent == {"diagnostic_required": True, "path": None}
+
+    completed = _completed_diagnostic(
+        student_id, python, ["python_functions", "python_error_handling"])
+    models.create_personalized_path(
+        student_id, python["id"], completed["id"], "Intermediate",
+        _make_items("python_functions", "python_error_handling"), [], [])
+
+    # Current active path: first incomplete topic is available to open.
+    current = client.get(endpoint, headers=headers).json()
+    assert current["stale"] is False
+    assert current["diagnostic_id"] == completed["id"]
+    assert current["progress"] == []
+    assert current["items"][0]["competency"] == "python_functions"
+
+    # A newly opened but incomplete diagnostic must not hide a current path.
+    incomplete = models.create_diagnostic(student_id, python["id"], [])
+    assert incomplete["id"] > completed["id"]
+    still_current = client.get(endpoint, headers=headers).json()
+    assert still_current["stale"] is False
+    assert still_current["diagnostic_id"] == completed["id"]
+
+    # Only newer completed evidence makes the existing path stale and refreshable.
+    newer_completed = _completed_diagnostic(
+        student_id, python, ["python_functions", "python_error_handling"])
+    stale = client.get(endpoint, headers=headers).json()
+    assert newer_completed["id"] > incomplete["id"]
+    assert stale["stale"] is True
+    assert stale["diagnostic_id"] == completed["id"]
+    assert stale["latest_diagnostic_id"] == newer_completed["id"]
+
+
+def test_lesson_creation_is_idempotent_for_overlapping_generate_requests(student_id):
+    """A duplicate generate request returns the one lesson instead of a 500."""
+    python = models.get_skill_by_name("Python")
+    diagnostic = _completed_diagnostic(student_id, python, ["python_functions"])
+    path = models.create_personalized_path(
+        student_id, python["id"], diagnostic["id"], "Intermediate",
+        _make_items("python_functions"), [], [])
+    first = models.create_lesson(
+        student_id, python["id"], path["id"], "python_functions",
+        "Python > python_functions", "learn", {"learn": {}})
+    duplicate = models.create_lesson(
+        student_id, python["id"], path["id"], "python_functions",
+        "Python > python_functions", "learn", {"learn": {}})
+    assert duplicate["id"] == first["id"]
+    assert models.get_lesson(student_id, path["id"], "python_functions")["id"] == first["id"]

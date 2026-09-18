@@ -1,4 +1,4 @@
-"""End-to-end contracts for the only two complete curated CS topics."""
+"""End-to-end contracts for the curated Python topics."""
 from urllib.parse import quote
 
 import pytest
